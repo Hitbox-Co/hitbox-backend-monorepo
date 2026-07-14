@@ -1,0 +1,148 @@
+# ============================
+# Dependencies
+# ============================
+node_modules/
+jspm_packages/
+.pnp/
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+.yarn/build-state.yml
+.yarn/install-state.gz
+
+# ============================
+# Environment variables / secrets
+# ============================
+.env
+.env.local
+.env.development
+.env.development.local
+.env.test
+.env.test.local
+.env.production
+.env.production.local
+.env.*.local
+*.pem
+*.key
+*.crt
+secrets/
+credentials.json
+
+# ============================
+# Build outputs
+# ============================
+dist/
+build/
+out/
+.next/
+.nuxt/
+.output/
+.vercel/
+.netlify/
+public/build/
+.serverless/
+.turbo/
+.svelte-kit/
+
+# ============================
+# Logs
+# ============================
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# ============================
+# Runtime / process data
+# ============================
+pids/
+*.pid
+*.seed
+*.pid.lock
+.node_repl_history
+
+# ============================
+# Coverage / testing
+# ============================
+coverage/
+.nyc_output/
+*.lcov
+.jest-cache/
+test-results/
+playwright-report/
+playwright/.cache/
+
+# ============================
+# Cache directories
+# ============================
+.cache/
+.parcel-cache/
+.eslintcache
+.stylelintcache
+.rollup.cache/
+.webpack/
+.tmp/
+.temp/
+
+# ============================
+# TypeScript
+# ============================
+*.tsbuildinfo
+.tscache/
+
+# ============================
+# Package manager files
+# ============================
+.npm/
+.pnpm-store/
+
+# ============================
+# OS-generated files
+# ============================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================
+# Editor / IDE
+# ============================
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.project
+.settings/
+*.sublime-workspace
+*.sublime-project
+
+# ============================
+# Docker
+# ============================
+*.pid
+docker-compose.override.yml
+
+# ============================
+# Misc
+# ============================
+*.tgz
+*.tar.gz
+.eslintcache
+.stylelintcache
+.env.vault
+.vercel
+.dynamodb/
+.fusebox/
+.docusaurus/
+.serverless/
+.webpack/
+.firebase/
