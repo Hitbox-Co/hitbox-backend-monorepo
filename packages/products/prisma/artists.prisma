@@ -1,0 +1,41 @@
+// ============================================================================
+// PRODUCTS MODULE SCHEMA — creator catalog  (packages/products/prisma/artists.prisma)
+// Artists and their collections group products; owned by the products module.
+// Merged by shared/database/scripts/merge-schema.mjs.
+// ============================================================================
+
+model Artist {
+    id         String        @id @default(cuid())
+    name       String        @db.VarChar(255)
+    slug       String        @unique @db.VarChar(255)
+    bio        String?
+    imageUrl   String?       @map("image_url")
+    genre      ProductGenre?
+    isVerified Boolean       @default(false) @map("is_verified")
+    createdAt  DateTime      @default(now()) @map("created_at")
+    updatedAt  DateTime      @updatedAt @map("updated_at")
+
+    collections ArtistCollection[]
+    claims      ProductClaim[]
+
+    @@map("artists")
+}
+
+model ArtistCollection {
+    id            String    @id @default(cuid())
+    name          String    @db.VarChar(255)
+    description   String?
+    coverImageUrl String?   @map("cover_image_url")
+    releaseDate   DateTime? @map("release_date") @db.Date
+    createdAt     DateTime  @default(now()) @map("created_at")
+    updatedAt     DateTime  @updatedAt @map("updated_at")
+
+    artistId String @map("artist_id")
+    artist   Artist @relation(fields: [artistId], references: [id], onDelete: Cascade)
+
+    products Product[]
+    claims   ProductClaim[]
+
+    @@index([artistId])
+    @@map("artist_collections")
+}

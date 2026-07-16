@@ -1,6 +1,12 @@
 allowBuilds:
   esbuild: true
+  prisma: true
+  "@prisma/client": true
+  "@prisma/engines": true
+  "@clerk/shared": true
 
 packages:
   - "apps/*"
   - "packages/*"
+  # @hitbox/database is nested under the shared package
+  - "packages/shared/database"

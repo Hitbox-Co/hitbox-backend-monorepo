@@ -12,6 +12,9 @@ export { AppError } from './errors/app-error';
 // Middleware
 export { errorHandler, notFoundHandler } from './middleware/error-handler.middleware';
 
+// Utils
+export { asyncHandler } from './utils/async-handler';
+
 
 // Events
 export { eventBus, InProcessEventBus } from './events';

@@ -1,0 +1,77 @@
+// ============================================================================
+// PRODUCTS MODULE SCHEMA  (packages/products/prisma/products.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+// ============================================================================
+
+model Product {
+    id                String             @id @default(cuid())
+    productCode       String             @unique @db.VarChar(12) // 12 digits: 8 unique + 4 group (format CHECK in migration)
+    name              String             @db.VarChar(255)
+    type              ProductType
+    category          ProductCategory
+    genre             ProductGenre
+    description       String?
+    rewardPoints      Int                @default(0) @map("reward_points")
+    state             ProductState       @default(ACTIVE)
+    marketplaceStatus MarketplaceStatus? @map("marketplace_status")
+    rarity            ProductRarity      @default(COMMON)
+    priceInDollars    Decimal            @default(0) @map("price_in_dollars") @db.Decimal(12, 2)
+    inventoryUnit     Int                @default(0) @map("inventory_unit")
+    unitsSold         Int                @default(0) @map("units_sold")
+    tagId             String?            @unique @map("tag_id") @db.VarChar(64) // NFC tag used for claiming
+    claimedStatus     ClaimedStatus      @default(UNCLAIMED) @map("claimed_status")
+    claimedAt         DateTime?          @map("claimed_at")
+    releaseDate       DateTime?          @map("release_date") @db.Date
+    createdAt         DateTime           @default(now()) @map("created_at")
+    updatedAt         DateTime           @updatedAt @map("updated_at") // replaces the old lastupdate trigger
+
+    ownerId String? @map("owner_id")
+    owner   User?   @relation(fields: [ownerId], references: [id])
+
+    collectionId String?           @map("collection_id")
+    collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
+
+    images           ProductImage[]
+    history          ProductHistory[]
+    claims           ProductClaim[]
+    ledgerEntries    BlockchainLedger[]
+    buyerCollections BuyerCollection[]
+
+    @@index([ownerId])
+    @@index([category])
+    @@index([genre])
+    @@index([marketplaceStatus])
+    @@map("products")
+}
+
+/// One row per ownership/price period. (Draft PK was product_id, which forced
+/// one row per product — fixed to a surrogate PK so a product can have many.)
+model ProductHistory {
+    id                 String    @id @default(cuid())
+    price              Decimal?  @db.Decimal(12, 2)
+    ownershipStartDate DateTime? @map("ownership_start_date")
+    ownershipEndDate   DateTime? @map("ownership_end_date") // CHECK end >= start added in migration
+
+    productId String  @map("product_id")
+    product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+    ownerId String? @map("owner_id")
+    owner   User?   @relation(fields: [ownerId], references: [id])
+
+    @@index([productId])
+    @@index([ownerId])
+    @@map("product_history")
+}
+
+model ProductImage {
+    id          String  @id @default(cuid())
+    title       String? @db.VarChar(255)
+    description String?
+    url         String
+
+    productId String  @map("product_id")
+    product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+    @@index([productId])
+    @@map("product_images")
+}

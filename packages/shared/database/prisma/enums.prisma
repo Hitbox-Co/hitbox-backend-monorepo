@@ -1,0 +1,74 @@
+// ============================================================================
+// SOURCE PARTIAL — shared enums used across modules. Owned by shared/database.
+// ============================================================================
+
+enum ProductType {
+    GROUP
+    INDIVIDUAL
+}
+
+enum ProductCategory {
+    TRADING_CARD
+    FIGURE
+    POSTER
+    BOOK
+    AUTOGRAPH
+    JERSEY
+    DIGITAL_ASSET
+    ACCESSORY
+    GAME_BOX
+    CARD_PACK
+    OTHER
+}
+
+enum ProductGenre {
+    MUSIC
+    SPORTS
+    FILM
+    GAMING
+    PUBLICATION
+    ART
+    ANIME
+    OTHER
+}
+
+enum MarketplaceStatus {
+    TRENDING_NOW
+    NEW_RELEASE
+    TOP_CREATORS
+}
+
+enum ProductRarity {
+    COMMON
+    UNCOMMON
+    RARE
+    EPIC
+    LEGENDARY
+    EXCLUSIVE
+}
+
+enum UserRole {
+    USER
+}
+
+enum UserState {
+    ACTIVE
+    INACTIVE
+    SUSPENDED
+}
+
+enum ProductState {
+    ACTIVE
+    INACTIVE
+    SUSPENDED
+}
+
+enum CollectionVisibility {
+    PUBLIC
+    PRIVATE
+}
+
+enum ClaimedStatus {
+    UNCLAIMED
+    CLAIMED
+}

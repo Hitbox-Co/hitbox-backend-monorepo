@@ -1,0 +1,15 @@
+// ============================================================================
+// SOURCE PARTIAL — merged first into the generated schema.prisma
+// Generator + datasource. Owned by shared/database.
+// ============================================================================
+
+generator client {
+    provider = "prisma-client-js"
+}
+
+datasource db {
+    provider  = "postgresql"
+    url       = env("DATABASE_URL")
+    // Neon pools connections; migrations need a direct (unpooled) URL.
+    directUrl = env("DIRECT_URL")
+}

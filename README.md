@@ -176,13 +176,15 @@ pnpm install
 
 ## Environment Variables
 
-Create the required environment files:
+Create a single `.env` at the repository root (see [docs/getting-started.md](docs/getting-started.md) for the full list):
 
-```text
-.env.local
-.env.qa
-.env.preprod
-.env.production
+```dotenv
+PORT=8080
+NODE_ENV=development
+DATABASE_URL=...            # Neon pooled URL
+DIRECT_URL=...              # Neon direct (unpooled) URL — used by migrations
+CLERK_SECRET_KEY=...
+CLERK_WEBHOOK_SIGNING_SECRET=...
 ```
 
 ---
@@ -316,17 +318,13 @@ Each service will own:
 
 # Documentation
 
-Additional documentation is available in the `docs/` directory.
+Documentation lives in the [`docs/`](docs/) directory:
 
-- Architecture
-- Database Design
-- API Standards
-- Authentication
-- Logging
-- Error Handling
-- Security
-- Testing Strategy
-- Deployment Guide
+| Document | Contents |
+|---|---|
+| [Getting Started](docs/getting-started.md) | Setup, environment, database workflow, Clerk webhook wiring, troubleshooting |
+| [Architecture](docs/hitbox-architecture.md) | Module anatomy, composition root, ports & events, hybrid Prisma pipeline, request lifecycle, adding a module, microservice extraction path |
+| [API Reference](docs/api-reference.md) | Every endpoint with parameters, request/response shapes, and error codes |
 
 ---
 

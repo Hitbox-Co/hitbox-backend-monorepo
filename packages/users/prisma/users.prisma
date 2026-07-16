@@ -1,0 +1,30 @@
+// ============================================================================
+// USERS MODULE SCHEMA  (packages/users/prisma/users.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+// ============================================================================
+
+/// Platform account. Identity (credentials, sessions) lives in Clerk — this
+/// row is the local projection, created/updated via auth module events.
+model User {
+    id           String    @id @default(cuid())
+    clerkUserId  String    @unique @map("clerk_user_id")
+    email        String    @unique @db.VarChar(255)
+    username     String?   @unique @db.VarChar(50)
+    firstName    String?   @map("first_name") @db.VarChar(100)
+    lastName     String?   @map("last_name") @db.VarChar(100)
+    avatarUrl    String?   @map("avatar_url")
+    role         UserRole  @default(USER)
+    state        UserState @default(ACTIVE)
+    rewardPoints Int       @default(0) @map("reward_points")
+    createdAt    DateTime  @default(now()) @map("created_at")
+    updatedAt    DateTime  @updatedAt @map("updated_at")
+    deletedAt    DateTime? @map("deleted_at") // soft delete — set when Clerk sends user.deleted
+
+    products         Product[]
+    productHistory   ProductHistory[]
+    claims           ProductClaim[]
+    buyerCollections BuyerCollection[]
+
+    @@index([state])
+    @@map("users")
+}

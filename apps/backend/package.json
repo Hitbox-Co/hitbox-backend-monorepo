@@ -13,13 +13,17 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
+    "@hitbox/auth": "workspace:*",
+    "@hitbox/database": "workspace:*",
+    "@hitbox/products": "workspace:*",
     "@hitbox/shared": "workspace:*",
+    "@hitbox/users": "workspace:*",
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "helmet": "^8.3.0",
     "morgan": "^1.11.0",
-    "zod": "^4.4.3"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
