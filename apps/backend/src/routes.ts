@@ -4,6 +4,7 @@ export interface ApiRouters {
     auth: Router;
     users: Router;
     products: Router;
+    discover: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -17,6 +18,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/auth', routers.auth);
     api.use('/users', routers.users);
     api.use('/products', routers.products);
+    api.use('/discover', routers.discover);
 
     return api;
 }

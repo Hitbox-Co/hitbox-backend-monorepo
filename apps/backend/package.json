@@ -15,6 +15,7 @@
   "dependencies": {
     "@hitbox/auth": "workspace:*",
     "@hitbox/database": "workspace:*",
+    "@hitbox/discover": "workspace:*",
     "@hitbox/products": "workspace:*",
     "@hitbox/shared": "workspace:*",
     "@hitbox/users": "workspace:*",

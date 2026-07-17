@@ -3,8 +3,10 @@ import type { RequestHandler } from 'express';
 import type { PrismaClient } from '@hitbox/database';
 import { createModuleLogger } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
+import type { IProductDiscovery } from '@hitbox/discover';
 import { PRODUCTS_MODULE } from './constants/products.constant';
 import { ProductController } from './controller/product.controller';
+import { ProductDiscoveryAdapter } from './domain/product-discovery.adapter';
 import { ProductRepository } from './repository/product.repository';
 import { ProductService } from './service/product.service';
 
@@ -15,6 +17,8 @@ export interface ProductsModuleDeps {
 
 export interface ProductsModule {
     service: ProductService;
+    /** Injected into createDiscoverModule — discover's port, products' adapter. */
+    discovery: IProductDiscovery;
     /** requireAuth comes from the auth module at bootstrap. */
     createRouter(requireAuth: RequestHandler): Router;
 }
@@ -27,6 +31,7 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
 
     return {
         service,
+        discovery: new ProductDiscoveryAdapter(products),
         createRouter(requireAuth) {
             const controller = new ProductController(service);
             const router = Router();

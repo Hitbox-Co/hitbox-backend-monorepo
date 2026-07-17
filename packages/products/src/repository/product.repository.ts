@@ -9,6 +9,15 @@ const listInclude = {
 
 export type ProductWithRelations = Prisma.ProductGetPayload<{ include: typeof listInclude }>;
 
+const discoverSelect = {
+    id: true,
+    name: true,
+    rewardPoints: true,
+    images: { take: 1, select: { url: true } },
+} satisfies Prisma.ProductSelect;
+
+export type ProductDiscoverRow = Prisma.ProductGetPayload<{ select: typeof discoverSelect }>;
+
 const sortToOrderBy: Record<ListProductsQuery['sort'], Prisma.ProductOrderByWithRelationInput> = {
     newest: { createdAt: 'desc' },
     price_asc: { priceInDollars: 'asc' },
@@ -44,6 +53,26 @@ export class ProductRepository {
             this.prisma.product.count({ where }),
         ]);
 
+        return { items, total };
+    }
+
+    /** Minimal card projection for the discover feed — no joins beyond one image. */
+    async findForDiscover(params: {
+        where: Prisma.ProductWhereInput;
+        orderBy: Prisma.ProductOrderByWithRelationInput;
+        skip: number;
+        take: number;
+    }): Promise<{ items: ProductDiscoverRow[]; total: number }> {
+        const [items, total] = await this.prisma.$transaction([
+            this.prisma.product.findMany({
+                where: params.where,
+                select: discoverSelect,
+                orderBy: params.orderBy,
+                skip: params.skip,
+                take: params.take,
+            }),
+            this.prisma.product.count({ where: params.where }),
+        ]);
         return { items, total };
     }
 

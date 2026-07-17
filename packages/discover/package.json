@@ -1,7 +1,7 @@
 {
-  "name": "@hitbox/products",
+  "name": "@hitbox/discover",
   "version": "1.0.0",
-  "description": "HitBox products module — collectible catalog, artists and collections.",
+  "description": "HitBox discover module — read-side feed for the Discover screen (lightweight product cards).",
   "private": true,
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -16,8 +16,6 @@
   "license": "ISC",
   "type": "module",
   "dependencies": {
-    "@hitbox/database": "workspace:*",
-    "@hitbox/discover": "workspace:*",
     "@hitbox/shared": "workspace:*",
     "zod": "^3.24.1"
   },

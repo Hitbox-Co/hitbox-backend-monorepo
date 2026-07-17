@@ -15,7 +15,8 @@
     "db:generate": "pnpm --filter @hitbox/database db:generate",
     "db:migrate": "pnpm --filter @hitbox/database db:migrate",
     "db:deploy": "pnpm --filter @hitbox/database db:deploy",
-    "db:studio": "pnpm --filter @hitbox/database db:studio"
+    "db:studio": "pnpm --filter @hitbox/database db:studio",
+    "db:seed": "pnpm --filter @hitbox/database db:seed"
   },
   "keywords": [],
   "author": "",

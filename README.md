@@ -96,6 +96,7 @@ hitbox/
 | auth | Authentication & Authorization |
 | users | User Management |
 | products | Product Management |
+| discover | Discover feed (read-side product cards) |
 | marketplace | Marketplace Operations |
 | claims | Product Claims |
 | orders | Orders & Checkout |

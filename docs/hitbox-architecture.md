@@ -20,11 +20,12 @@ HitBox uses a **Hybrid Modular Monolith**:
                         │        │                (composition root)   │
                         └────────┼─────────────────────┬───────────────┘
                                  │ mounts routers      │ injects deps
-              ┌──────────────────┼──────────────┐      │
-              ▼                  ▼              ▼      │
-        @hitbox/auth      @hitbox/users   @hitbox/products
-              │                  │              │
-              └────────┬─────────┴──────┬───────┘
+              ┌──────────────────┼──────────────┬──────┴───────────┐
+              ▼                  ▼              ▼                  ▼
+        @hitbox/auth      @hitbox/users   @hitbox/products   @hitbox/discover
+              │                  │              │            (read-side feed —
+              └────────┬─────────┴──────┬───────┘             no DB access,
+                       │                │                     only a port)
                        ▼                ▼
                 @hitbox/shared    @hitbox/database
               (logger, errors,   (PrismaClient singleton,
@@ -61,6 +62,7 @@ hitbox-backend/
 │   ├── auth/                     # Clerk auth, webhooks, requireAuth middleware
 │   ├── users/                    # User profiles (local projection of Clerk users)
 │   ├── products/                 # Catalog: products, artists, collections
+│   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
 │   ├── claims/                   # (schema only so far) NFC claims + ledger
 │   ├── marketplace/              # (schema only so far) buyer collections
 │   └── shared/                   # Infrastructure ONLY — no business logic
@@ -161,10 +163,15 @@ export function bootstrap(): Router {
 
     const productsModule = createProductsModule({ prisma, eventBus });
 
+    const discoverModule = createDiscoverModule({
+        catalog: productsModule.discovery,     // ← products implements discover's port
+    });
+
     return buildRoutes({
         auth: authModule.router,
         users: usersModule.createRouter(authModule.requireAuth),      // ← auth's middleware
         products: productsModule.createRouter(authModule.requireAuth),
+        discover: discoverModule.router,                              // public — no auth
     });
 }
 ```
@@ -173,7 +180,8 @@ Order matters and is deliberate:
 
 1. **users** is created first — it needs nothing from other modules.
 2. **auth** receives `usersModule.accountLookup` (the `IAccountLookup` **port** — see §6).
-3. Every router that needs authentication is built with `authModule.requireAuth`.
+3. **discover** receives `productsModule.discovery` (the `IProductDiscovery` port).
+4. Every router that needs authentication is built with `authModule.requireAuth`.
 
 ---
 
@@ -236,6 +244,15 @@ Auth needs to resolve a Clerk user ID to a local account *synchronously* during 
 
 Package-level dependency direction: `users → auth` (users imports auth's *types and constants*). Auth never imports users. When users becomes its own service, `UserAccountLookup` is reimplemented as an HTTP/RPC client and bootstrap swaps it in — auth is untouched.
 
+The same pattern repeats wherever one module needs a synchronous answer from another. **The consumer defines the port, the provider implements the adapter, bootstrap connects them:**
+
+| Port (defined by consumer) | Adapter (implemented by provider) | Purpose |
+|---|---|---|
+| `IAccountLookup` (auth) | `UserAccountLookup` (users) | resolve Clerk user → local account on every authenticated request |
+| `IProductDiscovery` (discover) | `ProductDiscoveryAdapter` (products) | lightweight product cards for the Discover feed |
+
+Note what this buys discover: the module has **zero database knowledge** — no `@hitbox/database` dependency at all. It defines its own screen-level vocabulary (`DiscoverSection`: `trending` / `new_releases` / `top_creators`) and the products adapter maps that to storage concerns (`MarketplaceStatus`, ordering). Extracting discover into a service later means swapping one adapter for an HTTP client.
+
 ---
 
 ## 7. Events
@@ -297,6 +314,7 @@ Cross-module relations (e.g. `Product.owner → User`) work because Prisma sees 
 | `pnpm db:migrate` | merge + `prisma migrate dev` (creates + applies a migration) |
 | `pnpm db:deploy` | `prisma migrate deploy` (CI/production) |
 | `pnpm db:studio` | Prisma Studio on the merged schema |
+| `pnpm db:seed` | idempotent dev seed across all tables (real accounts preserved) |
 
 **Neon note:** `DATABASE_URL` is the *pooled* endpoint (runtime queries); `DIRECT_URL` is the *unpooled* endpoint (required by migrations). `base.prisma` declares both.
 

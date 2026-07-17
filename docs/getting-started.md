@@ -52,7 +52,14 @@ Day-to-day variants:
 pnpm db:merge        # just regenerate schema.prisma from the partials
 pnpm db:generate     # merge + regenerate the Prisma client (after pulling schema changes)
 pnpm db:studio       # browse data
+pnpm db:seed         # fill the database with realistic dummy data (see below)
 ```
+
+### Dummy data
+
+`pnpm db:seed` populates **every table** with realistic development data: 5 users, 6 artists, 8 collections, 16 products (with images, spread across trending / new releases / top creators), plus claims, ledger entries, ownership history and buyer collections — so the discover feed, product listings, search and detail endpoints all return real-looking responses immediately.
+
+It is **idempotent**: every run wipes and re-creates the catalog data. Real accounts are safe — only users whose `clerkUserId` starts with `seed_` are touched. The script lives at [packages/shared/database/prisma/seed.ts](../packages/shared/database/prisma/seed.ts); edit the `USERS` / `ARTISTS` / `PRODUCTS` arrays at the top to shape the data.
 
 > Never edit `packages/shared/database/prisma/schema.prisma` — it is generated.
 > Edit the owning module's partial (e.g. `packages/products/prisma/products.prisma`) and run `pnpm db:migrate`.

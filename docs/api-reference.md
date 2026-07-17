@@ -1,6 +1,6 @@
 # HitBox Backend — API Reference
 
-Base URL (local): `http://localhost:8080`
+Base URL (local): `http://localhost:<PORT>` (`PORT` from the root `.env`).
 All module routes are versioned under **`/api/v1`**.
 
 ---
@@ -161,6 +161,65 @@ Public profile (no email/role/points; soft-deleted users are 404).
 
 ---
 
+## Discover Module — `/api/v1/discover`
+
+Read-side feed for the mobile **Discover** screen. Public (no auth). Items are deliberately **lightweight cards** — id, title, one image, reward points — not full product details; the client fetches `GET /products/:id` when a card is opened.
+
+```jsonc
+// DiscoverProductItem — the only shape this module returns
+{
+  "id": "cmro…",
+  "name": "Pierce The Veil — Signature Series",
+  "imageUrl": "https://…",        // first product image, null if none
+  "rewardPoints": 12500
+}
+```
+
+Sections map to the marketplace status a product carries:
+
+| `section` value | Backing status | Ordering |
+|---|---|---|
+| `trending` | `TRENDING_NOW` | `unitsSold` desc |
+| `new_releases` | `NEW_RELEASE` | `createdAt` desc |
+| `top_creators` | `TOP_CREATORS` | `unitsSold` desc |
+
+### `GET /api/v1/discover`
+
+The whole Discover screen in **one round-trip** — featured carousel + every section, queried in parallel.
+
+```json
+{
+  "data": {
+    "featured":    [ DiscoverProductItem × ≤5 ],
+    "trending":    [ DiscoverProductItem × ≤10 ],
+    "newReleases": [ DiscoverProductItem × ≤10 ],
+    "topCreators": [ DiscoverProductItem × ≤10 ]
+  }
+}
+```
+
+> `featured` currently reuses the trending section (top 5) — it becomes its own curation once products grow a featured flag.
+
+### `GET /api/v1/discover/products`
+
+Paginated list backing **"See All"** and the **search bar**.
+
+| Param | Type / values | Default |
+|---|---|---|
+| `section` | `trending` `new_releases` `top_creators` | — (all `ACTIVE` products, newest first) |
+| `search` | 1–100 chars, case-insensitive name match | — |
+| `page` | int ≥ 1 | `1` |
+| `limit` | int 1–50 | `20` |
+
+```json
+{
+  "data": [ DiscoverProductItem, … ],
+  "meta": { "page": 1, "limit": 20, "total": 57, "totalPages": 3 }
+}
+```
+
+---
+
 ## Products Module — `/api/v1/products`
 
 ### `GET /api/v1/products`
@@ -248,3 +307,5 @@ Every module prefixes its codes, so a code always tells you where it came from:
 | `USERS_*` | users |
 | `PRODUCTS_*` | products |
 | `VALIDATION_ERROR`, `NOT_FOUND`, `INTERNAL_ERROR`, … | shared |
+
+(discover defines no error codes of its own — it only reads, so shared codes cover it.)

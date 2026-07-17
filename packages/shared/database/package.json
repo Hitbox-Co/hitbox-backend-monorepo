@@ -17,6 +17,7 @@
     "db:migrate:create": "pnpm db:merge && dotenv -e ../../../.env -- prisma migrate dev --create-only --schema prisma/schema.prisma",
     "db:deploy": "dotenv -e ../../../.env -- prisma migrate deploy --schema prisma/schema.prisma",
     "db:studio": "dotenv -e ../../../.env -- prisma studio --schema prisma/schema.prisma",
+    "db:seed": "dotenv -e ../../../.env -- tsx prisma/seed.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -25,6 +26,7 @@
   "devDependencies": {
     "dotenv-cli": "^8.0.0",
     "prisma": "^6.12.0",
+    "tsx": "^4.23.1",
     "typescript": "^5.6.0"
   }
 }
