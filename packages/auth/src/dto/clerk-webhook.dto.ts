@@ -13,6 +13,19 @@ const clerkEmailSchema = z.object({
     email_address: z.string().email(),
 });
 
+/**
+ * Profile fields the mobile app tucks into unsafe_metadata at sign-up,
+ * because the Clerk instance has username / name attributes disabled.
+ */
+const clerkUnsafeMetadataSchema = z
+    .object({
+        username: z.string().nullish(),
+        firstName: z.string().nullish(),
+        lastName: z.string().nullish(),
+    })
+    .partial()
+    .passthrough();
+
 /** `data` for user.created / user.updated. */
 export const clerkUserPayloadSchema = z.object({
     id: z.string(),
@@ -22,6 +35,7 @@ export const clerkUserPayloadSchema = z.object({
     first_name: z.string().nullish(),
     last_name: z.string().nullish(),
     image_url: z.string().nullish(),
+    unsafe_metadata: clerkUnsafeMetadataSchema.nullish(),
 });
 
 export type ClerkUserPayload = z.infer<typeof clerkUserPayloadSchema>;

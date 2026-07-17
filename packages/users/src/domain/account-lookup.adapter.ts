@@ -1,6 +1,7 @@
 import { AccountStatus, UserRole } from '@hitbox/auth';
-import type { AccountSnapshot, IAccountLookup } from '@hitbox/auth';
+import type { AccountSnapshot, IAccountLookup, UserRegisteredPayload } from '@hitbox/auth';
 import { UserState } from '@hitbox/database';
+import type { User } from '@hitbox/database';
 import type { UserRepository } from '../repository/user.repository';
 
 /**
@@ -12,19 +13,27 @@ export class UserAccountLookup implements IAccountLookup {
 
     async findByClerkUserId(clerkUserId: string): Promise<AccountSnapshot | null> {
         const user = await this.users.findByClerkUserId(clerkUserId);
-        if (!user) return null;
-
-        const status = user.deletedAt
-            ? AccountStatus.DELETED
-            : user.state === UserState.SUSPENDED
-                ? AccountStatus.SUSPENDED
-                : AccountStatus.ACTIVE;
-
-        return {
-            id: user.id,
-            email: user.email,
-            role: user.role as unknown as UserRole, // Prisma + domain enums share string values
-            status,
-        };
+        return user ? toSnapshot(user) : null;
     }
+
+    /** JIT path: same idempotent upsert the user.created webhook uses. */
+    async provisionFromClerk(payload: UserRegisteredPayload): Promise<AccountSnapshot | null> {
+        const user = await this.users.upsertFromClerk(payload);
+        return toSnapshot(user);
+    }
+}
+
+function toSnapshot(user: User): AccountSnapshot {
+    const status = user.deletedAt
+        ? AccountStatus.DELETED
+        : user.state === UserState.SUSPENDED
+            ? AccountStatus.SUSPENDED
+            : AccountStatus.ACTIVE;
+
+    return {
+        id: user.id,
+        email: user.email,
+        role: user.role as unknown as UserRole, // Prisma + domain enums share string values
+        status,
+    };
 }

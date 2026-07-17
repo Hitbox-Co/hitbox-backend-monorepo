@@ -88,12 +88,15 @@ export class AuthWebhookService {
             return;
         }
 
+        // Native attributes win; unsafe_metadata is the fallback for instances
+        // where username / name are disabled and the app sends them there.
+        const meta = user.unsafe_metadata ?? {};
         const payload: UserRegisteredPayload = {
             clerkUserId: user.id,
             email,
-            username: user.username ?? null,
-            firstName: user.first_name ?? null,
-            lastName: user.last_name ?? null,
+            username: user.username ?? meta.username ?? null,
+            firstName: user.first_name ?? meta.firstName ?? null,
+            lastName: user.last_name ?? meta.lastName ?? null,
             avatarUrl: user.image_url ?? null,
         };
 

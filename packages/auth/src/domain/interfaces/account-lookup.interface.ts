@@ -1,3 +1,4 @@
+import type { UserRegisteredPayload } from '../../events/auth-event.payloads';
 import type { AccountStatus } from '../enums/account-status.enum';
 import type { UserRole } from '../enums/user-role.enum';
 
@@ -17,4 +18,10 @@ export interface AccountSnapshot {
  */
 export interface IAccountLookup {
     findByClerkUserId(clerkUserId: string): Promise<AccountSnapshot | null>;
+    /**
+     * Upserts the local account from a Clerk snapshot. Used for just-in-time
+     * provisioning when a valid session arrives before (or without) the
+     * user.created webhook — e.g. local dev, where Clerk can't reach us.
+     */
+    provisionFromClerk(payload: UserRegisteredPayload): Promise<AccountSnapshot | null>;
 }
