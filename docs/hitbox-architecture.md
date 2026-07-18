@@ -20,12 +20,12 @@ HitBox uses a **Hybrid Modular Monolith**:
                         │        │                (composition root)   │
                         └────────┼─────────────────────┬───────────────┘
                                  │ mounts routers      │ injects deps
-              ┌──────────────────┼──────────────┬──────┴───────────┐
-              ▼                  ▼              ▼                  ▼
-        @hitbox/auth      @hitbox/users   @hitbox/products   @hitbox/discover
-              │                  │              │            (read-side feed —
-              └────────┬─────────┴──────┬───────┘             no DB access,
-                       │                │                     only a port)
+              ┌──────────────────┼──────────────┬──────┴────────────┬─────────────────┐
+              ▼                  ▼              ▼                   ▼                 ▼
+        @hitbox/auth      @hitbox/users   @hitbox/products   @hitbox/discover  @hitbox/marketplace
+              │                  │              │             (read-side feeds — no DB access,
+              └────────┬─────────┴──────┬───────┘              each consumes a port that
+                       │                │                      products implements)
                        ▼                ▼
                 @hitbox/shared    @hitbox/database
               (logger, errors,   (PrismaClient singleton,
@@ -63,8 +63,8 @@ hitbox-backend/
 │   ├── users/                    # User profiles (local projection of Clerk users)
 │   ├── products/                 # Catalog: products, artists, collections
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
+│   ├── marketplace/              # Listing feed for the Marketplace screen; owns buyer collections
 │   ├── claims/                   # (schema only so far) NFC claims + ledger
-│   ├── marketplace/              # (schema only so far) buyer collections
 │   └── shared/                   # Infrastructure ONLY — no business logic
 │       ├── config/env.ts         # Zod-validated environment (fails fast at boot)
 │       ├── logger/               # Pino logger + createModuleLogger(module)
@@ -167,11 +167,16 @@ export function bootstrap(): Router {
         catalog: productsModule.discovery,     // ← products implements discover's port
     });
 
+    const marketplaceModule = createMarketplaceModule({
+        catalog: productsModule.listings,      // ← products implements marketplace's port
+    });
+
     return buildRoutes({
         auth: authModule.router,
         users: usersModule.createRouter(authModule.requireAuth),      // ← auth's middleware
         products: productsModule.createRouter(authModule.requireAuth),
         discover: discoverModule.router,                              // public — no auth
+        marketplace: marketplaceModule.router,                        // public — no auth
     });
 }
 ```
@@ -180,7 +185,7 @@ Order matters and is deliberate:
 
 1. **users** is created first — it needs nothing from other modules.
 2. **auth** receives `usersModule.accountLookup` (the `IAccountLookup` **port** — see §6).
-3. **discover** receives `productsModule.discovery` (the `IProductDiscovery` port).
+3. **discover** and **marketplace** receive their catalog ports from products.
 4. Every router that needs authentication is built with `authModule.requireAuth`.
 
 ---
@@ -250,8 +255,9 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 |---|---|---|
 | `IAccountLookup` (auth) | `UserAccountLookup` (users) | resolve Clerk user → local account on every authenticated request |
 | `IProductDiscovery` (discover) | `ProductDiscoveryAdapter` (products) | lightweight product cards for the Discover feed |
+| `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist, badge) for the Marketplace feed |
 
-Note what this buys discover: the module has **zero database knowledge** — no `@hitbox/database` dependency at all. It defines its own screen-level vocabulary (`DiscoverSection`: `trending` / `new_releases` / `top_creators`) and the products adapter maps that to storage concerns (`MarketplaceStatus`, ordering). Extracting discover into a service later means swapping one adapter for an HTTP client.
+Note what this buys discover and marketplace: those modules have **zero database knowledge** — no `@hitbox/database` dependency at all. Each defines its own screen-level vocabulary (`DiscoverSection`: `trending` / `new_releases` / `top_creators`; `MarketplaceCategory`: `cards` / `figures` / `apparel` / …) and the products adapters map that to storage concerns (`MarketplaceStatus`, `ProductCategory` sets, ordering). Extracting either into a service later means swapping one adapter for an HTTP client.
 
 ---
 
@@ -332,7 +338,7 @@ Cross-module relations (e.g. `Product.owner → User`) work because Prisma sees 
 ```text
 1. index.ts        loads root .env (before ANY app import — env.ts validates at import time)
 2. app.ts          cors → helmet → morgan → express.json (captures rawBody) → urlencoded
-3. routes.ts       /api/v1/health, /api/v1/auth, /api/v1/users, /api/v1/products
+3. routes.ts       /api/v1/{health, auth, users, products, discover, marketplace}
 4. requireAuth     (protected routes only) verifies JWT, attaches req.auth
 5. controller      Zod-parses input → calls service
 6. service         business rules; throws AppError; publishes events

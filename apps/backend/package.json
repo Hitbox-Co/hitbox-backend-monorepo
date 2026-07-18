@@ -16,6 +16,7 @@
     "@hitbox/auth": "workspace:*",
     "@hitbox/database": "workspace:*",
     "@hitbox/discover": "workspace:*",
+    "@hitbox/marketplace": "workspace:*",
     "@hitbox/products": "workspace:*",
     "@hitbox/shared": "workspace:*",
     "@hitbox/users": "workspace:*",

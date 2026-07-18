@@ -220,6 +220,86 @@ Paginated list backing **"See All"** and the **search bar**.
 
 ---
 
+## Marketplace Module — `/api/v1/marketplace`
+
+Read-side feed for the mobile **Marketplace** screen. Browse routes are public. Like discover, items are **lightweight listing cards** — when a card is tapped, the client fetches the full product from **`GET /api/v1/products/:id`** (the products module owns all detail data: description, all images, collection, artist, claim status, provenance).
+
+```jsonc
+// MarketplaceListingItem — the only shape this module returns
+{
+  "id": "cmro…",
+  "name": "Warped Tour 2026 Commemorative Box",
+  "imageUrl": "https://…",          // first product image, null if none
+  "artistName": "Blink-182",        // via the product's collection, null if none
+  "priceInDollars": "89.99",        // decimal serialized as string
+  "rewardPoints": 4500,
+  "badge": "HOT"                    // "HOT" | "NEW" | null (see below)
+}
+```
+
+Badges derive from the product's curation status: `TRENDING_NOW` → `HOT`, `NEW_RELEASE` → `NEW`, anything else → `null`.
+
+Category tabs are screen-level values that map to one or more product categories:
+
+| `category` value | Backing product categories |
+|---|---|
+| *(omitted)* | all — the "All Items" tab |
+| `cards` | `TRADING_CARD`, `CARD_PACK` |
+| `figures` | `FIGURE` |
+| `apparel` | `JERSEY`, `ACCESSORY` |
+| `posters` | `POSTER` |
+| `digital` | `DIGITAL_ASSET` |
+| `other` | `BOOK`, `AUTOGRAPH`, `GAME_BOX`, `OTHER` |
+
+### `GET /api/v1/marketplace`
+
+The whole Marketplace screen in **one round-trip**, sections queried in parallel.
+
+```json
+{
+  "data": {
+    "featured":    [ MarketplaceListingItem × ≤10 ],
+    "newListings": [ MarketplaceListingItem × ≤10 ]
+  }
+}
+```
+
+- `featured` — curated products (any marketplace status), most-sold first.
+- `newListings` — newest active products.
+
+> Bids, countdowns and **live auctions** belong to the P2P trading feature — they need their own models (listings, bids, escrow) and will extend this feed when that lands. Until then the client renders cards without the bid row.
+
+### `GET /api/v1/marketplace/listings`
+
+Paginated listings behind the **category tabs**, **search bar** and **"See All"**.
+
+| Param | Type / values | Default |
+|---|---|---|
+| `category` | `cards` `figures` `apparel` `posters` `digital` `other` | — ("All Items") |
+| `search` | 1–100 chars, case-insensitive name match | — |
+| `sort` | `newest` `price_asc` `price_desc` `popular` | `newest` |
+| `page` | int ≥ 1 | `1` |
+| `limit` | int 1–50 | `20` |
+
+```json
+{
+  "data": [ MarketplaceListingItem, … ],
+  "meta": { "page": 1, "limit": 20, "total": 16, "totalPages": 1 }
+}
+```
+
+### Card tap → product details
+
+The marketplace card intentionally carries no detail data. On tap:
+
+```text
+MarketplaceListingItem.id ──▶ GET /api/v1/products/:id
+```
+
+which returns the full product (description, all images, `collection.artist`, rarity, claim status) — see the Products module below.
+
+---
+
 ## Products Module — `/api/v1/products`
 
 ### `GET /api/v1/products`
@@ -308,4 +388,4 @@ Every module prefixes its codes, so a code always tells you where it came from:
 | `PRODUCTS_*` | products |
 | `VALIDATION_ERROR`, `NOT_FOUND`, `INTERNAL_ERROR`, … | shared |
 
-(discover defines no error codes of its own — it only reads, so shared codes cover it.)
+(discover and marketplace define no error codes of their own — they only read, so shared codes cover them.)
