@@ -18,6 +18,18 @@ const discoverSelect = {
 
 export type ProductDiscoverRow = Prisma.ProductGetPayload<{ select: typeof discoverSelect }>;
 
+const marketplaceSelect = {
+    id: true,
+    name: true,
+    rewardPoints: true,
+    priceInDollars: true,
+    marketplaceStatus: true,
+    images: { take: 1, select: { url: true } },
+    collection: { select: { artist: { select: { name: true } } } },
+} satisfies Prisma.ProductSelect;
+
+export type ProductListingRow = Prisma.ProductGetPayload<{ select: typeof marketplaceSelect }>;
+
 const sortToOrderBy: Record<ListProductsQuery['sort'], Prisma.ProductOrderByWithRelationInput> = {
     newest: { createdAt: 'desc' },
     price_asc: { priceInDollars: 'asc' },
@@ -67,6 +79,26 @@ export class ProductRepository {
             this.prisma.product.findMany({
                 where: params.where,
                 select: discoverSelect,
+                orderBy: params.orderBy,
+                skip: params.skip,
+                take: params.take,
+            }),
+            this.prisma.product.count({ where: params.where }),
+        ]);
+        return { items, total };
+    }
+
+    /** Listing card projection for the marketplace feed — price + artist name. */
+    async findForMarketplace(params: {
+        where: Prisma.ProductWhereInput;
+        orderBy: Prisma.ProductOrderByWithRelationInput;
+        skip: number;
+        take: number;
+    }): Promise<{ items: ProductListingRow[]; total: number }> {
+        const [items, total] = await this.prisma.$transaction([
+            this.prisma.product.findMany({
+                where: params.where,
+                select: marketplaceSelect,
                 orderBy: params.orderBy,
                 skip: params.skip,
                 take: params.take,

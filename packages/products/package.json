@@ -18,6 +18,7 @@
   "dependencies": {
     "@hitbox/database": "workspace:*",
     "@hitbox/discover": "workspace:*",
+    "@hitbox/marketplace": "workspace:*",
     "@hitbox/shared": "workspace:*",
     "zod": "^3.24.1"
   },
