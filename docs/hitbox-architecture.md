@@ -13,26 +13,29 @@ HitBox uses a **Hybrid Modular Monolith**:
 - **One PostgreSQL database, one Prisma client, one migration history** — but the *schema definitions* are owned per-module (the "hybrid" part).
 
 ```text
-                        ┌──────────────────────────────────────────────┐
-                        │              apps/backend                    │
-                        │                                              │
-  HTTP ──▶ app.ts ──▶ routes.ts (/api/v1) ──▶ bootstrap.ts             │
-                        │        │                (composition root)   │
-                        └────────┼─────────────────────┬───────────────┘
-                                 │ mounts routers      │ injects deps
-              ┌──────────────────┼──────────────┬──────┴────────────┬─────────────────┬──────────────────┐
-              ▼                  ▼              ▼                   ▼                 ▼                  ▼
-        @hitbox/auth      @hitbox/users   @hitbox/products   @hitbox/discover  @hitbox/marketplace  @hitbox/collections
-              │                  │              │             (read-side feeds — no DB access,      (owns BuyerCollection:
-              └────────┬─────────┴──────┬───────┘              each consumes a port that             the user's shelf)
-                       │                │                      products implements)
-                       ▼                ▼
-                @hitbox/shared    @hitbox/database
-              (logger, errors,   (PrismaClient singleton,
-               env, event bus)    merged schema, migrations)
-                                        │
-                                        ▼
-                                 PostgreSQL (Neon)
+                    ┌──────────────────────────────────────────────┐
+                    │                 apps/backend                  │
+  HTTP ──▶ app.ts ──▶ routes.ts (/api/v1) ──▶ bootstrap.ts          │
+                    │        │                (composition root)    │
+                    └────────┼─────────────────────┬────────────────┘
+                             │ mounts routers      │ injects deps (ports)
+                             ▼                      ▼
+   ┌───────────────────────────── feature packages ─────────────────────────────┐
+   │  own a table + routes        read-side (no DB, consume a port)   provider    │
+   │  ──────────────────────      ─────────────────────────────      ─────────    │
+   │  @hitbox/auth                @hitbox/discover   ─┐                            │
+   │  @hitbox/users               @hitbox/marketplace │─ port ─▶ @hitbox/products  │
+   │  @hitbox/products            @hitbox/collections ─┘         @hitbox/artist    │
+   │  @hitbox/collections*                          (*owns table AND consumes a    │
+   │  @hitbox/artist                                  port for its progress stat)  │
+   └──────────────────────────────────┬──────────────────────────────────────────┘
+                                       ▼
+                       @hitbox/shared            @hitbox/database
+                     (logger, errors,          (PrismaClient singleton,
+                      env, event bus)           merged schema, migrations)
+                                                        │
+                                                        ▼
+                                                 PostgreSQL (Neon)
 ```
 
 **The rule that makes everything work:** modules never import each other's *implementation*. They communicate through:
@@ -61,7 +64,9 @@ hitbox-backend/
 ├── packages/
 │   ├── auth/                     # Clerk auth, webhooks, requireAuth middleware
 │   ├── users/                    # User profiles (local projection of Clerk users)
-│   ├── products/                 # Catalog: products, artists, collections
+│   ├── products/                 # Catalog: Product, ProductImage, ProductHistory
+│   ├── artist/                   # Owns Artist + ArtistCollection
+│   │   └── src/{profile,collection}/   # profile = reserved; collection = capacity port
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
 │   ├── marketplace/              # Listing feed for the Marketplace screen (no own tables)
 │   ├── collections/              # Owns BuyerCollection — a user's shelf, public/private showcase
@@ -172,7 +177,13 @@ export function bootstrap(): Router {
         catalog: productsModule.listings,      // ← products implements marketplace's port
     });
 
-    const collectionsModule = createCollectionsModule({ prisma });
+    // Artist provides ArtistCollection capacity; collections consumes it.
+    const artistModule = createArtistModule({ prisma });
+
+    const collectionsModule = createCollectionsModule({
+        prisma,
+        artistStats: artistModule.collectionStats,   // ← artist implements collections' port
+    });
 
     return buildRoutes({
         auth: authModule.router,
@@ -190,7 +201,8 @@ Order matters and is deliberate:
 1. **users** is created first — it needs nothing from other modules.
 2. **auth** receives `usersModule.accountLookup` (the `IAccountLookup` **port** — see §6).
 3. **discover** and **marketplace** receive their catalog ports from products.
-4. Every router that needs authentication is built with `authModule.requireAuth`.
+4. **artist** is created before **collections**, which receives `artistModule.collectionStats` (the `IArtistCollectionStats` port).
+5. Every router that needs authentication is built with `authModule.requireAuth`.
 
 ---
 
@@ -260,10 +272,18 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 | `IAccountLookup` (auth) | `UserAccountLookup` (users) | resolve Clerk user → local account on every authenticated request |
 | `IProductDiscovery` (discover) | `ProductDiscoveryAdapter` (products) | lightweight product cards for the Discover feed |
 | `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist, badge) for the Marketplace feed |
+| `IArtistCollectionStats` (collections) | `ArtistCollectionStatsAdapter` (artist) | `ArtistCollection` capacity (`Σ maximumLimit`) for the collection-progress stat |
 
 Note what this buys discover and marketplace: those modules have **zero database knowledge** — no `@hitbox/database` dependency at all. Each defines its own screen-level vocabulary (`DiscoverSection`: `trending` / `new_releases` / `top_creators`; `MarketplaceCategory`: `cards` / `figures` / `apparel` / …) and the products adapters map that to storage concerns (`MarketplaceStatus`, `ProductCategory` sets, ordering). Extracting either into a service later means swapping one adapter for an HTTP client.
 
-**Collections is the third flavor of module:** it *owns a table* (`BuyerCollection`) like products/users, but its rows embed a product card in responses. It reads that card by traversing the `product` relation **declared in its own partial** (`collections.prisma`) — a documented, deliberate shortcut at the database layer. On extraction, that one repository include becomes a products-port call; nothing else changes.
+**Collections is the third flavor of module:** it *owns a table* (`BuyerCollection`) like products/users, *and* consumes a port. Its rows embed a product card, read by traversing the `product` relation **declared in its own partial** (`collections.prisma`) — a documented, deliberate shortcut at the database layer. On extraction, that include becomes a products-port call.
+
+For the **collection-progress stat** the work is split cleanly across the boundary:
+
+- **collections** (owns `BuyerCollection`) aggregates the user's own rows: how many items total, which distinct `ArtistCollection`s they have products from, and how many of their items belong to a collection. This is pure own-table work.
+- **artist** (owns `ArtistCollection`) answers one question through the `IArtistCollectionStats` port: given those collection ids, what is each one's `maximumLimit`? Collections sums them for the denominator.
+
+Neither module reaches into the other's table. `progress = ownedInCollections / Σ maximumLimit`, computed in the collections service from the two halves. This is why `artist` exists as its own package rather than a folder under products: the artist domain (profile + collections) is a distinct future service, and the progress feature already treats it as one across a port.
 
 ---
 
@@ -300,7 +320,7 @@ packages/shared/database/prisma/enums.prisma   ← shared enums (used across mod
 packages/auth/prisma/auth.prisma               ← AuthWebhookEvent
 packages/users/prisma/users.prisma             ← User
 packages/products/prisma/products.prisma       ← Product, ProductHistory, ProductImage
-packages/products/prisma/artists.prisma        ← Artist, ArtistCollection
+packages/artist/prisma/artist.prisma           ← Artist, ArtistCollection (has maximumLimit)
 packages/claims/prisma/claims.prisma           ← ProductClaim, BlockchainLedger
 packages/collections/prisma/collections.prisma ← BuyerCollection
 ```

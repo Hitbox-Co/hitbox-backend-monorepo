@@ -7,6 +7,7 @@ import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
 import { createMarketplaceModule } from '@hitbox/marketplace';
 import { createCollectionsModule } from '@hitbox/collections';
+import { createArtistModule } from '@hitbox/artist';
 import { buildRoutes } from './routes';
 
 /**
@@ -33,7 +34,14 @@ export function bootstrap(): Router {
         catalog: productsModule.listings,
     });
 
-    const collectionsModule = createCollectionsModule({ prisma });
+    // Artist provides ArtistCollection capacity; collections consumes it for
+    // the buyer collection-progress stat.
+    const artistModule = createArtistModule({ prisma });
+
+    const collectionsModule = createCollectionsModule({
+        prisma,
+        artistStats: artistModule.collectionStats,
+    });
 
     return buildRoutes({
         auth: authModule.router,

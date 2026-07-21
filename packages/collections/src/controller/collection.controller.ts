@@ -23,6 +23,13 @@ export class CollectionController {
         res.json({ data: items, meta: paginationMeta(query.page, query.limit, total) });
     });
 
+    /** GET /collections/me/stats 🔒 */
+    stats: RequestHandler = asyncHandler(async (req, res) => {
+        const auth: AuthContext | undefined = req.auth;
+        if (!auth) throw AppError.unauthorized();
+        res.json({ data: await this.service.getStats(auth.accountId) });
+    });
+
     /** PATCH /collections/me/:productId 🔒 */
     setVisibility: RequestHandler = asyncHandler(async (req, res) => {
         const auth = req.auth;

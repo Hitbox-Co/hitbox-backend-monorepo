@@ -99,6 +99,55 @@ enum ClaimedStatus {
     CLAIMED
 }
 
+// ───── source: packages\artist\prisma\artist.prisma ────────────────────────────────
+
+// ============================================================================
+// ARTIST MODULE SCHEMA  (packages/artist/prisma/artist.prisma)
+// Artists and their collections. Owned by the artist module.
+// Product / ProductClaim relation fields point here across partials — Prisma
+// resolves them because the merge script produces one schema.
+// Merged by shared/database/scripts/merge-schema.mjs.
+// ============================================================================
+
+model Artist {
+    id         String        @id @default(cuid())
+    name       String        @db.VarChar(255)
+    slug       String        @unique @db.VarChar(255)
+    bio        String?
+    imageUrl   String?       @map("image_url")
+    genre      ProductGenre?
+    isVerified Boolean       @default(false) @map("is_verified")
+    createdAt  DateTime      @default(now()) @map("created_at")
+    updatedAt  DateTime      @updatedAt @map("updated_at")
+
+    collections ArtistCollection[]
+    claims      ProductClaim[]
+
+    @@map("artists")
+}
+
+model ArtistCollection {
+    id            String    @id @default(cuid())
+    name          String    @db.VarChar(255)
+    description   String?
+    coverImageUrl String?   @map("cover_image_url")
+    releaseDate   DateTime? @map("release_date") @db.Date
+    // Cap of collectibles this collection can hold. Denominator of a buyer's
+    // "collection progress" (see @hitbox/collections stats).
+    maximumLimit  Int       @default(10) @map("maximum_limit")
+    createdAt     DateTime  @default(now()) @map("created_at")
+    updatedAt     DateTime  @updatedAt @map("updated_at")
+
+    artistId String @map("artist_id")
+    artist   Artist @relation(fields: [artistId], references: [id], onDelete: Cascade)
+
+    products Product[]
+    claims   ProductClaim[]
+
+    @@index([artistId])
+    @@map("artist_collections")
+}
+
 // ───── source: packages\auth\prisma\auth.prisma ────────────────────────────────────
 
 // ============================================================================
@@ -202,50 +251,6 @@ model BuyerCollection {
     @@index([userId])
     @@index([productId])
     @@map("buyer_collections")
-}
-
-// ───── source: packages\products\prisma\artists.prisma ─────────────────────────────
-
-// ============================================================================
-// PRODUCTS MODULE SCHEMA — creator catalog  (packages/products/prisma/artists.prisma)
-// Artists and their collections group products; owned by the products module.
-// Merged by shared/database/scripts/merge-schema.mjs.
-// ============================================================================
-
-model Artist {
-    id         String        @id @default(cuid())
-    name       String        @db.VarChar(255)
-    slug       String        @unique @db.VarChar(255)
-    bio        String?
-    imageUrl   String?       @map("image_url")
-    genre      ProductGenre?
-    isVerified Boolean       @default(false) @map("is_verified")
-    createdAt  DateTime      @default(now()) @map("created_at")
-    updatedAt  DateTime      @updatedAt @map("updated_at")
-
-    collections ArtistCollection[]
-    claims      ProductClaim[]
-
-    @@map("artists")
-}
-
-model ArtistCollection {
-    id            String    @id @default(cuid())
-    name          String    @db.VarChar(255)
-    description   String?
-    coverImageUrl String?   @map("cover_image_url")
-    releaseDate   DateTime? @map("release_date") @db.Date
-    createdAt     DateTime  @default(now()) @map("created_at")
-    updatedAt     DateTime  @updatedAt @map("updated_at")
-
-    artistId String @map("artist_id")
-    artist   Artist @relation(fields: [artistId], references: [id], onDelete: Cascade)
-
-    products Product[]
-    claims   ProductClaim[]
-
-    @@index([artistId])
-    @@map("artist_collections")
 }
 
 // ───── source: packages\products\prisma\products.prisma ────────────────────────────
