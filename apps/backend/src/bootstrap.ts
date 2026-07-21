@@ -6,6 +6,7 @@ import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
 import { createMarketplaceModule } from '@hitbox/marketplace';
+import { createCollectionsModule } from '@hitbox/collections';
 import { buildRoutes } from './routes';
 
 /**
@@ -32,11 +33,14 @@ export function bootstrap(): Router {
         catalog: productsModule.listings,
     });
 
+    const collectionsModule = createCollectionsModule({ prisma });
+
     return buildRoutes({
         auth: authModule.router,
         users: usersModule.createRouter(authModule.requireAuth),
         products: productsModule.createRouter(authModule.requireAuth),
         discover: discoverModule.router,
         marketplace: marketplaceModule.router,
+        collections: collectionsModule.createRouter(authModule.requireAuth),
     });
 }

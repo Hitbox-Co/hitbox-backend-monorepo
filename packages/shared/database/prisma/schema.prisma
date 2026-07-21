@@ -177,10 +177,10 @@ model BlockchainLedger {
     @@map("blockchain_ledger")
 }
 
-// ───── source: packages\marketplace\prisma\marketplace.prisma ──────────────────────
+// ───── source: packages\collections\prisma\collections.prisma ──────────────────────
 
 // ============================================================================
-// MARKETPLACE MODULE SCHEMA  (packages/marketplace/prisma/marketplace.prisma)
+// COLLECTIONS MODULE SCHEMA  (packages/collections/prisma/collections.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 // ============================================================================
 

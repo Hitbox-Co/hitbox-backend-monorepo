@@ -225,6 +225,9 @@ importers:
       '@hitbox/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@hitbox/collections':
+        specifier: workspace:*
+        version: link:../../packages/collections
       '@hitbox/database':
         specifier: workspace:*
         version: link:../../packages/shared/database
@@ -301,6 +304,34 @@ importers:
       svix:
         specifier: ^1.45.1
         version: 1.96.1
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@types/express':
+        specifier: ^4.17.25
+        version: 4.17.25
+      pino:
+        specifier: ^9.5.0
+        version: 9.14.0
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/collections:
+    dependencies:
+      '@hitbox/auth':
+        specifier: workspace:*
+        version: link:../auth
+      '@hitbox/database':
+        specifier: workspace:*
+        version: link:../shared/database
+      '@hitbox/shared':
+        specifier: workspace:*
+        version: link:../shared
+      express:
+        specifier: ^4.19.0 || ^5.0.0
+        version: 5.2.1(supports-color@5.5.0)
       zod:
         specifier: ^3.24.1
         version: 3.25.76

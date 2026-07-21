@@ -20,11 +20,11 @@ HitBox uses a **Hybrid Modular Monolith**:
                         │        │                (composition root)   │
                         └────────┼─────────────────────┬───────────────┘
                                  │ mounts routers      │ injects deps
-              ┌──────────────────┼──────────────┬──────┴────────────┬─────────────────┐
-              ▼                  ▼              ▼                   ▼                 ▼
-        @hitbox/auth      @hitbox/users   @hitbox/products   @hitbox/discover  @hitbox/marketplace
-              │                  │              │             (read-side feeds — no DB access,
-              └────────┬─────────┴──────┬───────┘              each consumes a port that
+              ┌──────────────────┼──────────────┬──────┴────────────┬─────────────────┬──────────────────┐
+              ▼                  ▼              ▼                   ▼                 ▼                  ▼
+        @hitbox/auth      @hitbox/users   @hitbox/products   @hitbox/discover  @hitbox/marketplace  @hitbox/collections
+              │                  │              │             (read-side feeds — no DB access,      (owns BuyerCollection:
+              └────────┬─────────┴──────┬───────┘              each consumes a port that             the user's shelf)
                        │                │                      products implements)
                        ▼                ▼
                 @hitbox/shared    @hitbox/database
@@ -63,7 +63,8 @@ hitbox-backend/
 │   ├── users/                    # User profiles (local projection of Clerk users)
 │   ├── products/                 # Catalog: products, artists, collections
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
-│   ├── marketplace/              # Listing feed for the Marketplace screen; owns buyer collections
+│   ├── marketplace/              # Listing feed for the Marketplace screen (no own tables)
+│   ├── collections/              # Owns BuyerCollection — a user's shelf, public/private showcase
 │   ├── claims/                   # (schema only so far) NFC claims + ledger
 │   └── shared/                   # Infrastructure ONLY — no business logic
 │       ├── config/env.ts         # Zod-validated environment (fails fast at boot)
@@ -171,12 +172,15 @@ export function bootstrap(): Router {
         catalog: productsModule.listings,      // ← products implements marketplace's port
     });
 
+    const collectionsModule = createCollectionsModule({ prisma });
+
     return buildRoutes({
         auth: authModule.router,
         users: usersModule.createRouter(authModule.requireAuth),      // ← auth's middleware
         products: productsModule.createRouter(authModule.requireAuth),
         discover: discoverModule.router,                              // public — no auth
         marketplace: marketplaceModule.router,                        // public — no auth
+        collections: collectionsModule.createRouter(authModule.requireAuth),
     });
 }
 ```
@@ -259,6 +263,8 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 
 Note what this buys discover and marketplace: those modules have **zero database knowledge** — no `@hitbox/database` dependency at all. Each defines its own screen-level vocabulary (`DiscoverSection`: `trending` / `new_releases` / `top_creators`; `MarketplaceCategory`: `cards` / `figures` / `apparel` / …) and the products adapters map that to storage concerns (`MarketplaceStatus`, `ProductCategory` sets, ordering). Extracting either into a service later means swapping one adapter for an HTTP client.
 
+**Collections is the third flavor of module:** it *owns a table* (`BuyerCollection`) like products/users, but its rows embed a product card in responses. It reads that card by traversing the `product` relation **declared in its own partial** (`collections.prisma`) — a documented, deliberate shortcut at the database layer. On extraction, that one repository include becomes a products-port call; nothing else changes.
+
 ---
 
 ## 7. Events
@@ -296,7 +302,7 @@ packages/users/prisma/users.prisma             ← User
 packages/products/prisma/products.prisma       ← Product, ProductHistory, ProductImage
 packages/products/prisma/artists.prisma        ← Artist, ArtistCollection
 packages/claims/prisma/claims.prisma           ← ProductClaim, BlockchainLedger
-packages/marketplace/prisma/marketplace.prisma ← BuyerCollection
+packages/collections/prisma/collections.prisma ← BuyerCollection
 ```
 
 ### The merge pipeline
@@ -338,7 +344,7 @@ Cross-module relations (e.g. `Product.owner → User`) work because Prisma sees 
 ```text
 1. index.ts        loads root .env (before ANY app import — env.ts validates at import time)
 2. app.ts          cors → helmet → morgan → express.json (captures rawBody) → urlencoded
-3. routes.ts       /api/v1/{health, auth, users, products, discover, marketplace}
+3. routes.ts       /api/v1/{health, auth, users, products, discover, marketplace, collections}
 4. requireAuth     (protected routes only) verifies JWT, attaches req.auth
 5. controller      Zod-parses input → calls service
 6. service         business rules; throws AppError; publishes events

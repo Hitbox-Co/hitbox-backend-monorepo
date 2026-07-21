@@ -300,6 +300,81 @@ which returns the full product (description, all images, `collection.artist`, ra
 
 ---
 
+## Collections Module — `/api/v1/collections`
+
+Backs the mobile **Collections** tab — a user's shelf of owned/claimed collectibles (`BuyerCollection`). Every item carries a per-item **visibility**: `PRIVATE` (default, owner-only) or `PUBLIC` (shown on the user's showcase).
+
+Items enter a collection through the **claims flow** (NFC claim → collection entry) — there is deliberately no "add to collection" endpoint.
+
+```jsonc
+// CollectionItemDto — collection row + embedded product card
+{
+  "id": "cmro…",                    // collection-item id
+  "visibility": "PUBLIC",           // "PUBLIC" | "PRIVATE"
+  "totalClaimedNo": 1,
+  "genre": "MUSIC",                 // nullable
+  "addedAt": "2026-07-17T06:33:06.201Z",
+  "product": {
+    "id": "cmro…",                  // → GET /products/:id for full details
+    "name": "Pierce The Veil — Signature Series Poster",
+    "imageUrl": "https://…",        // first product image, null if none
+    "rarity": "LEGENDARY",
+    "rewardPoints": 12500,
+    "claimedStatus": "CLAIMED"
+  }
+}
+```
+
+### `GET /api/v1/collections/me` 🔒
+
+The authenticated user's own shelf — private items included. Newest first.
+
+| Param | Type / values | Default |
+|---|---|---|
+| `genre` | `MUSIC` `SPORTS` `FILM` `GAMING` `PUBLICATION` `ART` `ANIME` `OTHER` | — |
+| `visibility` | `PUBLIC` `PRIVATE` | — (both) |
+| `page` | int ≥ 1 | `1` |
+| `limit` | int 1–50 | `20` |
+
+```json
+{
+  "data": [ CollectionItemDto, … ],
+  "meta": { "page": 1, "limit": 20, "total": 5, "totalPages": 1 }
+}
+```
+
+### `PATCH /api/v1/collections/me/:productId` 🔒
+
+Toggle one owned item between showcase and private. `:productId` is the **product's** id (not the collection-item id).
+
+```jsonc
+// body
+{ "visibility": "PUBLIC" }   // or "PRIVATE"
+```
+
+→ `200` with the updated `CollectionItemDto`.
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `COLLECTIONS_ITEM_NOT_FOUND` | the product is not in *your* collection |
+
+### `GET /api/v1/collections/user/:userId`
+
+Another user's **public showcase** — `PUBLIC` items only, no auth required. Same query params as `/me` except `visibility` is ignored. Use this on profile screens.
+
+```json
+{
+  "data": [ CollectionItemDto, … ],
+  "meta": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
+}
+```
+
+### Item tap → product details
+
+Like discover and marketplace cards: `item.product.id ──▶ GET /api/v1/products/:id`.
+
+---
+
 ## Products Module — `/api/v1/products`
 
 ### `GET /api/v1/products`
@@ -386,6 +461,7 @@ Every module prefixes its codes, so a code always tells you where it came from:
 | `AUTH_*` | auth |
 | `USERS_*` | users |
 | `PRODUCTS_*` | products |
+| `COLLECTIONS_*` | collections |
 | `VALIDATION_ERROR`, `NOT_FOUND`, `INTERNAL_ERROR`, … | shared |
 
 (discover and marketplace define no error codes of their own — they only read, so shared codes cover them.)
