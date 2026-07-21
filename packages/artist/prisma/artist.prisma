@@ -1,6 +1,8 @@
 // ============================================================================
-// PRODUCTS MODULE SCHEMA — creator catalog  (packages/products/prisma/artists.prisma)
-// Artists and their collections group products; owned by the products module.
+// ARTIST MODULE SCHEMA  (packages/artist/prisma/artist.prisma)
+// Artists and their collections. Owned by the artist module.
+// Product / ProductClaim relation fields point here across partials — Prisma
+// resolves them because the merge script produces one schema.
 // Merged by shared/database/scripts/merge-schema.mjs.
 // ============================================================================
 
@@ -27,6 +29,9 @@ model ArtistCollection {
     description   String?
     coverImageUrl String?   @map("cover_image_url")
     releaseDate   DateTime? @map("release_date") @db.Date
+    // Cap of collectibles this collection can hold. Denominator of a buyer's
+    // "collection progress" (see @hitbox/collections stats).
+    maximumLimit  Int       @default(10) @map("maximum_limit")
     createdAt     DateTime  @default(now()) @map("created_at")
     updatedAt     DateTime  @updatedAt @map("updated_at")
 
