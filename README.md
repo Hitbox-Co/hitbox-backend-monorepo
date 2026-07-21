@@ -97,7 +97,8 @@ hitbox/
 | users | User Management |
 | products | Product Management |
 | discover | Discover feed (read-side product cards) |
-| collections | User's collectibles shelf (BuyerCollection) |
+| collections | User's collectibles shelf (BuyerCollection) + stats |
+| artist | Artists & ArtistCollection (profile reserved; collection capacity) |
 | marketplace | Marketplace Operations |
 | claims | Product Claims |
 | orders | Orders & Checkout |

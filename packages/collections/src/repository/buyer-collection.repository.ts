@@ -54,6 +54,43 @@ export class BuyerCollectionRepository {
         return { items, total };
     }
 
+    /**
+     * Aggregation feeding the Collections stats section. Counts are derived
+     * from the actual rows (NOT the stored BuyerCollection.totalClaimedNo,
+     * which can drift). Reads product.collectionId through the `product`
+     * relation this module already traverses.
+     *
+     * A user's collection is bounded (tens–hundreds of items), so one
+     * projected findMany is cheaper than several round-trips; if it ever
+     * grows unbounded, swap this for a grouped/raw count.
+     */
+    async aggregateForStats(userId: string): Promise<{
+        totalClaimedItems: number;
+        ownedInCollections: number;
+        collectionIds: string[];
+    }> {
+        const rows = await this.prisma.buyerCollection.findMany({
+            where: { userId },
+            select: { product: { select: { collectionId: true } } },
+        });
+
+        const collectionIds = new Set<string>();
+        let ownedInCollections = 0;
+        for (const row of rows) {
+            const collectionId = row.product.collectionId;
+            if (collectionId) {
+                collectionIds.add(collectionId);
+                ownedInCollections += 1;
+            }
+        }
+
+        return {
+            totalClaimedItems: rows.length,
+            ownedInCollections,
+            collectionIds: [...collectionIds],
+        };
+    }
+
     findItem(userId: string, productId: string): Promise<BuyerCollectionRow | null> {
         return this.prisma.buyerCollection.findUnique({
             where: { userId_productId: { userId, productId } },

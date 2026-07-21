@@ -325,6 +325,32 @@ Items enter a collection through the **claims flow** (NFC claim → collection e
 }
 ```
 
+### `GET /api/v1/collections/me/stats` 🔒
+
+Aggregated **stats section** for the authenticated user's Collections screen. All numbers are computed by aggregation over the live rows — the stored `BuyerCollection.totalClaimedNo` counter is intentionally **not** used.
+
+```json
+{
+  "data": {
+    "totalClaimedItems": 3,
+    "totalArtistCollections": 2,
+    "collectionProgress": { "owned": 3, "total": 20, "percentage": 15 }
+  }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `totalClaimedItems` | Count of the user's collection items (rows), via aggregation. |
+| `totalArtistCollections` | Distinct `ArtistCollection`s the user has **≥ 1** product from. |
+| `collectionProgress.owned` | The user's items that belong to an `ArtistCollection`. |
+| `collectionProgress.total` | Σ `maximumLimit` of those collections (see below). |
+| `collectionProgress.percentage` | `round(owned / total × 100)`, clamped `0–100` (`0` when `total` is 0). |
+
+**Collection Progress** measures how far the user is toward completing the collections they've started. Each `ArtistCollection` has a `maximumLimit` (how many collectibles it holds, **default 10**). If the user owns items across collections whose caps sum to `25` and they hold `10` of them, progress is `10 / 25 = 40%`.
+
+> A collection only counts toward `totalArtistCollections` / progress once the user holds at least one product from it. Products not tied to any `ArtistCollection` count in `totalClaimedItems` but not in progress.
+
 ### `GET /api/v1/collections/me` 🔒
 
 The authenticated user's own shelf — private items included. Newest first.

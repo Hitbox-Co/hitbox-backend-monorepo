@@ -59,6 +59,8 @@ pnpm db:seed         # fill the database with realistic dummy data (see below)
 
 `pnpm db:seed` populates **every table** with realistic development data: 5 users, 6 artists, 8 collections, 16 products (with images, spread across trending / new releases / top creators), plus claims, ledger entries, ownership history and buyer collections — so the discover feed, product listings, search and detail endpoints all return real-looking responses immediately.
 
+Each `ArtistCollection` is seeded with a `maximumLimit` (the progress denominator) and one seed user (`liam_collects`) owns products across two collections, so `GET /collections/me/stats` returns meaningful numbers (owned 3 / total 20 = 15%).
+
 It is **idempotent**: every run wipes and re-creates the catalog data. Real accounts are safe — only users whose `clerkUserId` starts with `seed_` are touched. The script lives at [packages/shared/database/prisma/seed.ts](../packages/shared/database/prisma/seed.ts); edit the `USERS` / `ARTISTS` / `PRODUCTS` arrays at the top to shape the data.
 
 > Never edit `packages/shared/database/prisma/schema.prisma` — it is generated.

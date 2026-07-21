@@ -28,6 +28,27 @@ export const updateVisibilitySchema = z
 
 export type UpdateVisibilityDto = z.infer<typeof updateVisibilitySchema>;
 
+/**
+ * Progress toward "completing" the collections the user has started.
+ * owned = the user's items that belong to an ArtistCollection;
+ * total = Σ maximumLimit of those collections; percentage = round(owned/total),
+ * clamped to 0–100.
+ */
+export interface CollectionProgressDto {
+    owned: number;
+    total: number;
+    percentage: number;
+}
+
+/** Stats section of the Collections screen (all derived by aggregation). */
+export interface CollectionStatsDto {
+    /** Count of the user's collectibles (rows), not the stored totalClaimedNo. */
+    totalClaimedItems: number;
+    /** Distinct ArtistCollections the user has ≥1 product from. */
+    totalArtistCollections: number;
+    collectionProgress: CollectionProgressDto;
+}
+
 /** One shelf item on the Collections screen — collection row + product card. */
 export interface CollectionItemDto {
     id: string;
