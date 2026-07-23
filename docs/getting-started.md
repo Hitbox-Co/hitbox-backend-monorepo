@@ -103,6 +103,7 @@ curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/users/me
 |---|---|
 | Understand the architecture, module anatomy, DI, events | [hitbox-architecture.md](hitbox-architecture.md) |
 | See every endpoint, params, and error codes | [api-reference.md](api-reference.md) |
+| Understand auth validation + run the auth tests (`pnpm --filter @hitbox/auth test`) | [auth-testing.md](auth-testing.md) |
 | Add a new feature module | [hitbox-architecture.md §10](hitbox-architecture.md#10-adding-a-new-module-checklist) |
 | Change the database schema | [hitbox-architecture.md §8](hitbox-architecture.md#8-hybrid-prisma-architecture) |
 
