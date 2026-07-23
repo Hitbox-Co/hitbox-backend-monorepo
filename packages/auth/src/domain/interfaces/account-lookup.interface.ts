@@ -7,6 +7,7 @@ export interface AccountSnapshot {
     email: string;
     role: UserRole;
     status: AccountStatus;
+    emailVerified: boolean;
 }
 
 /**
@@ -17,4 +18,6 @@ export interface AccountSnapshot {
  */
 export interface IAccountLookup {
     findByClerkUserId(clerkUserId: string): Promise<AccountSnapshot | null>;
+    /** True if a local account already exists for this email (registration guard). */
+    emailExists(email: string): Promise<boolean>;
 }

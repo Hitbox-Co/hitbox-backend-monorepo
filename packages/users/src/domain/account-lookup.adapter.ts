@@ -25,6 +25,11 @@ export class UserAccountLookup implements IAccountLookup {
             email: user.email,
             role: user.role as unknown as UserRole, // Prisma + domain enums share string values
             status,
+            emailVerified: user.emailVerified,
         };
+    }
+
+    emailExists(email: string): Promise<boolean> {
+        return this.users.existsByEmail(email);
     }
 }

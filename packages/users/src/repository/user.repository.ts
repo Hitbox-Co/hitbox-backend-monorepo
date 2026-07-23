@@ -4,6 +4,7 @@ import type { PrismaClient, User } from '@hitbox/database';
 export interface ClerkUserSnapshot {
     clerkUserId: string;
     email: string;
+    emailVerified: boolean;
     username: string | null;
     firstName: string | null;
     lastName: string | null;
@@ -28,10 +29,20 @@ export class UserRepository {
         return this.prisma.user.findUnique({ where: { clerkUserId } });
     }
 
+    /** Case-insensitive existence check for registration validation. */
+    async existsByEmail(email: string): Promise<boolean> {
+        const found = await this.prisma.user.findFirst({
+            where: { email: { equals: email, mode: 'insensitive' }, deletedAt: null },
+            select: { id: true },
+        });
+        return found !== null;
+    }
+
     /** Idempotent projection of a Clerk user — safe under webhook replays. */
     upsertFromClerk(data: ClerkUserSnapshot): Promise<User> {
         const fields = {
             email: data.email,
+            emailVerified: data.emailVerified,
             username: data.username,
             firstName: data.firstName,
             lastName: data.lastName,

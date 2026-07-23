@@ -28,5 +28,14 @@ export type {
     UserUpdatedPayload,
 } from './events/auth-event.payloads';
 
+// Registration validation (reusable Zod schemas)
+export {
+    emailSchema,
+    nameSchema,
+    registrationValidationSchema,
+    usernameSchema,
+} from './dto/registration.dto';
+export type { RegistrationValidationDto } from './dto/registration.dto';
+
 // Types
 export type { AuthContext } from './types/auth.types';
