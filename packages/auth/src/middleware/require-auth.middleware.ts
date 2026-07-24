@@ -1,38 +1,13 @@
 import type { Request, RequestHandler } from 'express';
-import { createClerkClient, verifyToken } from '@clerk/backend';
-import type { User as ClerkUser } from '@clerk/backend';
-import type { Logger } from 'pino';
+import { verifyToken } from '@clerk/backend';
 import { AppError, env } from '@hitbox/shared';
 import { AUTH_ERROR_CODES } from '../constants/auth.constant';
 import { AccountStatus } from '../domain/enums/account-status.enum';
 import type { IAccountLookup } from '../domain/interfaces/account-lookup.interface';
-import type { UserRegisteredPayload } from '../events/auth-event.payloads';
 import type { AuthContext } from '../types/auth.types';
 
 interface RequireAuthDeps {
     accounts: IAccountLookup;
-    logger: Logger;
-}
-
-/** Same projection the webhook applies: native attributes win, unsafe_metadata is the fallback. */
-function toRegisteredPayload(user: ClerkUser): UserRegisteredPayload | null {
-    const primary =
-        user.emailAddresses.find((address) => address.id === user.primaryEmailAddressId) ??
-        user.emailAddresses[0];
-    if (!primary) return null;
-
-    const meta = (user.unsafeMetadata ?? {}) as Record<string, unknown>;
-    const metaString = (key: string): string | null =>
-        typeof meta[key] === 'string' && meta[key] !== '' ? (meta[key] as string) : null;
-
-    return {
-        clerkUserId: user.id,
-        email: primary.emailAddress,
-        username: user.username ?? metaString('username'),
-        firstName: user.firstName ?? metaString('firstName'),
-        lastName: user.lastName ?? metaString('lastName'),
-        avatarUrl: user.imageUrl ?? null,
-    };
 }
 
 function extractToken(req: Request): string | null {
@@ -51,30 +26,6 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
     const authorizedParties = env.CLERK_AUTHORIZED_PARTIES?.split(',')
         .map((party) => party.trim())
         .filter(Boolean);
-
-    const clerk = createClerkClient({ secretKey: env.CLERK_SECRET_KEY });
-
-    /**
-     * The session is valid but no local row exists — the user.created webhook
-     * hasn't landed (or can't, in local dev). Pull the user from Clerk's API
-     * and upsert it so the account exists from the very first request.
-     */
-    async function provisionAccount(clerkUserId: string) {
-        try {
-            const clerkUser = await clerk.users.getUser(clerkUserId);
-            const snapshot = toRegisteredPayload(clerkUser);
-            if (!snapshot) {
-                deps.logger.warn({ clerkUserId }, 'jit provisioning skipped — clerk user has no email');
-                return null;
-            }
-            const account = await deps.accounts.provisionFromClerk(snapshot);
-            deps.logger.info({ clerkUserId }, 'account provisioned just-in-time from clerk');
-            return account;
-        } catch (error) {
-            deps.logger.error({ clerkUserId, err: error }, 'jit provisioning from clerk failed');
-            return null;
-        }
-    }
 
     return async (req, _res, next) => {
         try {
@@ -99,10 +50,7 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
                 );
             }
 
-            let account = await deps.accounts.findByClerkUserId(payload.sub);
-            if (!account) {
-                account = await provisionAccount(payload.sub);
-            }
+            const account = await deps.accounts.findByClerkUserId(payload.sub);
             if (!account || account.status === AccountStatus.DELETED) {
                 throw AppError.unauthorized(
                     'No active account for this session',
