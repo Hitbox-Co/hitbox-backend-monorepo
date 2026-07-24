@@ -11,6 +11,8 @@ export type ClerkWebhookEnvelope = z.infer<typeof clerkWebhookEnvelopeSchema>;
 const clerkEmailSchema = z.object({
     id: z.string(),
     email_address: z.string().email(),
+    // Clerk marks each email's verification; primary must be "verified".
+    verification: z.object({ status: z.string() }).nullish(),
 });
 
 /**
@@ -45,9 +47,18 @@ export const clerkDeletedUserPayloadSchema = z.object({
     id: z.string(),
 });
 
-export function resolvePrimaryEmail(user: ClerkUserPayload): string | null {
+function primaryEmailRecord(user: ClerkUserPayload) {
     const primary = user.email_addresses.find(
         (address) => address.id === user.primary_email_address_id,
     );
-    return (primary ?? user.email_addresses[0])?.email_address ?? null;
+    return primary ?? user.email_addresses[0] ?? null;
+}
+
+export function resolvePrimaryEmail(user: ClerkUserPayload): string | null {
+    return primaryEmailRecord(user)?.email_address ?? null;
+}
+
+/** True only when the primary email's Clerk verification status is "verified". */
+export function isPrimaryEmailVerified(user: ClerkUserPayload): boolean {
+    return primaryEmailRecord(user)?.verification?.status === 'verified';
 }

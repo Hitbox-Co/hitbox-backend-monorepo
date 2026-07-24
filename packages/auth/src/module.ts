@@ -9,6 +9,7 @@ import type { IAccountLookup } from './domain/interfaces/account-lookup.interfac
 import { createRequireAuth } from './middleware/require-auth.middleware';
 import { WebhookEventRepository } from './repository/webhook-event.repository';
 import { AuthWebhookService } from './service/auth-webhook.service';
+import { RegistrationService } from './service/registration.service';
 
 export interface AuthModuleDeps {
     prisma: PrismaClient;
@@ -33,11 +34,13 @@ export function createAuthModule(deps: AuthModuleDeps): AuthModule {
         signingSecret: env.CLERK_WEBHOOK_SIGNING_SECRET,
         logger,
     });
-    const controller = new AuthController(webhookService);
-    const requireAuth = createRequireAuth({ accounts: deps.accounts, logger });
+    const registrationService = new RegistrationService({ accounts: deps.accounts });
+    const controller = new AuthController(webhookService, registrationService);
+    const requireAuth = createRequireAuth({ accounts: deps.accounts });
 
     const router = Router();
     router.post(`/webhooks${CLERK_WEBHOOK_PATH}`, controller.handleClerkWebhook);
+    router.post('/registration/validate', controller.validateRegistration);
     router.get('/me', requireAuth, controller.me);
 
     return { router, requireAuth };

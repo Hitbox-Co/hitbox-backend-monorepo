@@ -25,6 +25,7 @@ The middleware verifies the token, resolves the local account, and rejects with:
 | 401 | `AUTH_INVALID_TOKEN` | token invalid / expired |
 | 401 | `AUTH_ACCOUNT_NOT_FOUND` | valid token but no local user row (webhook not processed yet) or account deleted |
 | 403 | `AUTH_ACCOUNT_SUSPENDED` | account suspended |
+| 403 | `AUTH_EMAIL_UNVERIFIED` | session valid, but the account's synced primary email is not verified |
 
 ### Response envelopes
 
@@ -86,9 +87,35 @@ Handled event types: `user.created`, `user.updated`, `user.deleted` — everythi
 | 200 `{ "received": true }` | processed (or ignored / duplicate) |
 | 401 `AUTH_WEBHOOK_INVALID_SIGNATURE` | missing or invalid signature |
 
+### `POST /api/v1/auth/registration/validate`
+
+Server-side pre-flight validation the client runs **before** Clerk sign-up, so registration input is checked against the same rules the backend enforces and returns the standard error envelope. Public (no auth). **Creates nothing** — account creation, passwords, and the email verification code are all handled by Clerk.
+
+```jsonc
+// body — all fields except email are optional; unknown fields rejected (strict)
+{
+  "email": "buyer@example.com",   // required; trimmed + lowercased + format-checked
+  "username": "liam_collects",    // 3–50 chars, letters/numbers/"_"/"."
+  "firstName": "Liam",            // ≤ 100 chars
+  "lastName": "Carter"            // ≤ 100 chars
+}
+```
+
+```json
+// 200 — input is well-formed and the email is free
+{ "data": { "valid": true, "email": "buyer@example.com" } }
+```
+
+| Status | Code | When |
+|---|---|---|
+| 422 | `VALIDATION_ERROR` | bad email format, illegal username, or unknown field (field-level `details`) |
+| 409 | `AUTH_EMAIL_TAKEN` | an account already exists for this email |
+
+> Password strength is **not** validated here — the backend never receives passwords; Clerk's password policy rejects weak ones at sign-up.
+
 ### `GET /api/v1/auth/me` 🔒
 
-The authenticated principal (contents of `req.auth`).
+The authenticated principal (contents of `req.auth`). `requireAuth` runs first and enforces: valid Clerk JWT, a local account that is **not** deleted (401) or suspended (403), and a **verified** primary email (403 `AUTH_EMAIL_UNVERIFIED`).
 
 ```json
 {

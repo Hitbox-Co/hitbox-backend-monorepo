@@ -7,6 +7,7 @@ import {
     clerkDeletedUserPayloadSchema,
     clerkUserPayloadSchema,
     clerkWebhookEnvelopeSchema,
+    isPrimaryEmailVerified,
     resolvePrimaryEmail,
 } from '../dto/clerk-webhook.dto';
 import type { UserDeletedPayload, UserRegisteredPayload } from '../events/auth-event.payloads';
@@ -94,9 +95,10 @@ export class AuthWebhookService {
         const payload: UserRegisteredPayload = {
             clerkUserId: user.id,
             email,
-            username: user.username ?? meta.username ?? null,
-            firstName: user.first_name ?? meta.firstName ?? null,
-            lastName: user.last_name ?? meta.lastName ?? null,
+            emailVerified: isPrimaryEmailVerified(user),
+            username: user.username ?? null,
+            firstName: user.first_name ?? null,
+            lastName: user.last_name ?? null,
             avatarUrl: user.image_url ?? null,
         };
 

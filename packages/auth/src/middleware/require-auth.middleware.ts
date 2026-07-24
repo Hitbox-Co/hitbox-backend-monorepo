@@ -115,6 +115,15 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
                     AUTH_ERROR_CODES.ACCOUNT_SUSPENDED,
                 );
             }
+            // Defense-in-depth: Clerk only mints a session after email
+            // verification, but we also refuse protected routes for any
+            // account whose synced email is not verified.
+            if (!account.emailVerified) {
+                throw AppError.forbidden(
+                    'Email address not verified',
+                    AUTH_ERROR_CODES.EMAIL_UNVERIFIED,
+                );
+            }
 
             const auth: AuthContext = {
                 accountId: account.id,

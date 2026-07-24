@@ -350,6 +350,10 @@ model User {
     firstName    String?   @map("first_name") @db.VarChar(100)
     lastName     String?   @map("last_name") @db.VarChar(100)
     avatarUrl    String?   @map("avatar_url")
+    // Verification status of the primary email, mirrored from Clerk on sync.
+    // requireAuth blocks protected routes when false. Defaults true so rows
+    // created before this column stay usable; the sync path writes the real value.
+    emailVerified Boolean  @default(true) @map("email_verified")
     role         UserRole  @default(USER)
     state        UserState @default(ACTIVE)
     rewardPoints Int       @default(0) @map("reward_points")
