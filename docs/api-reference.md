@@ -58,7 +58,30 @@ Invalid input returns **422** with field-level details:
 |---|---|
 | 404 | `NOT_FOUND` (unknown route) |
 | 422 | `VALIDATION_ERROR` |
+| 429 | `RATE_LIMITED` |
 | 500 | `INTERNAL_ERROR` |
+
+### Rate limiting
+
+Every `/api/v1/*` route is rate limited **per client IP**. The default budget is:
+
+> **100 requests per 60 seconds** per IP — i.e. **~1.6 requests/second** sustained, with bursts of up to 100 within any 60-second window.
+
+The 101st request in a window is rejected with **429 `RATE_LIMITED`** until the window resets. Every response carries the budget headers:
+
+```http
+RateLimit-Policy: 100;w=60
+RateLimit-Limit: 100
+RateLimit-Remaining: 99
+RateLimit-Reset: 60          # seconds until the window resets
+```
+
+The window is shared across all backend instances via **Redis** (`REDIS_URL`); without Redis it falls back to a per-instance in-memory window. Tune the budget with `RATE_LIMIT_MAX` / `RATE_LIMIT_WINDOW_MS` (see getting-started).
+
+```json
+// 429 body
+{ "error": { "code": "RATE_LIMITED", "message": "Too many requests, please try again later" } }
+```
 
 ---
 

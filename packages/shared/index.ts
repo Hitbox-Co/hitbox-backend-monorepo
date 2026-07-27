@@ -11,6 +11,11 @@ export { AppError } from './errors/app-error';
 
 // Middleware
 export { errorHandler, notFoundHandler } from './middleware/error-handler.middleware';
+export { createRateLimiter } from './middleware/rate-limit.middleware';
+export type { RateLimiterOptions } from './middleware/rate-limit.middleware';
+
+// Cache
+export { getRedis } from './cache/redis';
 
 // Utils
 export { asyncHandler } from './utils/async-handler';

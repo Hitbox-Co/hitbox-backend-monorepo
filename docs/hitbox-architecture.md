@@ -429,5 +429,8 @@ The whole point of the architecture is that **step 1 requires zero internal refa
 | `CLERK_SECRET_KEY` | **yes** | Clerk backend key (`sk_…`) |
 | `CLERK_WEBHOOK_SIGNING_SECRET` | **yes** | svix signing secret (`whsec_…`) from the Clerk webhook endpoint |
 | `CLERK_AUTHORIZED_PARTIES` | no | comma-separated origins for azp validation |
+| `REDIS_URL` | no | Redis for the distributed rate limiter (in-memory fallback if unset) |
+| `RATE_LIMIT_MAX` | no (default `100`) | requests allowed per window per IP |
+| `RATE_LIMIT_WINDOW_MS` | no (default `60000`) | rate-limit window length; default = 100 req / 60s ≈ 1.6 req/sec |
 
 The root `.env` is the single source; `apps/backend/src/index.ts` loads it before anything else is imported.

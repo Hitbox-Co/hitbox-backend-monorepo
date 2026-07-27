@@ -36,7 +36,15 @@ CLERK_SECRET_KEY=sk_test_...
 CLERK_WEBHOOK_SIGNING_SECRET=whsec_...
 # optional, comma-separated frontend origins for azp validation
 # CLERK_AUTHORIZED_PARTIES=http://localhost:3000
+
+# Redis — backs the distributed rate limiter (optional; falls back to in-memory)
+REDIS_URL=redis://localhost:6379          # or rediss://…@host:port for TLS
+# Rate limit: default 100 requests / 60_000 ms per IP (~1.6 req/sec)
+# RATE_LIMIT_MAX=100
+# RATE_LIMIT_WINDOW_MS=60000
 ```
+
+> The env loader reads **`.env.local` first, then `.env`** (local wins). Either filename works.
 
 The env is validated at boot ([packages/shared/config/env.ts](../packages/shared/config/env.ts)) — a missing variable prints a readable report and exits instead of crashing at request time.
 

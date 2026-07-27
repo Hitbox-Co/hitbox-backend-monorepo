@@ -3,10 +3,14 @@ import type { Express, Request, Router } from "express";
 import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
-import { errorHandler, isProduction, notFoundHandler } from "@hitbox/shared";
+import { createRateLimiter, errorHandler, isProduction, notFoundHandler } from "@hitbox/shared";
 
 export function createApp(apiRouter: Router): Express {
     const app = express();
+
+    // Behind a host/CDN proxy the client IP is in X-Forwarded-For; trust one
+    // hop so the rate limiter keys on the real client, not the proxy.
+    if (isProduction) app.set("trust proxy", 1);
 
     app.use(
         cors({
@@ -36,7 +40,8 @@ export function createApp(apiRouter: Router): Express {
         res.json({ success: true, message: "HitBox Backend is running 🚀" });
     });
 
-    app.use("/api/v1", apiRouter);
+    // Rate limit the whole API (per client IP; Redis-backed when configured).
+    app.use("/api/v1", createRateLimiter(), apiRouter);
 
     // 404 + single error boundary — always LAST.
     app.use(notFoundHandler);
