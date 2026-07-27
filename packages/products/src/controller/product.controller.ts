@@ -22,6 +22,16 @@ export class ProductController {
         res.json({ data: await this.service.getByProductCode(req.params.productCode as string) });
     });
 
+    /** GET /products/tag/:tagId — lookup by NFC tag */
+    getByTag: RequestHandler = asyncHandler(async (req, res) => {
+        res.json({ data: await this.service.getByTagId(req.params.tagId as string) });
+    });
+
+    /** GET /products/tag/:tagId/history — ownership/price history */
+    history: RequestHandler = asyncHandler(async (req, res) => {
+        res.json({ data: await this.service.getHistoryByTagId(req.params.tagId as string) });
+    });
+
     /** GET /products/:id */
     getById: RequestHandler = asyncHandler(async (req, res) => {
         res.json({ data: await this.service.getById(req.params.id as string) });

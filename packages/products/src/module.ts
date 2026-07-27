@@ -44,6 +44,8 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
             // Public catalog
             router.get('/', controller.list);
             router.get('/code/:productCode', controller.getByCode);
+            router.get('/tag/:tagId/history', controller.history);
+            router.get('/tag/:tagId', controller.getByTag);
             router.get('/:id', controller.getById);
 
             // Catalog management — requireAuth for now; role-based

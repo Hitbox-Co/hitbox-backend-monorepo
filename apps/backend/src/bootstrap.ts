@@ -8,6 +8,7 @@ import { createDiscoverModule } from '@hitbox/discover';
 import { createMarketplaceModule } from '@hitbox/marketplace';
 import { createCollectionsModule } from '@hitbox/collections';
 import { createArtistModule } from '@hitbox/artist';
+import { createClaimsModule } from '@hitbox/claims';
 import { buildRoutes } from './routes';
 
 /**
@@ -43,6 +44,11 @@ export function bootstrap(): Router {
         artistStats: artistModule.collectionStats,
     });
 
+    // NFC authenticity domain: single-tap claim, verify a tag, and read the
+    // provenance ledger. Owns ProductClaim + BlockchainLedger.
+    const claimsModule = createClaimsModule({ prisma, eventBus });
+    const claimsRouters = claimsModule.createRouters(authModule.requireAuth);
+
     return buildRoutes({
         auth: authModule.router,
         users: usersModule.createRouter(authModule.requireAuth),
@@ -50,5 +56,8 @@ export function bootstrap(): Router {
         discover: discoverModule.router,
         marketplace: marketplaceModule.router,
         collections: collectionsModule.createRouter(authModule.requireAuth),
+        claims: claimsRouters.claims,
+        verify: claimsRouters.verify,
+        ledger: claimsRouters.ledger,
     });
 }

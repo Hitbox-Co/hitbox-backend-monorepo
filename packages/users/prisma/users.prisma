@@ -24,6 +24,9 @@ model User {
     productHistory   ProductHistory[]
     claims           ProductClaim[]
     buyerCollections BuyerCollection[]
+    // Ledger rows where this user is the outgoing / incoming owner (transfers).
+    ledgerFrom       BlockchainLedger[] @relation("LedgerFromUser")
+    ledgerTo         BlockchainLedger[] @relation("LedgerToUser")
 
     @@index([state])
     @@map("users")

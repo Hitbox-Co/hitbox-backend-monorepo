@@ -18,6 +18,11 @@ const envSchema = z.object({
     CLERK_SECRET_KEY: z.string().min(1),
     CLERK_WEBHOOK_SIGNING_SECRET: z.string().min(1),
     CLERK_AUTHORIZED_PARTIES: z.string().optional(),
+
+    // TEMPORARY demo auth — when "true" (and NODE_ENV != production), requests
+    // may authenticate via an `X-Demo-User: <email>` header instead of Clerk.
+    // Remove/disable before production.
+    DEMO_AUTH_ENABLED: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

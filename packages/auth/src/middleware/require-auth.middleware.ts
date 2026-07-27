@@ -54,6 +54,26 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
 
     const clerk = createClerkClient({ secretKey: env.CLERK_SECRET_KEY });
 
+    // TEMPORARY demo auth — never active in production.
+    const demoAuthEnabled = env.DEMO_AUTH_ENABLED === 'true' && env.NODE_ENV !== 'production';
+
+    /** Resolve (or JIT-create) a local account for a demo email — no Clerk. */
+    async function resolveDemoAccount(email: string) {
+        const clerkUserId = `demo_${email}`;
+        let account = await deps.accounts.findByClerkUserId(clerkUserId);
+        if (!account) {
+            account = await deps.accounts.provisionFromClerk({
+                clerkUserId,
+                email,
+                username: email.split('@')[0] ?? null,
+                firstName: 'Demo',
+                lastName: 'User',
+                avatarUrl: null,
+            });
+        }
+        return account;
+    }
+
     /**
      * The session is valid but no local row exists — the user.created webhook
      * hasn't landed (or can't, in local dev). Pull the user from Clerk's API
@@ -78,6 +98,27 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
 
     return async (req, _res, next) => {
         try {
+            // ── TEMPORARY demo-auth path (X-Demo-User header) ──────────────
+            if (demoAuthEnabled) {
+                const raw = req.headers['x-demo-user'];
+                const demoEmail = (Array.isArray(raw) ? raw[0] : raw)?.trim();
+                if (demoEmail) {
+                    const account = await resolveDemoAccount(demoEmail);
+                    if (account && account.status !== AccountStatus.DELETED) {
+                        req.auth = {
+                            accountId: account.id,
+                            clerkUserId: `demo_${demoEmail}`,
+                            email: account.email,
+                            role: account.role,
+                            sessionId: null,
+                        };
+                        deps.logger.warn({ demoEmail }, 'authenticated via TEMPORARY demo-auth header');
+                        return next();
+                    }
+                }
+            }
+            // ───────────────────────────────────────────────────────────────
+
             const token = extractToken(req);
             if (!token) {
                 throw AppError.unauthorized(

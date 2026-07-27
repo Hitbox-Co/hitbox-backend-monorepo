@@ -30,6 +30,16 @@ const marketplaceSelect = {
 
 export type ProductListingRow = Prisma.ProductGetPayload<{ select: typeof marketplaceSelect }>;
 
+const historySelect = {
+    id: true,
+    price: true,
+    ownershipStartDate: true,
+    ownershipEndDate: true,
+    ownerId: true,
+} satisfies Prisma.ProductHistorySelect;
+
+export type ProductHistoryRow = Prisma.ProductHistoryGetPayload<{ select: typeof historySelect }>;
+
 const sortToOrderBy: Record<ListProductsQuery['sort'], Prisma.ProductOrderByWithRelationInput> = {
     newest: { createdAt: 'desc' },
     price_asc: { priceInDollars: 'asc' },
@@ -114,6 +124,19 @@ export class ProductRepository {
 
     findByProductCode(productCode: string): Promise<ProductWithRelations | null> {
         return this.prisma.product.findUnique({ where: { productCode }, include: listInclude });
+    }
+
+    findByTagId(tagId: string): Promise<ProductWithRelations | null> {
+        return this.prisma.product.findUnique({ where: { tagId }, include: listInclude });
+    }
+
+    /** Ownership/price periods for a product, most recent first. */
+    findHistory(productId: string): Promise<ProductHistoryRow[]> {
+        return this.prisma.productHistory.findMany({
+            where: { productId },
+            orderBy: { ownershipStartDate: 'desc' },
+            select: historySelect,
+        });
     }
 
     create(data: Prisma.ProductCreateInput): Promise<ProductWithRelations> {
