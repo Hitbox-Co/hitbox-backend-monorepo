@@ -6,6 +6,7 @@ import type { IEventBus } from '@hitbox/shared';
 import type { IProductDiscovery } from '@hitbox/discover';
 import type { IListingCatalog } from '@hitbox/marketplace';
 import { PRODUCTS_MODULE } from './constants/products.constant';
+import { ProductCache } from './cache/product-cache';
 import { ProductController } from './controller/product.controller';
 import { MarketplaceListingAdapter } from './domain/marketplace-listing.adapter';
 import { ProductDiscoveryAdapter } from './domain/product-discovery.adapter';
@@ -30,7 +31,8 @@ export interface ProductsModule {
 export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
     const logger = createModuleLogger(PRODUCTS_MODULE);
 
-    const products = new ProductRepository(deps.prisma);
+    const cache = new ProductCache();
+    const products = new ProductRepository(deps.prisma, cache);
     const service = new ProductService({ products, eventBus: deps.eventBus, logger });
 
     return {

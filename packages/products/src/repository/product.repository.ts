@@ -1,5 +1,6 @@
 import { Prisma, ProductState } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
+import type { ProductCache } from '../cache/product-cache';
 import type { ListProductsQuery } from '../dto/product.dto';
 
 const listInclude = {
@@ -38,9 +39,16 @@ const sortToOrderBy: Record<ListProductsQuery['sort'], Prisma.ProductOrderByWith
 };
 
 export class ProductRepository {
-    constructor(private readonly prisma: PrismaClient) { }
+    constructor(
+        private readonly prisma: PrismaClient,
+        private readonly cache: ProductCache,
+    ) { }
 
     async findMany(query: ListProductsQuery): Promise<{ items: ProductWithRelations[]; total: number }> {
+        type Result = { items: ProductWithRelations[]; total: number };
+        const cached = await this.cache.getList<Result>('catalog', query);
+        if (cached) return cached;
+
         const where: Prisma.ProductWhereInput = {
             state: ProductState.ACTIVE,
             ...(query.category && { category: query.category }),
@@ -65,7 +73,9 @@ export class ProductRepository {
             this.prisma.product.count({ where }),
         ]);
 
-        return { items, total };
+        const result: Result = { items, total };
+        await this.cache.setList('catalog', query, result);
+        return result;
     }
 
     /** Minimal card projection for the discover feed — no joins beyond one image. */
@@ -75,6 +85,10 @@ export class ProductRepository {
         skip: number;
         take: number;
     }): Promise<{ items: ProductDiscoverRow[]; total: number }> {
+        type Result = { items: ProductDiscoverRow[]; total: number };
+        const cached = await this.cache.getList<Result>('discover', params);
+        if (cached) return cached;
+
         const [items, total] = await this.prisma.$transaction([
             this.prisma.product.findMany({
                 where: params.where,
@@ -85,7 +99,10 @@ export class ProductRepository {
             }),
             this.prisma.product.count({ where: params.where }),
         ]);
-        return { items, total };
+
+        const result: Result = { items, total };
+        await this.cache.setList('discover', params, result);
+        return result;
     }
 
     /** Listing card projection for the marketplace feed — price + artist name. */
@@ -95,6 +112,10 @@ export class ProductRepository {
         skip: number;
         take: number;
     }): Promise<{ items: ProductListingRow[]; total: number }> {
+        type Result = { items: ProductListingRow[]; total: number };
+        const cached = await this.cache.getList<Result>('marketplace', params);
+        if (cached) return cached;
+
         const [items, total] = await this.prisma.$transaction([
             this.prisma.product.findMany({
                 where: params.where,
@@ -105,31 +126,59 @@ export class ProductRepository {
             }),
             this.prisma.product.count({ where: params.where }),
         ]);
-        return { items, total };
+
+        const result: Result = { items, total };
+        await this.cache.setList('marketplace', params, result);
+        return result;
     }
 
-    findById(id: string): Promise<ProductWithRelations | null> {
-        return this.prisma.product.findUnique({ where: { id }, include: listInclude });
+    async findById(id: string): Promise<ProductWithRelations | null> {
+        const cached = await this.cache.getEntity<ProductWithRelations>('id', id);
+        if (cached) return cached;
+
+        const product = await this.prisma.product.findUnique({ where: { id }, include: listInclude });
+        if (product) await this.cache.setEntity('id', id, product);
+        return product;
     }
 
-    findByProductCode(productCode: string): Promise<ProductWithRelations | null> {
-        return this.prisma.product.findUnique({ where: { productCode }, include: listInclude });
+    async findByProductCode(productCode: string): Promise<ProductWithRelations | null> {
+        const cached = await this.cache.getEntity<ProductWithRelations>('code', productCode);
+        if (cached) return cached;
+
+        const product = await this.prisma.product.findUnique({
+            where: { productCode },
+            include: listInclude,
+        });
+        if (product) await this.cache.setEntity('code', productCode, product);
+        return product;
     }
 
-    create(data: Prisma.ProductCreateInput): Promise<ProductWithRelations> {
-        return this.prisma.product.create({ data, include: listInclude });
+    async create(data: Prisma.ProductCreateInput): Promise<ProductWithRelations> {
+        const product = await this.prisma.product.create({ data, include: listInclude });
+        await this.cache.invalidateLists();
+        return product;
     }
 
-    update(id: string, data: Prisma.ProductUpdateInput): Promise<ProductWithRelations> {
-        return this.prisma.product.update({ where: { id }, data, include: listInclude });
+    async update(id: string, data: Prisma.ProductUpdateInput): Promise<ProductWithRelations> {
+        const product = await this.prisma.product.update({ where: { id }, data, include: listInclude });
+        await Promise.all([
+            this.cache.invalidateEntity(product.id, product.productCode),
+            this.cache.invalidateLists(),
+        ]);
+        return product;
     }
 
     /** Soft archive — products are never hard-deleted (provenance!). */
-    archive(id: string): Promise<ProductWithRelations> {
-        return this.prisma.product.update({
+    async archive(id: string): Promise<ProductWithRelations> {
+        const product = await this.prisma.product.update({
             where: { id },
             data: { state: ProductState.INACTIVE },
             include: listInclude,
         });
+        await Promise.all([
+            this.cache.invalidateEntity(product.id, product.productCode),
+            this.cache.invalidateLists(),
+        ]);
+        return product;
     }
 }

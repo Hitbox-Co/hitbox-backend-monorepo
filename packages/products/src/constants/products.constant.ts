@@ -19,3 +19,15 @@ export const DEFAULT_PRODUCT_GROUP_CODE = '0000';
 
 /** Retries when a randomly generated productCode collides. */
 export const PRODUCT_CODE_MAX_ATTEMPTS = 5;
+
+// ── Redis cache (cache-aside; see cache/product-cache.ts) ──────────────────
+// Reads check Redis first and populate it on miss; any mutation (create,
+// update, archive) invalidates. No-ops entirely when REDIS_URL is unset.
+
+/** Single-product lookups (findById / findByProductCode). */
+export const PRODUCT_CACHE_ENTITY_TTL_SECONDS = 300; // 5 minutes
+
+/** Paginated/listing queries (catalog list, discover feed, marketplace feed). */
+export const PRODUCT_CACHE_LIST_TTL_SECONDS = 30; // 30 seconds
+
+export const PRODUCT_CACHE_KEY_PREFIX = 'products' as const;
