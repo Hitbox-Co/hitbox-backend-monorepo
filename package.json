@@ -6,6 +6,7 @@
   "packageManager": "pnpm@11.13.0",
   "main": "index.js",
   "scripts": {
+    "postinstall": "pnpm --filter @hitbox/database db:generate",
     "dev": "turbo dev",
     "build": "turbo build",
     "lint": "turbo lint",
