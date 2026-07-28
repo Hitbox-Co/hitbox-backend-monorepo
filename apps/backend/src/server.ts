@@ -5,10 +5,10 @@ import { bootstrap } from "./bootstrap";
 
 const app = createApp(bootstrap());
 
-const HOST = env.NODE_ENV === "production" ? "127.0.0.1" : "0.0.0.0";
+const HOST = "0.0.0.0";
 
-const server = app.listen(env.PORT, '127.0.0.1', () => {
-    logger.info(`🚀 Server running on http://localhost:${env.PORT} (bound to ${'127.0.0.1:'+env.PORT})`);
+const server = app.listen(env.PORT, HOST, () => {
+    logger.info(`🚀 Server running on ${HOST}:${env.PORT}`);
 });
 
 function shutdown(signal: string): void {
