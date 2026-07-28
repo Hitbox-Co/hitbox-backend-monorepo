@@ -4,11 +4,11 @@
   "description": "",
   "private": true,
   "packageManager": "pnpm@11.13.0",
-  "main": "index.js",
   "scripts": {
     "postinstall": "pnpm --filter @hitbox/database db:generate",
     "dev": "turbo dev",
     "build": "turbo build",
+    "start": "pnpm --filter backend start",
     "lint": "turbo lint",
     "test": "turbo test",
     "db:merge": "pnpm --filter @hitbox/database db:merge",
