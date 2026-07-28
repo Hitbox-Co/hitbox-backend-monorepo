@@ -7,6 +7,10 @@ export interface ApiRouters {
     discover: Router;
     marketplace: Router;
     collections: Router;
+    // NFC two-step claim (validate + confirm) + verify + ledger (claims module).
+    claims: Router;
+    verify: Router;
+    ledger: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -23,6 +27,9 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/discover', routers.discover);
     api.use('/marketplace', routers.marketplace);
     api.use('/collections', routers.collections);
+    api.use('/claims', routers.claims);
+    api.use('/verify', routers.verify);
+    api.use('/ledger', routers.ledger);
 
     return api;
 }

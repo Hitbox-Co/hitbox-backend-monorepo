@@ -29,17 +29,13 @@ export class UserRepository {
         return this.prisma.user.findUnique({ where: { clerkUserId } });
     }
 
-    /** Case-insensitive existence check for registration validation. */
-    async existsByEmail(email: string): Promise<boolean> {
-        const found = await this.prisma.user.findFirst({
-            where: { email: { equals: email, mode: 'insensitive' }, deletedAt: null },
-            select: { id: true },
-        });
-        return found !== null;
-    }
-
-    /** Idempotent projection of a Clerk user — safe under webhook replays. */
-    upsertFromClerk(data: ClerkUserSnapshot): Promise<User> {
+    /**
+     * Idempotent projection of a Clerk user — safe under webhook replays.
+     * Matches an existing account by clerkUserId OR email, so a Clerk user whose
+     * email already has a local row (e.g. from earlier provisioning) is linked
+     * to that row instead of hitting the unique-email constraint.
+     */
+    async upsertFromClerk(data: ClerkUserSnapshot): Promise<User> {
         const fields = {
             email: data.email,
             emailVerified: data.emailVerified,
@@ -48,10 +44,19 @@ export class UserRepository {
             lastName: data.lastName,
             avatarUrl: data.avatarUrl,
         };
-        return this.prisma.user.upsert({
-            where: { clerkUserId: data.clerkUserId },
-            create: { clerkUserId: data.clerkUserId, ...fields },
-            update: fields,
+
+        const existing = await this.prisma.user.findFirst({
+            where: { OR: [{ clerkUserId: data.clerkUserId }, { email: data.email }] },
+        });
+
+        if (existing) {
+            return this.prisma.user.update({
+                where: { id: existing.id },
+                data: { clerkUserId: data.clerkUserId, ...fields },
+            });
+        }
+        return this.prisma.user.create({
+            data: { clerkUserId: data.clerkUserId, ...fields },
         });
     }
 

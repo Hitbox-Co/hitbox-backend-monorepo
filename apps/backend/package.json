@@ -15,6 +15,7 @@
   "dependencies": {
     "@hitbox/artist": "workspace:*",
     "@hitbox/auth": "workspace:*",
+    "@hitbox/claims": "workspace:*",
     "@hitbox/collections": "workspace:*",
     "@hitbox/database": "workspace:*",
     "@hitbox/discover": "workspace:*",

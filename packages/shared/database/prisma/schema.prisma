@@ -99,6 +99,15 @@ enum ClaimedStatus {
     CLAIMED
 }
 
+// Kind of ownership event recorded on the provenance ledger. Each product's
+// ledger is an append-only chain: MINT (origin, seller = HitBox) → CLAIM
+// (first buyer) → TRANSFER (0..n subsequent owner changes).
+enum LedgerTxType {
+    MINT
+    CLAIM
+    TRANSFER
+}
+
 // ───── source: packages\artist\prisma\artist.prisma ────────────────────────────────
 
 // ============================================================================
@@ -203,17 +212,25 @@ model ProductClaim {
 }
 
 /// Provenance ledger: origin data + cryptographic signatures + hash per
-/// transaction. First transaction's seller signature is HitBox.
+/// transaction. Append-only per product — rows form a chain ordered by
+/// `sequenceNo`, each linking to the prior row's hash via `previousHash`.
+/// The seq-0 MINT row's seller signature is HitBox.
 model BlockchainLedger {
-    id                     String   @id @default(cuid())
-    originDateTime         DateTime @map("origin_date_time")
-    originOwner            String   @map("origin_owner") @db.VarChar(255)
-    sellerDigitalSignature String   @map("seller_digital_signature")
-    buyerDigitalSignature  String?  @map("buyer_digital_signature")
-    receiverPublicKey      String?  @map("receiver_public_key")
-    productBuyerHash       String   @map("product_buyer_hash")
-    transactionDateTime    DateTime @default(now()) @map("transaction_date_time")
-    transactionAmount      Decimal  @default(0) @map("transaction_amount") @db.Decimal(12, 2)
+    id                     String       @id @default(cuid())
+    txType                 LedgerTxType @default(MINT) @map("tx_type")
+    // 0-based position in this product's chain. seq 0 = MINT (origin).
+    sequenceNo             Int          @map("sequence_no")
+    originDateTime         DateTime     @map("origin_date_time")
+    originOwner            String       @map("origin_owner") @db.VarChar(255)
+    sellerDigitalSignature String       @map("seller_digital_signature")
+    buyerDigitalSignature  String?      @map("buyer_digital_signature")
+    receiverPublicKey      String?      @map("receiver_public_key")
+    productBuyerHash       String       @map("product_buyer_hash")
+    // Hash of the immediately preceding chain row (null for seq 0). Tampering
+    // with any earlier row breaks every subsequent link.
+    previousHash           String?      @map("previous_hash")
+    transactionDateTime    DateTime     @default(now()) @map("transaction_date_time")
+    transactionAmount      Decimal      @default(0) @map("transaction_amount") @db.Decimal(12, 2)
 
     originProductId String  @map("origin_product_id")
     originProduct   Product @relation(fields: [originProductId], references: [id])
@@ -221,6 +238,15 @@ model BlockchainLedger {
     claimId String?       @map("claim_id")
     claim   ProductClaim? @relation(fields: [claimId], references: [id])
 
+    // Ownership delta captured by this row. `fromUser` is null on MINT/CLAIM
+    // (origin is HitBox, not a local user); `toUser` is null only on MINT.
+    fromUserId String? @map("from_user_id")
+    fromUser   User?   @relation("LedgerFromUser", fields: [fromUserId], references: [id])
+
+    toUserId String? @map("to_user_id")
+    toUser   User?   @relation("LedgerToUser", fields: [toUserId], references: [id])
+
+    @@unique([originProductId, sequenceNo])
     @@index([originProductId])
     @@index([claimId])
     @@map("blockchain_ledger")
@@ -365,6 +391,9 @@ model User {
     productHistory   ProductHistory[]
     claims           ProductClaim[]
     buyerCollections BuyerCollection[]
+    // Ledger rows where this user is the outgoing / incoming owner (transfers).
+    ledgerFrom       BlockchainLedger[] @relation("LedgerFromUser")
+    ledgerTo         BlockchainLedger[] @relation("LedgerToUser")
 
     @@index([state])
     @@map("users")

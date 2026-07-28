@@ -15,7 +15,11 @@ import type {
     PaginatedResult,
     UpdateProductDto,
 } from '../dto/product.dto';
-import type { ProductRepository, ProductWithRelations } from '../repository/product.repository';
+import type {
+    ProductHistoryRow,
+    ProductRepository,
+    ProductWithRelations,
+} from '../repository/product.repository';
 
 interface ProductServiceDeps {
     products: ProductRepository;
@@ -61,6 +65,23 @@ export class ProductService {
             throw AppError.notFound('Product not found', PRODUCTS_ERROR_CODES.PRODUCT_NOT_FOUND);
         }
         return product;
+    }
+
+    async getByTagId(tagId: string): Promise<ProductWithRelations> {
+        const product = await this.deps.products.findByTagId(tagId);
+        if (!product) {
+            throw AppError.notFound(
+                'No product is registered to this NFC tag',
+                PRODUCTS_ERROR_CODES.PRODUCT_NOT_FOUND,
+            );
+        }
+        return product;
+    }
+
+    /** Ownership/price history for the product behind an NFC tag. */
+    async getHistoryByTagId(tagId: string): Promise<ProductHistoryRow[]> {
+        const product = await this.getByTagId(tagId);
+        return this.deps.products.findHistory(product.id);
     }
 
     async create(dto: CreateProductDto): Promise<ProductWithRelations> {

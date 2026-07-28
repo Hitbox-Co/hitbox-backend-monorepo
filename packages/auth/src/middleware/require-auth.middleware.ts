@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from 'express';
-import { verifyToken } from '@clerk/backend';
+import {createClerkClient, verifyToken } from '@clerk/backend';
 import { AppError, env } from '@hitbox/shared';
 import { AUTH_ERROR_CODES } from '../constants/auth.constant';
 import { AccountStatus } from '../domain/enums/account-status.enum';
@@ -7,6 +7,7 @@ import type { IAccountLookup } from '../domain/interfaces/account-lookup.interfa
 import type { AuthContext } from '../types/auth.types';
 
 interface RequireAuthDeps {
+    logger: any;
     accounts: IAccountLookup;
 }
 
@@ -27,8 +28,12 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
         .map((party) => party.trim())
         .filter(Boolean);
 
+    const clerk = createClerkClient({ secretKey: env.CLERK_SECRET_KEY });
+
+
     return async (req, _res, next) => {
         try {
+           
             const token = extractToken(req);
             if (!token) {
                 throw AppError.unauthorized(

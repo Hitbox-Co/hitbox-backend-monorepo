@@ -27,6 +27,10 @@ const envSchema = z.object({
     // RATE_LIMIT_WINDOW_MS. Defaults: 100 requests / 60s ≈ 1.6 req/sec.
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
+    // TEMPORARY demo auth — when "true" (and NODE_ENV != production), requests
+    // may authenticate via an `X-Demo-User: <email>` header instead of Clerk.
+    // Remove/disable before production.
+    DEMO_AUTH_ENABLED: z.string().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -8,6 +8,7 @@
  * Idempotent: wipes and re-creates catalog data on every run. Real accounts
  * are preserved — only users whose clerkUserId starts with "seed_" are touched.
  */
+import { createHash } from 'node:crypto';
 import { PrismaClient, Prisma } from '@prisma/client';
 import type {
     MarketplaceStatus,
@@ -180,6 +181,9 @@ async function main() {
 
     console.log('📦 products (+ images, history, claims, ledger, buyer collections)…');
     let claimNo = 1;
+    // Ledger hash per demo spec: SHA-256(Product ID + Tag Id + Owner Id + DateTime).
+    const ledgerHash = (productCode: string, tag: string | null, ownerId: string, dt: Date): string =>
+        createHash('sha256').update([productCode, tag ?? '', ownerId, dt.toISOString()].join('+')).digest('hex');
     for (const spec of PRODUCTS) {
         const collection = spec.collection ? collections.get(spec.collection) : undefined;
         const ownerId = spec.owner ? users.get(spec.owner) : undefined;
@@ -235,6 +239,27 @@ async function main() {
             });
         }
 
+        const originDateTime = new Date('2026-06-15T00:00:00Z');
+
+        // "First Time" origin record (seq 0, owner = HitBox) for every tagged product.
+        if (spec.tag) {
+            await prisma.blockchainLedger.create({
+                data: {
+                    txType: 'MINT',
+                    sequenceNo: 0,
+                    originDateTime,
+                    originOwner: 'HitBox',
+                    sellerDigitalSignature: `sig_hitbox_${spec.code}`,
+                    productBuyerHash: ledgerHash(spec.code, spec.tag, 'HitBox', originDateTime),
+                    previousHash: null,
+                    transactionDateTime: originDateTime,
+                    transactionAmount: new Prisma.Decimal(0),
+                    originProductId: product.id,
+                },
+            });
+        }
+
+        // CLAIM record (seq 1, owner = the buyer) for products a seed user owns.
         if (claimed && ownerId) {
             const claim = await prisma.productClaim.create({
                 data: {
@@ -249,16 +274,20 @@ async function main() {
             });
             await prisma.blockchainLedger.create({
                 data: {
-                    originDateTime: new Date('2026-06-15T00:00:00Z'),
+                    txType: 'CLAIM',
+                    sequenceNo: 1,
+                    originDateTime,
                     originOwner: 'HitBox',
                     sellerDigitalSignature: `sig_hitbox_${spec.code}`,
                     buyerDigitalSignature: `sig_buyer_${claimNo}`,
                     receiverPublicKey: `pk_${claimNo}`,
-                    productBuyerHash: `hash_${spec.code}_${claimNo}`,
+                    productBuyerHash: ledgerHash(spec.code, spec.tag ?? null, spec.owner as string, claimedAt),
+                    previousHash: ledgerHash(spec.code, spec.tag as string, 'HitBox', originDateTime),
                     transactionDateTime: claimedAt,
                     transactionAmount: new Prisma.Decimal(spec.price),
                     originProductId: product.id,
                     claimId: claim.id,
+                    toUserId: ownerId,
                 },
             });
             claimNo += 1;

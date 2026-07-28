@@ -72,3 +72,12 @@ enum ClaimedStatus {
     UNCLAIMED
     CLAIMED
 }
+
+// Kind of ownership event recorded on the provenance ledger. Each product's
+// ledger is an append-only chain: MINT (origin, seller = HitBox) → CLAIM
+// (first buyer) → TRANSFER (0..n subsequent owner changes).
+enum LedgerTxType {
+    MINT
+    CLAIM
+    TRANSFER
+}

@@ -70,7 +70,7 @@ hitbox-backend/
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
 │   ├── marketplace/              # Listing feed for the Marketplace screen (no own tables)
 │   ├── collections/              # Owns BuyerCollection — a user's shelf, public/private showcase
-│   ├── claims/                   # (schema only so far) NFC claims + ledger
+│   ├── claims/                   # NFC verify/claim/transfer + provenance ledger (see docs/nfc-claim-verify-api.md)
 │   └── shared/                   # Infrastructure ONLY — no business logic
 │       ├── config/env.ts         # Zod-validated environment (fails fast at boot)
 │       ├── logger/               # Pino logger + createModuleLogger(module)
