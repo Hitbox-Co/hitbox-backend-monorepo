@@ -19,6 +19,7 @@ export interface UpdateProfileData {
 }
 
 export class UserRepository {
+
     constructor(private readonly prisma: PrismaClient) { }
 
     findById(id: string): Promise<User | null> {
@@ -29,6 +30,13 @@ export class UserRepository {
         return this.prisma.user.findUnique({ where: { clerkUserId } });
     }
 
+    async existsByEmail(email: string): Promise<boolean> {
+        const user = await this.prisma.user.findUnique({
+            where: { email },
+        });
+
+        return !!user;
+    }
     /**
      * Idempotent projection of a Clerk user — safe under webhook replays.
      * Matches an existing account by clerkUserId OR email, so a Clerk user whose
