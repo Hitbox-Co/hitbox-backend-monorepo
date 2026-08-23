@@ -1,0 +1,40 @@
+{
+  "name": "@hitbox/authz",
+  "version": "1.0.0",
+  "description": "HitBox authorization module — roles, permissions, scopes, organizations/tenancy, resource policies, permission caching and audit logging. Owns every ALLOW/DENY decision in the platform.",
+  "private": true,
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "jest",
+    "seed": "dotenv -e ../../.env -- tsx scripts/seed-authz.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@hitbox/auth": "workspace:*",
+    "@hitbox/database": "workspace:*",
+    "@hitbox/shared": "workspace:*",
+    "zod": "^3.24.1"
+  },
+  "peerDependencies": {
+    "express": "^4.19.0 || ^5.0.0"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0",
+    "@types/express": "^4.17.25",
+    "@types/jest": "^29.5.14",
+    "dotenv-cli": "^8.0.0",
+    "jest": "^29.7.0",
+    "pino": "^9.5.0",
+    "ts-jest": "^29.2.5",
+    "tsx": "^4.23.1",
+    "typescript": "^5.6.3"
+  }
+}

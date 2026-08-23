@@ -28,6 +28,12 @@ model Product {
     ownerId String? @map("owner_id")
     owner   User?   @relation(fields: [ownerId], references: [id])
 
+    // Tenant that manages this product. Null = platform-managed catalog row
+    // (no organization-scoped role can reach it; only `product:*:any` can).
+    // Read by the authz resource policy for `product:*:organization` grants.
+    organizationId String?       @map("organization_id")
+    organization   Organization? @relation(fields: [organizationId], references: [id])
+
     collectionId String?           @map("collection_id")
     collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
 
@@ -38,6 +44,7 @@ model Product {
     buyerCollections BuyerCollection[]
 
     @@index([ownerId])
+    @@index([organizationId])
     @@index([category])
     @@index([genre])
     @@index([marketplaceStatus])

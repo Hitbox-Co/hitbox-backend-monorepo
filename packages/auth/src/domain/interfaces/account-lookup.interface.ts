@@ -1,12 +1,15 @@
-import type { UserRegisteredPayload } from '../../events/auth-event.payloads';
 import type { AccountStatus } from '../enums/account-status.enum';
-import type { UserRole } from '../enums/user-role.enum';
 
-/** Minimal account projection the auth middleware needs. */
+/**
+ * Minimal account projection the auth middleware needs.
+ *
+ * Note what is NOT here: roles and permissions. Authentication only decides
+ * whether there is a usable account behind the session; @hitbox/authz decides
+ * what that account may do, from its own tables.
+ */
 export interface AccountSnapshot {
     id: string;
     email: string;
-    role: UserRole;
     status: AccountStatus;
     emailVerified: boolean;
 }

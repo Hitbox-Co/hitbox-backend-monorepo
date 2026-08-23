@@ -30,6 +30,10 @@ export class UserRepository {
         return this.prisma.user.findUnique({ where: { clerkUserId } });
     }
 
+    findByEmail(email: string): Promise<User | null> {
+        return this.prisma.user.findUnique({ where: { email } });
+    }
+
     async existsByEmail(email: string): Promise<boolean> {
         const user = await this.prisma.user.findUnique({
             where: { email },

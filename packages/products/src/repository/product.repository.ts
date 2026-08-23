@@ -151,6 +151,20 @@ export class ProductRepository {
         return product;
     }
 
+    /**
+     * Just the two columns the authorization resource policy needs. Kept
+     * separate from findById so a permission check never pulls relations it
+     * does not use, and never populates the entity cache on a denied request.
+     */
+    findAuthorizationRef(
+        id: string,
+    ): Promise<{ ownerId: string | null; organizationId: string | null } | null> {
+        return this.prisma.product.findUnique({
+            where: { id },
+            select: { ownerId: true, organizationId: true },
+        });
+    }
+
     async findByProductCode(productCode: string): Promise<ProductWithRelations | null> {
         const cached = await this.cache.getEntity<ProductWithRelations>('code', productCode);
         if (cached) return cached;

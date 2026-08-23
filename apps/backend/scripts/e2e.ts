@@ -19,8 +19,8 @@ import express from 'express';
 import type { RequestHandler } from 'express';
 import { prisma } from '@hitbox/database';
 import { eventBus } from '@hitbox/shared';
-import { UserRole } from '@hitbox/auth';
 import type { AuthContext } from '@hitbox/auth';
+import { createAuthzModule } from '@hitbox/authz';
 import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
@@ -29,6 +29,10 @@ import { createCollectionsModule } from '@hitbox/collections';
 import { createArtistModule } from '@hitbox/artist';
 import { createClaimsModule } from '@hitbox/claims';
 import { buildRoutes } from '../src/routes';
+import { buildAppSurface } from '../src/surfaces/app.surface';
+import { buildPublicSurface } from '../src/surfaces/public.surface';
+import { buildAdminSurface } from '../src/surfaces/admin.surface';
+import { buildManageSurface } from '../src/surfaces/manage.surface';
 import { createApp } from '../src/app';
 
 const PORT = 4599;
@@ -42,7 +46,12 @@ const stubAuth: RequestHandler = (req, _res, next) => {
     next();
 };
 const authFor = (u: { id: string; clerkUserId: string; email: string }): AuthContext => ({
-    accountId: u.id, clerkUserId: u.clerkUserId, email: u.email, role: UserRole.USER, sessionId: null,
+    accountId: u.id,
+    clerkUserId: u.clerkUserId,
+    email: u.email,
+    sessionId: null,
+    // Freshly verified first factor, so step-up-gated routes are reachable.
+    factorVerificationAge: [0, -1],
 });
 
 // ── tiny test recorder ──────────────────────────────────────────────────────
@@ -104,18 +113,55 @@ async function main() {
     const artistModule = createArtistModule({ prisma });
     const collectionsModule = createCollectionsModule({ prisma, artistStats: artistModule.collectionStats });
     const claimsModule = createClaimsModule({ prisma, eventBus });
-    const claimsRouters = claimsModule.createRouters(stubAuth);
+
+    // Real authorization module: only Clerk token verification is stubbed, so
+    // permission and resource-policy checks are exercised for real. This
+    // requires the authz catalog to be seeded (`pnpm authz:seed`).
+    const authzModule = createAuthzModule({
+        prisma,
+        eventBus,
+        users: usersModule.userDirectory,
+    });
+    const requirePermission = authzModule.requirePermission;
+
+    // Both tappers need the baseline USER role, which the Clerk webhook would
+    // normally trigger via the users.provisioned event.
+    await authzModule.roleAssignments.ensureDefaultRole(buyer.id);
+    await authzModule.roleAssignments.ensureDefaultRole(other.id);
+
+    const authzRouters = authzModule.createRouters(stubAuth);
+    const claimsRouters = claimsModule.createRouters(stubAuth, requirePermission);
+    const productsRouter = productsModule.createRouter(stubAuth, requirePermission);
+    const usersRouter = usersModule.createRouter(stubAuth, requirePermission);
+    const collectionsRouter = collectionsModule.createRouter(stubAuth, requirePermission);
 
     const api = buildRoutes({
-        auth: express.Router(),
-        users: usersModule.createRouter(stubAuth),
-        products: productsModule.createRouter(stubAuth),
-        discover: discoverModule.router,
-        marketplace: marketplaceModule.router,
-        collections: collectionsModule.createRouter(stubAuth),
-        claim: claimsRouters.claim,
-        verify: claimsRouters.verify,
-        ledger: claimsRouters.ledger,
+        public: buildPublicSurface({
+            auth: express.Router(),
+            discover: discoverModule.router,
+            marketplace: marketplaceModule.router,
+            verify: claimsRouters.verify,
+            ledger: claimsRouters.ledger,
+        }),
+        app: buildAppSurface({
+            authzManifest: authzRouters.manifest,
+            users: usersRouter,
+            products: productsRouter,
+            collections: collectionsRouter,
+            claims: claimsRouters.claims,
+        }),
+        admin: buildAdminSurface({
+            authzManifest: authzRouters.manifest,
+            authzAdmin: authzRouters.admin,
+            organizations: authzRouters.organizations,
+            products: productsRouter,
+            users: usersRouter,
+        }),
+        manage: buildManageSurface({
+            authzManifest: authzRouters.manifest,
+            organizations: authzRouters.organizations,
+            products: productsRouter,
+        }),
     });
     const app = createApp(api);
     const server = app.listen(PORT);

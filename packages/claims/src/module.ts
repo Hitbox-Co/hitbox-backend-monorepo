@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { RequestHandler } from 'express';
 import type { PrismaClient } from '@hitbox/database';
+import type { RequirePermission } from '@hitbox/authz';
 import { createModuleLogger } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import { CLAIMS_MODULE } from './constants/claims.constant';
@@ -26,8 +27,11 @@ export interface ClaimsRouters {
 
 export interface ClaimsModule {
     service: ClaimsService;
-    /** requireAuth comes from the auth module at bootstrap. */
-    createRouters(requireAuth: RequestHandler): ClaimsRouters;
+    /** requireAuth from @hitbox/auth, requirePermission from @hitbox/authz. */
+    createRouters(
+        requireAuth: RequestHandler,
+        requirePermission: RequirePermission,
+    ): ClaimsRouters;
 }
 
 export function createClaimsModule(deps: ClaimsModuleDeps): ClaimsModule {
@@ -41,15 +45,28 @@ export function createClaimsModule(deps: ClaimsModuleDeps): ClaimsModule {
 
     return {
         service,
-        createRouters(requireAuth) {
+        createRouters(requireAuth, requirePermission) {
             const controller = new ClaimsController(service);
 
             // Two-step claim (both authenticated):
             //   POST /claims/:tagId          → validate (which screen to show)
             //   POST /claims/:tagId/confirm  → perform the claim
+            // The claimer is always the authenticated caller (claim:create:own),
+            // so the capability check is the whole decision — a tagId does not
+            // identify an existing claim that could belong to somebody else.
             const claims = Router();
-            claims.post('/:tagId/confirm', requireAuth, controller.confirm);
-            claims.post('/:tagId', requireAuth, controller.validate);
+            claims.post(
+                '/:tagId/confirm',
+                requireAuth,
+                requirePermission('claim', 'create'),
+                controller.confirm,
+            );
+            claims.post(
+                '/:tagId',
+                requireAuth,
+                requirePermission('claim', 'create'),
+                controller.validate,
+            );
 
             // GET /verify/:tagId — public read
             const verify = Router();

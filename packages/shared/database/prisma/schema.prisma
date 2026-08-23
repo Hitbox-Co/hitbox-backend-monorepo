@@ -177,6 +177,219 @@ model AuthWebhookEvent {
     @@map("auth_webhook_events")
 }
 
+// ───── source: packages\authz\prisma\authz.prisma ──────────────────────────────────
+
+// ============================================================================
+// AUTHZ MODULE SCHEMA  (packages/authz/prisma/authz.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// This module owns AUTHORIZATION only. Identity/authentication lives in Clerk
+// (its local projection is users.User). Nothing here stores credentials.
+//
+//   User --< UserRoleAssignment >-- Role --< RolePermission >-- Permission
+//                  |                 |
+//                  +-- Organization -+     (organizationId null = platform-wide)
+// ============================================================================
+
+/// Scope narrows a capability to the set of rows it may touch.
+/// Ordering is meaningful: OWN < ORGANIZATION < ANY (see PERMISSION_SCOPE_RANK).
+enum PermissionScope {
+    /// Only rows the acting user owns (resource.ownerId == user.id).
+    OWN
+    /// Only rows belonging to the organization the request is acting in.
+    ORGANIZATION
+    /// Any row on the platform, regardless of owner or tenant.
+    ANY
+}
+
+/// Where a role may be assigned. Enforced at assignment time, not by convention:
+/// PLATFORM roles are granted with organizationId = null, ORGANIZATION roles
+/// always require one.
+enum RoleKind {
+    PLATFORM
+    ORGANIZATION
+}
+
+enum OrganizationStatus {
+    ACTIVE
+    SUSPENDED
+}
+
+enum MembershipStatus {
+    ACTIVE
+    INVITED
+    SUSPENDED
+}
+
+/// Outcome recorded on an audit row. DENIED is kept distinct from FAILURE so
+/// authorization refusals can be alerted on separately from crashes.
+enum AuditResult {
+    SUCCESS
+    FAILURE
+    DENIED
+}
+
+/// An atomic business capability, addressed as `resource:action:scope`.
+/// Rows are reconciled from the code-owned catalog (see src/domain/catalog) by
+/// the authz seeder - this table is a projection, never hand-edited in prod.
+model Permission {
+    id          String          @id @default(cuid())
+    resource    String          @db.VarChar(64)
+    action      String          @db.VarChar(64)
+    scope       PermissionScope
+    description String?
+    /// Sensitive permissions additionally require a recently verified session
+    /// (step-up) and are always audited. Data-driven, so the rule is not
+    /// duplicated as `if` statements across controllers.
+    isSensitive Boolean         @default(false) @map("is_sensitive")
+    createdAt   DateTime        @default(now()) @map("created_at")
+
+    roles RolePermission[]
+
+    @@unique([resource, action, scope])
+    @@index([resource, action])
+    @@map("permissions")
+}
+
+/// A named, reusable bundle of permissions. `key` is the stable machine
+/// identifier referenced by seeds and code; `name` is display-only.
+model Role {
+    id          String   @id @default(cuid())
+    key         String   @unique @db.VarChar(64)
+    name        String   @db.VarChar(128)
+    description String?
+    kind        RoleKind
+    /// Privileged roles (SUPER_ADMIN, PLATFORM_ADMIN) can never be granted by
+    /// an organization administrator - only by another platform admin.
+    isPrivileged    Boolean  @default(false) @map("is_privileged")
+    /// Seeded roles are reconciled from the catalog and cannot be deleted via API.
+    isSystemManaged Boolean  @default(true) @map("is_system_managed")
+    createdAt       DateTime @default(now()) @map("created_at")
+    updatedAt       DateTime @updatedAt @map("updated_at")
+
+    permissions RolePermission[]
+    assignments UserRoleAssignment[]
+
+    @@index([kind])
+    @@map("roles")
+}
+
+model RolePermission {
+    roleId       String @map("role_id")
+    permissionId String @map("permission_id")
+
+    role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+    permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+    @@id([roleId, permissionId])
+    @@index([permissionId])
+    @@map("role_permissions")
+}
+
+/// A tenant. Organization-scoped permissions are confined to one of these rows.
+model Organization {
+    id     String             @id @default(cuid())
+    slug   String             @unique @db.VarChar(64)
+    name   String             @db.VarChar(160)
+    status OrganizationStatus @default(ACTIVE)
+    /// Optional link to a Clerk Organization, if Clerk orgs are adopted for
+    /// invitations later. Authorization never reads it - our rows are the truth.
+    clerkOrgId String?   @unique @map("clerk_org_id")
+    createdAt  DateTime  @default(now()) @map("created_at")
+    updatedAt  DateTime  @updatedAt @map("updated_at")
+    deletedAt  DateTime? @map("deleted_at")
+
+    memberships     OrganizationMembership[]
+    roleAssignments UserRoleAssignment[]
+    auditLogs       AuditLog[]
+    products        Product[]
+
+    @@index([status])
+    @@map("organizations")
+}
+
+/// Membership is a prerequisite for every organization-scoped grant: a role
+/// assignment alone is not enough if the membership is not ACTIVE.
+model OrganizationMembership {
+    id             String           @id @default(cuid())
+    userId         String           @map("user_id")
+    organizationId String           @map("organization_id")
+    status         MembershipStatus @default(ACTIVE)
+    createdAt      DateTime         @default(now()) @map("created_at")
+    updatedAt      DateTime         @updatedAt @map("updated_at")
+
+    user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+    organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+    @@unique([userId, organizationId])
+    @@index([organizationId, status])
+    @@map("organization_memberships")
+}
+
+/// Grants a role to a user, either platform-wide (organizationId = null) or
+/// inside one organization. A user may hold many assignments; effective
+/// permissions are the union of all of them (see AuthorizationService).
+///
+/// Uniqueness needs two PARTIAL indexes because Postgres treats NULLs as
+/// distinct. They are added by hand in the migration:
+///   (user_id, role_id, organization_id) WHERE organization_id IS NOT NULL
+///   (user_id, role_id)                  WHERE organization_id IS NULL
+model UserRoleAssignment {
+    id             String  @id @default(cuid())
+    userId         String  @map("user_id")
+    roleId         String  @map("role_id")
+    organizationId String? @map("organization_id")
+    /// Who granted it - null for seeded/system grants. Kept for audit trails.
+    grantedById    String? @map("granted_by_id")
+    grantedAt      DateTime  @default(now()) @map("granted_at")
+    /// Optional expiry for temporary elevation. Expired rows are ignored by the
+    /// effective-permission query and swept by a scheduled job.
+    expiresAt      DateTime? @map("expires_at")
+
+    user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+    grantedBy    User?         @relation("RoleGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+    role         Role          @relation(fields: [roleId], references: [id], onDelete: Cascade)
+    organization Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+    @@index([userId, organizationId])
+    @@index([roleId])
+    @@index([expiresAt])
+    @@map("user_role_assignments")
+}
+
+/// Append-only audit trail for sensitive operations. Never updated or deleted
+/// by application code; retention is handled by a scheduled purge job.
+model AuditLog {
+    id String @id @default(cuid())
+    /// Null for unauthenticated or system actors (see actorType).
+    actorUserId String? @map("actor_user_id")
+    /// USER | SYSTEM | WEBHOOK - who initiated the action.
+    actorType   String  @default("USER") @map("actor_type") @db.VarChar(16)
+    /// `resource:action:scope` when derived from a permission, else a plain verb.
+    action         String      @db.VarChar(128)
+    resource       String      @db.VarChar(64)
+    resourceId     String?     @map("resource_id")
+    organizationId String?     @map("organization_id")
+    result         AuditResult
+    /// Which API surface the request arrived on (app / admin / manage / public).
+    surface   String? @db.VarChar(24)
+    ipAddress String? @map("ip_address") @db.VarChar(64)
+    userAgent String? @map("user_agent")
+    requestId String? @map("request_id") @db.VarChar(64)
+    /// Free-form context: before/after values, denial reason, target user, ...
+    metadata  Json?
+    createdAt DateTime @default(now()) @map("created_at")
+
+    actor        User?         @relation(fields: [actorUserId], references: [id], onDelete: SetNull)
+    organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+    @@index([actorUserId, createdAt])
+    @@index([organizationId, createdAt])
+    @@index([resource, resourceId])
+    @@index([createdAt])
+    @@map("audit_logs")
+}
+
 // ───── source: packages\claims\prisma\claims.prisma ────────────────────────────────
 
 // ============================================================================
@@ -311,6 +524,12 @@ model Product {
     ownerId String? @map("owner_id")
     owner   User?   @relation(fields: [ownerId], references: [id])
 
+    // Tenant that manages this product. Null = platform-managed catalog row
+    // (no organization-scoped role can reach it; only `product:*:any` can).
+    // Read by the authz resource policy for `product:*:organization` grants.
+    organizationId String?       @map("organization_id")
+    organization   Organization? @relation(fields: [organizationId], references: [id])
+
     collectionId String?           @map("collection_id")
     collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
 
@@ -321,6 +540,7 @@ model Product {
     buyerCollections BuyerCollection[]
 
     @@index([ownerId])
+    @@index([organizationId])
     @@index([category])
     @@index([genre])
     @@index([marketplaceStatus])
@@ -380,6 +600,10 @@ model User {
     // requireAuth blocks protected routes when false. Defaults true so rows
     // created before this column stay usable; the sync path writes the real value.
     emailVerified Boolean  @default(true) @map("email_verified")
+    /// DEPRECATED — superseded by the authz module (UserRoleAssignment -> Role).
+    /// Authorization NEVER reads this column; it is kept only so the column can
+    /// be dropped in a later, separate migration once no deployed build reads it.
+    /// See docs/authorization/12-operations.md ("retiring User.role").
     role         UserRole  @default(USER)
     state        UserState @default(ACTIVE)
     rewardPoints Int       @default(0) @map("reward_points")
@@ -394,6 +618,13 @@ model User {
     // Ledger rows where this user is the outgoing / incoming owner (transfers).
     ledgerFrom       BlockchainLedger[] @relation("LedgerFromUser")
     ledgerTo         BlockchainLedger[] @relation("LedgerToUser")
+
+    // Authorization (owned by the authz module) — roles this user holds, the
+    // grants they handed out, their tenant memberships and their audit trail.
+    roleAssignments        UserRoleAssignment[]
+    grantedRoleAssignments UserRoleAssignment[]     @relation("RoleGrantedBy")
+    orgMemberships         OrganizationMembership[]
+    auditLogs              AuditLog[]
 
     @@index([state])
     @@map("users")

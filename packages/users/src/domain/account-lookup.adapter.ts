@@ -1,4 +1,4 @@
-import { AccountStatus, UserRole } from '@hitbox/auth';
+import { AccountStatus } from '@hitbox/auth';
 import type { AccountSnapshot, IAccountLookup } from '@hitbox/auth';
 import { UserState } from '@hitbox/database';
 import type { UserRepository } from '../repository/user.repository';
@@ -6,6 +6,9 @@ import type { UserRepository } from '../repository/user.repository';
 /**
  * Users-side implementation of the auth module's IAccountLookup port.
  * Derives the auth-facing AccountStatus from `state` + `deletedAt`.
+ *
+ * Deliberately projects no role: authorization is resolved by @hitbox/authz
+ * from the role/permission tables, not carried on the authentication context.
  */
 export class UserAccountLookup implements IAccountLookup {
     constructor(private readonly users: UserRepository) { }
@@ -23,7 +26,6 @@ export class UserAccountLookup implements IAccountLookup {
         return {
             id: user.id,
             email: user.email,
-            role: user.role as unknown as UserRole, // Prisma + domain enums share string values
             status,
             emailVerified: user.emailVerified,
         };

@@ -3,7 +3,8 @@ import { prisma } from "@hitbox/database";
 import { createApp } from "./app";
 import { bootstrap } from "./bootstrap";
 
-const app = createApp(bootstrap());
+const backend = bootstrap();
+const app = createApp(backend.router);
 
 const HOST = "0.0.0.0";
 
@@ -23,8 +24,12 @@ keepWarm.unref();
 function shutdown(signal: string): void {
     logger.info({ signal }, "shutting down");
     server.close(() => {
-        prisma
-            .$disconnect()
+        // Release the authorization cache's Redis pub/sub connection before the
+        // DB pool, otherwise the process lingers on an open subscriber socket.
+        backend
+            .shutdown()
+            .catch((error: unknown) => logger.error({ err: error }, "module shutdown failed"))
+            .then(() => prisma.$disconnect())
             .catch((error: unknown) => logger.error({ err: error }, "prisma disconnect failed"))
             .finally(() => process.exit(0));
     });

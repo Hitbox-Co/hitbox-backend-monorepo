@@ -1,5 +1,6 @@
+import type { Logger } from 'pino';
 import type { Request, RequestHandler } from 'express';
-import {createClerkClient, verifyToken } from '@clerk/backend';
+import { verifyToken } from '@clerk/backend';
 import { AppError, env } from '@hitbox/shared';
 import { AUTH_ERROR_CODES } from '../constants/auth.constant';
 import { AccountStatus } from '../domain/enums/account-status.enum';
@@ -7,8 +8,8 @@ import type { IAccountLookup } from '../domain/interfaces/account-lookup.interfa
 import type { AuthContext } from '../types/auth.types';
 
 interface RequireAuthDeps {
-    logger: any;
     accounts: IAccountLookup;
+    logger?: Logger;
 }
 
 function extractToken(req: Request): string | null {
@@ -20,20 +21,35 @@ function extractToken(req: Request): string | null {
 }
 
 /**
- * Verifies the Clerk session JWT (networkless), resolves the local account
- * through the injected IAccountLookup port, and attaches `req.auth`.
+ * Reads Clerk's `fva` claim (factor verification age, in minutes) if present.
+ * Used by the authorization layer's step-up gate; see
+ * packages/authz/src/middleware/step-up.middleware.ts.
+ */
+function extractFactorAge(payload: Record<string, unknown>): [number, number] | null {
+    const raw = payload.fva;
+    if (!Array.isArray(raw) || raw.length < 2) return null;
+    const [first, second] = raw;
+    if (typeof first !== 'number' || typeof second !== 'number') return null;
+    return [first, second];
+}
+
+/**
+ * AUTHENTICATION. Verifies the Clerk session JWT (networkless), resolves the
+ * local account through the injected IAccountLookup port, and attaches
+ * `req.auth`.
+ *
+ * It deliberately loads NO roles or permissions. Authorization is a separate
+ * middleware from @hitbox/authz that runs after this one, so that:
+ *   - public routes pay nothing for permission loading, and
+ *   - a permission change takes effect without touching the session.
  */
 export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
     const authorizedParties = env.CLERK_AUTHORIZED_PARTIES?.split(',')
         .map((party) => party.trim())
         .filter(Boolean);
 
-    const clerk = createClerkClient({ secretKey: env.CLERK_SECRET_KEY });
-
-
     return async (req, _res, next) => {
         try {
-           
             const token = extractToken(req);
             if (!token) {
                 throw AppError.unauthorized(
@@ -82,8 +98,10 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
                 accountId: account.id,
                 clerkUserId: payload.sub,
                 email: account.email,
-                role: account.role,
                 sessionId: (payload.sid as string | undefined) ?? null,
+                factorVerificationAge: extractFactorAge(
+                    payload as unknown as Record<string, unknown>,
+                ),
             };
             req.auth = auth;
             next();

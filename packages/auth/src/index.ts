@@ -15,7 +15,6 @@ export type { AuthEventName } from './constants/auth.constant';
 
 // Domain
 export { AccountStatus } from './domain/enums/account-status.enum';
-export { UserRole, isUserRole } from './domain/enums/user-role.enum';
 export type {
     AccountSnapshot,
     IAccountLookup,

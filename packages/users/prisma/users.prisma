@@ -17,6 +17,10 @@ model User {
     // requireAuth blocks protected routes when false. Defaults true so rows
     // created before this column stay usable; the sync path writes the real value.
     emailVerified Boolean  @default(true) @map("email_verified")
+    /// DEPRECATED — superseded by the authz module (UserRoleAssignment -> Role).
+    /// Authorization NEVER reads this column; it is kept only so the column can
+    /// be dropped in a later, separate migration once no deployed build reads it.
+    /// See docs/authorization/12-operations.md ("retiring User.role").
     role         UserRole  @default(USER)
     state        UserState @default(ACTIVE)
     rewardPoints Int       @default(0) @map("reward_points")
@@ -31,6 +35,13 @@ model User {
     // Ledger rows where this user is the outgoing / incoming owner (transfers).
     ledgerFrom       BlockchainLedger[] @relation("LedgerFromUser")
     ledgerTo         BlockchainLedger[] @relation("LedgerToUser")
+
+    // Authorization (owned by the authz module) — roles this user holds, the
+    // grants they handed out, their tenant memberships and their audit trail.
+    roleAssignments        UserRoleAssignment[]
+    grantedRoleAssignments UserRoleAssignment[]     @relation("RoleGrantedBy")
+    orgMemberships         OrganizationMembership[]
+    auditLogs              AuditLog[]
 
     @@index([state])
     @@map("users")

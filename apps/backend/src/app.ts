@@ -1,9 +1,8 @@
 import express from "express";
 import type { Express, Request, Router } from "express";
-import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
-import { createRateLimiter, errorHandler, isProduction, notFoundHandler } from "@hitbox/shared";
+import { errorHandler, isProduction, notFoundHandler } from "@hitbox/shared";
 
 export function createApp(apiRouter: Router): Express {
     const app = express();
@@ -12,11 +11,6 @@ export function createApp(apiRouter: Router): Express {
     // hop so the rate limiter keys on the real client, not the proxy.
     if (isProduction) app.set("trust proxy", 1);
 
-    app.use(
-        cors({
-            origin: "*",
-        })
-    );
     app.use(helmet());
 
     if (isProduction) {
@@ -40,8 +34,11 @@ export function createApp(apiRouter: Router): Express {
         res.json({ success: true, message: "HitBox Backend is running 🚀" });
     });
 
-    // Rate limit the whole API (per client IP; Redis-backed when configured).
-    app.use("/api/v1", createRateLimiter(), apiRouter);
+    // CORS and rate limiting are applied PER API SURFACE inside the router
+    // (see routes.ts + surfaces/) rather than globally: admin.hitbox.com and
+    // the public storefront are different trust boundaries and should not share
+    // one origin allowlist or one request budget.
+    app.use("/api/v1", apiRouter);
 
     // 404 + single error boundary — always LAST.
     app.use(notFoundHandler);

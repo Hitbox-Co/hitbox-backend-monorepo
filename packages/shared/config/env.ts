@@ -27,6 +27,28 @@ const envSchema = z.object({
     // RATE_LIMIT_WINDOW_MS. Defaults: 100 requests / 60s ≈ 1.6 req/sec.
     RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
     RATE_LIMIT_MAX: z.coerce.number().int().positive().default(100),
+
+    // ── Authorization (see docs/authorization/07-caching.md) ──────────────
+    // L2 (Redis) TTL for a user's effective-permission snapshot. Also the
+    // upper bound on staleness if an invalidation message is ever lost.
+    AUTHZ_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(300),
+    // L1 (in-process) TTL. Pub/sub normally clears L1 within milliseconds of a
+    // change; this is the fallback bound. Set to 0 to disable the L1 tier.
+    AUTHZ_LOCAL_CACHE_TTL_MS: z.coerce.number().int().min(0).default(5_000),
+    // How recently a Clerk factor must have been verified for a sensitive
+    // (step-up) capability to be usable.
+    AUTHZ_STEP_UP_MAX_AGE_MINUTES: z.coerce.number().int().positive().default(15),
+
+    // ── CORS, per API surface (see docs/authorization/11-api-surfaces.md) ─
+    // Comma-separated origin allowlists. When a list is unset that surface
+    // falls back to allowing any origin, which is the pre-existing behaviour —
+    // set them in production.
+    // e.g. https://hitbox.com,https://www.hitbox.com
+    CORS_APP_ORIGINS: z.string().optional(),
+    // e.g. https://admin.hitbox.com
+    CORS_ADMIN_ORIGINS: z.string().optional(),
+    // e.g. https://productmanager.hitbox.com
+    CORS_MANAGE_ORIGINS: z.string().optional(),
     // TEMPORARY demo auth — when "true" (and NODE_ENV != production), requests
     // may authenticate via an `X-Demo-User: <email>` header instead of Clerk.
     // Remove/disable before production.

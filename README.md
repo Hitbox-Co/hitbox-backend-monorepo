@@ -93,7 +93,8 @@ hitbox/
 
 | Package | Responsibility |
 |----------|----------------|
-| auth | Authentication & Authorization |
+| auth | Authentication — Clerk session verification, webhooks (WHO) |
+| authz | Authorization — roles, permissions, scopes, tenants, audit (WHAT) |
 | users | User Management |
 | products | Product Management |
 | discover | Discover feed (read-side product cards) |
@@ -105,6 +106,42 @@ hitbox/
 | payments | Payment Processing |
 | notifications | Notifications & Messaging |
 | shared | Shared Infrastructure |
+
+---
+
+# Authentication & Authorization
+
+Clerk owns identity; our database owns authorization. One Clerk instance serves
+every frontend, and the backend is the final authority on every decision.
+
+```text
+Clerk → Identity → Database User → Roles → Permissions → Scope/Policy → API decision
+```
+
+Full documentation: **[docs/authorization/](docs/authorization/README.md)**
+
+```bash
+pnpm db:migrate    # apply the authorization migration
+pnpm authz:seed    # reconcile the role/permission catalog into the database
+```
+
+Nothing works before the seeder runs — with no permission rows, every check
+correctly denies.
+
+| Topic | Document |
+|---|---|
+| Separation of concerns, request flow | [01 — Architecture](docs/authorization/01-architecture.md) |
+| `resource:action:scope`, the catalog | [02 — Permission model](docs/authorization/02-permission-model.md) |
+| Role design, seed data, multi-role users | [03 — Roles](docs/authorization/03-roles.md) |
+| own / organization / any, tenant isolation | [04 — Scopes & tenancy](docs/authorization/04-scopes-and-tenancy.md) |
+| One Clerk instance, webhooks, metadata | [05 — Clerk integration](docs/authorization/05-clerk-integration.md) |
+| Middleware, permission vs policy checks | [06 — Backend authorization](docs/authorization/06-backend-authorization.md) |
+| Redis caching and invalidation | [07 — Caching](docs/authorization/07-caching.md) |
+| Audit logging | [08 — Audit logging](docs/authorization/08-audit-logging.md) |
+| Default deny, least privilege, SUPER_ADMIN | [09 — Security](docs/authorization/09-security.md) |
+| Consuming `/authz/me` in the frontends | [10 — Frontend integration](docs/authorization/10-frontend-integration.md) |
+| hitbox.com vs admin vs productmanager vs mobile | [11 — API surfaces](docs/authorization/11-api-surfaces.md) |
+| Migrations, seeding, runbooks | [12 — Operations](docs/authorization/12-operations.md) |
 
 ---
 

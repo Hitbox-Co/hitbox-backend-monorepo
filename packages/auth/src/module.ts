@@ -36,10 +36,7 @@ export function createAuthModule(deps: AuthModuleDeps): AuthModule {
     });
     const registrationService = new RegistrationService({ accounts: deps.accounts });
     const controller = new AuthController(webhookService, registrationService);
-    const requireAuth = createRequireAuth({
-        accounts: deps.accounts,
-        logger: undefined
-    });
+    const requireAuth = createRequireAuth({ accounts: deps.accounts, logger });
 
     const router = Router();
     router.post(`/webhooks${CLERK_WEBHOOK_PATH}`, controller.handleClerkWebhook);

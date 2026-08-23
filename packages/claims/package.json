@@ -17,6 +17,7 @@
   "type": "module",
   "dependencies": {
     "@hitbox/auth": "workspace:*",
+    "@hitbox/authz": "workspace:*",
     "@hitbox/database": "workspace:*",
     "@hitbox/shared": "workspace:*",
     "zod": "^3.24.1"

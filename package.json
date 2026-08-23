@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "private": true,
-  "packageManager": "pnpm@11.13.0",
+  "packageManager": "pnpm@11.22.0",
   "scripts": {
     "postinstall": "pnpm --filter @hitbox/database db:generate",
     "dev": "turbo dev",
@@ -17,7 +17,10 @@
     "db:migrate": "pnpm --filter @hitbox/database db:migrate",
     "db:deploy": "pnpm --filter @hitbox/database db:deploy",
     "db:studio": "pnpm --filter @hitbox/database db:studio",
-    "db:seed": "pnpm --filter @hitbox/database db:seed"
+    "db:seed": "pnpm --filter @hitbox/database db:seed",
+    "authz:seed": "pnpm --filter @hitbox/authz seed",
+    "authz:validate": "pnpm --filter @hitbox/authz test -- catalog",
+    "typecheck": "turbo typecheck"
   },
   "keywords": [],
   "author": "",

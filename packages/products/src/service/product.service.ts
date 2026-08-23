@@ -51,6 +51,18 @@ export class ProductService {
         };
     }
 
+    /**
+     * Ownership + tenancy of one product, for @hitbox/authz's resource policy
+     * check. Returns null when the row does not exist so the route guard can
+     * answer 404 without revealing whether the caller would have been allowed.
+     *
+     * Shape matches authz's `ResourceRef` structurally — products does not
+     * import authz, so the catalog module stays independent of authorization.
+     */
+    refFor(id: string): Promise<{ ownerId: string | null; organizationId: string | null } | null> {
+        return this.deps.products.findAuthorizationRef(id);
+    }
+
     async getById(id: string): Promise<ProductWithRelations> {
         const product = await this.deps.products.findById(id);
         if (!product) {

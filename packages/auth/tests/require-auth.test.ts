@@ -6,13 +6,13 @@ jest.mock('@clerk/backend', () => ({ verifyToken: mockVerifyToken }));
 
 import { createRequireAuth } from '../src/middleware/require-auth.middleware';
 import { AccountStatus } from '../src/domain/enums/account-status.enum';
-import { UserRole } from '../src/domain/enums/user-role.enum';
 import type { AccountSnapshot, IAccountLookup } from '../src/domain/interfaces/account-lookup.interface';
 
+// No `role` field: authentication resolves WHO, never WHAT they may do.
+// Authorization lives in @hitbox/authz and reads its own tables.
 const ACTIVE: AccountSnapshot = {
     id: 'acc_1',
     email: 'buyer@example.com',
-    role: UserRole.USER,
     status: AccountStatus.ACTIVE,
     emailVerified: true,
 };
@@ -76,6 +76,39 @@ describe('requireAuth', () => {
     it('passes for an active, verified account and attaches req.auth', async () => {
         const { next, req } = await run(makeAccounts(ACTIVE), withToken);
         expect(next).toHaveBeenCalledWith(); // called with no error
-        expect(req.auth).toMatchObject({ accountId: 'acc_1', clerkUserId: 'user_1', role: UserRole.USER });
+        expect(req.auth).toMatchObject({
+            accountId: 'acc_1',
+            clerkUserId: 'user_1',
+            email: 'buyer@example.com',
+            sessionId: 'sess_1',
+        });
+    });
+
+    it('carries no authorization data on the auth context', async () => {
+        const { req } = await run(makeAccounts(ACTIVE), withToken);
+        // Guards the separation: if a `role`/`permissions` field ever reappears
+        // here, authorization has started leaking into the session again.
+        expect(req.auth).not.toHaveProperty('role');
+        expect(req.auth).not.toHaveProperty('permissions');
+    });
+
+    describe('factor verification age (step-up input)', () => {
+        it('extracts the Clerk fva claim when present', async () => {
+            mockVerifyToken.mockResolvedValue({ sub: 'user_1', sid: 'sess_1', fva: [3, -1] });
+            const { req } = await run(makeAccounts(ACTIVE), withToken);
+            expect(req.auth?.factorVerificationAge).toEqual([3, -1]);
+        });
+
+        it('is null when the token has no fva claim, so step-up fails closed', async () => {
+            mockVerifyToken.mockResolvedValue({ sub: 'user_1', sid: 'sess_1' });
+            const { req } = await run(makeAccounts(ACTIVE), withToken);
+            expect(req.auth?.factorVerificationAge).toBeNull();
+        });
+
+        it('is null for a malformed fva claim', async () => {
+            mockVerifyToken.mockResolvedValue({ sub: 'user_1', sid: 'sess_1', fva: ['x'] });
+            const { req } = await run(makeAccounts(ACTIVE), withToken);
+            expect(req.auth?.factorVerificationAge).toBeNull();
+        });
     });
 });
