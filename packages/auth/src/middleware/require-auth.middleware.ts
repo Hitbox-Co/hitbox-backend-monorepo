@@ -7,8 +7,9 @@ import type { IAccountLookup } from '../domain/interfaces/account-lookup.interfa
 import type { AuthContext } from '../types/auth.types';
 
 interface RequireAuthDeps {
-    logger: any;
     accounts: IAccountLookup;
+    /** Asserted present by createAuthModule — env.CLERK_SECRET_KEY is optional at the shared-schema level. */
+    clerkSecretKey: string;
 }
 
 function extractToken(req: Request): string | null {
@@ -28,7 +29,7 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
         .map((party) => party.trim())
         .filter(Boolean);
 
-    const clerk = createClerkClient({ secretKey: env.CLERK_SECRET_KEY });
+    const clerk = createClerkClient({ secretKey: deps.clerkSecretKey });
 
 
     return async (req, _res, next) => {
@@ -45,7 +46,7 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
             let payload;
             try {
                 payload = await verifyToken(token, {
-                    secretKey: env.CLERK_SECRET_KEY,
+                    secretKey: deps.clerkSecretKey,
                     ...(authorizedParties?.length ? { authorizedParties } : {}),
                 });
             } catch {

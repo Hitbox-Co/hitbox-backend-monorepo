@@ -9,14 +9,27 @@ import { createMarketplaceModule } from '@hitbox/marketplace';
 import { createCollectionsModule } from '@hitbox/collections';
 import { createArtistModule } from '@hitbox/artist';
 import { createClaimsModule } from '@hitbox/claims';
+import { createLeadsModule } from '@hitbox/leads';
 import { buildRoutes } from './routes';
+
+export interface Bootstrapped {
+    /** Mobile platform routes, mounted at /api/v1 (see app.ts). */
+    apiRouter: Router;
+    /**
+     * Public website (lead capture) routes, mounted at /app/web/v1 — a
+     * separate route namespace on this SAME server/port, not a separate app.
+     * Owns its own database (@hitbox/leads); everything else in this file
+     * shares the mobile platform's @hitbox/database.
+     */
+    leadsRouter: Router;
+}
 
 /**
  * Composition root — the ONLY place where modules learn about each other.
  * Order matters: users exposes the account-lookup port, auth consumes it,
  * then every module's router is built with auth's requireAuth middleware.
  */
-export function bootstrap(): Router {
+export function bootstrap(): Bootstrapped {
     const usersModule = createUsersModule({ prisma, eventBus });
 
     const authModule = createAuthModule({
@@ -49,7 +62,7 @@ export function bootstrap(): Router {
     const claimsModule = createClaimsModule({ prisma, eventBus });
     const claimsRouters = claimsModule.createRouters(authModule.requireAuth);
 
-    return buildRoutes({
+    const apiRouter = buildRoutes({
         auth: authModule.router,
         users: usersModule.createRouter(authModule.requireAuth),
         products: productsModule.createRouter(authModule.requireAuth),
@@ -60,4 +73,10 @@ export function bootstrap(): Router {
         verify: claimsRouters.verify,
         ledger: claimsRouters.ledger,
     });
+
+    // Public website (hitboxcollectibles.com) — its own database, no
+    // dependency on anything above. See docs/repo-structure.md.
+    const leadsModule = createLeadsModule();
+
+    return { apiRouter, leadsRouter: leadsModule.router };
 }

@@ -1,0 +1,36 @@
+{
+  "name": "@hitbox/leads",
+  "version": "0.1.0",
+  "private": true,
+  "description": "HitBox leads module — public website (hitboxcollectibles.com) lead capture: waitlist, contact, artist and partner inquiries, plus the admin-side notes/activity/export audit trail. Owns its own database, separate from the mobile platform.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "db:validate": "dotenv -e ../../.env -- prisma validate --schema prisma/schema.prisma",
+    "db:generate": "prisma generate --schema prisma/schema.prisma",
+    "db:migrate": "dotenv -e ../../.env -- prisma migrate dev --schema prisma/schema.prisma",
+    "db:migrate:create": "dotenv -e ../../.env -- prisma migrate dev --create-only --schema prisma/schema.prisma",
+    "db:deploy": "dotenv -e ../../.env -- prisma migrate deploy --schema prisma/schema.prisma",
+    "db:studio": "dotenv -e ../../.env -- prisma studio --schema prisma/schema.prisma",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@hitbox/shared": "workspace:*",
+    "@prisma/client": "^6.12.0",
+    "zod": "^3.24.1"
+  },
+  "peerDependencies": {
+    "express": "^4.19.0 || ^5.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.25",
+    "dotenv-cli": "^8.0.0",
+    "pino": "^9.5.0",
+    "prisma": "^6.12.0",
+    "typescript": "^5.6.3"
+  }
+}

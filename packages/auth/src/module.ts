@@ -27,18 +27,29 @@ export interface AuthModule {
 export function createAuthModule(deps: AuthModuleDeps): AuthModule {
     const logger = createModuleLogger(AUTH_MODULE);
 
+    // env.CLERK_* is optional at the shared-schema level (other apps in this
+    // monorepo, e.g. the public website, don't use Clerk) — this is the one
+    // place that actually needs it, so it fails loudly here instead.
+    const clerkSecretKey = env.CLERK_SECRET_KEY;
+    const clerkWebhookSigningSecret = env.CLERK_WEBHOOK_SIGNING_SECRET;
+    if (!clerkSecretKey || !clerkWebhookSigningSecret) {
+        throw new Error(
+            'createAuthModule requires CLERK_SECRET_KEY and CLERK_WEBHOOK_SIGNING_SECRET to be set.',
+        );
+    }
+
     const webhookEvents = new WebhookEventRepository(deps.prisma);
     const webhookService = new AuthWebhookService({
         webhookEvents,
         eventBus: deps.eventBus,
-        signingSecret: env.CLERK_WEBHOOK_SIGNING_SECRET,
+        signingSecret: clerkWebhookSigningSecret,
         logger,
     });
     const registrationService = new RegistrationService({ accounts: deps.accounts });
     const controller = new AuthController(webhookService, registrationService);
     const requireAuth = createRequireAuth({
         accounts: deps.accounts,
-        logger: undefined
+        clerkSecretKey,
     });
 
     const router = Router();

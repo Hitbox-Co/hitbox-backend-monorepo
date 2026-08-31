@@ -2,6 +2,13 @@
 
 > The single document that explains **how the backend is built, why it is built that way, and how every piece talks to every other piece.**
 
+> **This document covers the mobile platform domain only** (`/api/v1/*`). The same `apps/backend`
+> process also serves a second, independent domain — the public website's lead-capture API
+> (`/app/web/v1/*` / `@hitbox/leads`), with its own database. See
+> [repo-structure.md](repo-structure.md) for how the two domains share one process, and
+> [leads-schema.md](leads-schema.md) / [web-api-integration.md](web-api-integration.md) for the
+> website side specifically.
+
 ---
 
 ## 1. The Big Picture

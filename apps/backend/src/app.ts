@@ -5,7 +5,12 @@ import helmet from "helmet";
 import morgan from "morgan";
 import { createRateLimiter, errorHandler, isProduction, notFoundHandler } from "@hitbox/shared";
 
-export function createApp(apiRouter: Router): Express {
+export interface AppRouters {
+    apiRouter: Router;
+    leadsRouter: Router;
+}
+
+export function createApp({ apiRouter, leadsRouter }: AppRouters): Express {
     const app = express();
 
     // Behind a host/CDN proxy the client IP is in X-Forwarded-For; trust one
@@ -40,8 +45,18 @@ export function createApp(apiRouter: Router): Express {
         res.json({ success: true, message: "HitBox Backend is running 🚀" });
     });
 
-    // Rate limit the whole API (per client IP; Redis-backed when configured).
+    // Mobile platform — rate limit per client IP (Redis-backed when configured).
     app.use("/api/v1", createRateLimiter(), apiRouter);
+
+    // Public website (lead capture) — same server/port, separate route
+    // namespace, its own tighter budget: unauthenticated public forms with
+    // no CAPTCHA yet (see docs/leads-schema.md §6.4) get a lower per-IP
+    // limit and a distinct Redis key prefix so the two budgets never share.
+    app.use(
+        "/app/web/v1",
+        createRateLimiter({ prefix: "web", windowMs: 60_000, max: 20 }),
+        leadsRouter,
+    );
 
     // 404 + single error boundary — always LAST.
     app.use(notFoundHandler);

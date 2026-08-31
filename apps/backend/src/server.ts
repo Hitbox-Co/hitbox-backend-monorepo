@@ -1,5 +1,6 @@
 import { env, logger } from "@hitbox/shared";
 import { prisma } from "@hitbox/database";
+import { leadsPrisma } from "@hitbox/leads";
 import { createApp } from "./app";
 import { bootstrap } from "./bootstrap";
 
@@ -23,8 +24,7 @@ keepWarm.unref();
 function shutdown(signal: string): void {
     logger.info({ signal }, "shutting down");
     server.close(() => {
-        prisma
-            .$disconnect()
+        Promise.allSettled([prisma.$disconnect(), leadsPrisma.$disconnect()])
             .catch((error: unknown) => logger.error({ err: error }, "prisma disconnect failed"))
             .finally(() => process.exit(0));
     });

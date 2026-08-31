@@ -1,0 +1,319 @@
+// ============================================================================
+// LEADS SCHEMA  (packages/leads/prisma/schema.prisma)
+//
+// Owned entirely by @hitbox/leads. This is the ONLY schema file for this
+// package — unlike the mobile platform's hybrid multi-partial pipeline
+// (packages/shared/database), this domain lives in its OWN Postgres database
+// (LEADS_DATABASE_URL / LEADS_DIRECT_URL), so there is nothing to merge.
+// If a second web-domain package is ever added (e.g. a newsletter module),
+// promote this to the same partial+merge pattern shared/database uses.
+//
+// Backs the public website (hitboxcollectibles.com) — Phase 1: lead capture.
+// See docs/leads-schema.md for the full field-by-field rationale and
+// docs/web-api-integration.md for how the site's forms map onto this schema.
+// ============================================================================
+
+generator client {
+    provider = "prisma-client-js"
+    // Custom output — keeps this client physically separate from
+    // @hitbox/database's generated client so the two packages' `prisma
+    // generate` runs never fight over the same node_modules location.
+    output   = "../src/generated/prisma"
+}
+
+datasource db {
+    provider  = "postgresql"
+    url       = env("LEADS_DATABASE_URL")
+    directUrl = env("LEADS_DIRECT_URL")
+}
+
+// ─────────────────────────────── Enums ─────────────────────────────────────
+
+/// Pipeline status for the three lead tables (Contact, Artist, Partner).
+/// NOT used by WaitlistSubscriber — the waitlist is a subscriber list, not a
+/// lead pipeline (see WaitlistStatus below).
+enum LeadStatus {
+    new
+    reviewing
+    qualified
+    contacted
+    meeting_scheduled
+    in_discussion
+    on_hold
+    closed_won
+    closed_lost
+    spam
+}
+
+/// Triage priority, independent of pipeline status.
+enum LeadPriority {
+    unreviewed
+    low
+    medium
+    high
+    urgent
+}
+
+/// Waitlist-specific lifecycle — a subscriber list, not a lead pipeline.
+enum WaitlistStatus {
+    pending
+    confirmed
+    unsubscribed
+    suppressed
+}
+
+// ───────────────────────── Phase 1 public forms ────────────────────────────
+
+/// WaitlistForm (3 variants: footer / compact / full page).
+/// Not a lead pipeline — no status/assignment fields beyond WaitlistStatus.
+model WaitlistSubscriber {
+    id String @id @default(uuid())
+
+    email           String @db.VarChar(255)
+    /// @unique dedupe key — lower/trim of `email`, computed by the API layer.
+    emailNormalized String @unique @map("email_normalized") @db.VarChar(255)
+
+    firstName String? @map("first_name") @db.VarChar(100)
+    lastName  String? @map("last_name") @db.VarChar(100)
+    /// Nullable is correct — do NOT make required. Only the full-page variant
+    /// of WaitlistForm asks for it; footer/compact signups never send it.
+    country     String?  @db.VarChar(100)
+    stateRegion String?  @map("state_region") @db.VarChar(100)
+    city        String?  @db.VarChar(100)
+    ageRange    String?  @map("age_range") @db.VarChar(20)
+
+    /// String[], default []. The API route normalizes formData.getAll()'s
+    /// three shapes (array / bare string / absent key) into this before
+    /// insert — see docs/web-api-integration.md "The interests trap".
+    interests   String[] @default([])
+    musicGenres String[] @default([]) @map("music_genres")
+
+    referralSource String? @map("referral_source") @db.VarChar(100)
+
+    utmSource   String? @map("utm_source") @db.VarChar(255)
+    utmMedium   String? @map("utm_medium") @db.VarChar(255)
+    utmCampaign String? @map("utm_campaign") @db.VarChar(255)
+    utmContent  String? @map("utm_content") @db.VarChar(255)
+    utmTerm     String? @map("utm_term") @db.VarChar(255)
+
+    status WaitlistStatus @default(pending)
+
+    /// Double opt-in — no send/verify flow exists yet (see docs, open
+    /// decision #4). Columns exist so the flow can be built without a
+    /// migration; `status` will simply sit at `pending` until it is.
+    confirmationTokenHash String?   @map("confirmation_token_hash")
+    confirmationExpiresAt DateTime? @map("confirmation_expires_at")
+    confirmedAt           DateTime? @map("confirmed_at")
+    /// No unsubscribe route exists yet either (open decision #3), despite
+    /// the consent copy promising one — column is ready for when it does.
+    unsubscribedAt        DateTime? @map("unsubscribed_at")
+
+    consentVersion   String   @map("consent_version") @db.VarChar(20)
+    consentTimestamp DateTime @default(now()) @map("consent_timestamp")
+
+    sourcePage       String? @map("source_page") @db.VarChar(255)
+    ipHash           String? @map("ip_hash") @db.VarChar(64)
+    userAgentSummary String? @map("user_agent_summary") @db.VarChar(255)
+
+    /// Anything the form sent that isn't mapped to a column above. Cheap
+    /// hedge while the forms are still changing (see docs, §2.2).
+    rawPayload Json? @map("raw_payload")
+
+    createdAt DateTime @default(now()) @map("created_at")
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    @@index([createdAt])
+    @@index([status])
+    @@map("waitlist_subscribers")
+}
+
+/// ContactForm. Note: no consent checkbox exists on this form (see docs,
+/// §2.1) — `consentVersion`/`consentTimestamp` here record the privacy
+/// policy revision in force at submission time, not an affirmative tick.
+model ContactSubmission {
+    id String @id @default(uuid())
+
+    name    String @db.VarChar(255)
+    email   String @db.VarChar(255)
+    company String? @db.VarChar(255)
+    phone   String? @db.VarChar(50)
+    /// Form field name is `subject` — mapped in the API route.
+    topic   String @db.VarChar(255)
+    message String
+
+    /// Column is `status`, NOT `lead_status` like the two lead models below
+    /// (intentional naming difference already present in the schema).
+    status           LeadStatus   @default(new)
+    assignedUserId   String?      @map("assigned_user_id")
+    internalPriority LeadPriority @default(unreviewed) @map("internal_priority")
+    followUpAt       DateTime?    @map("follow_up_at")
+
+    sourcePage String? @map("source_page") @db.VarChar(255)
+    ipHash     String? @map("ip_hash") @db.VarChar(64)
+
+    consentVersion   String   @map("consent_version") @db.VarChar(20)
+    consentTimestamp DateTime @default(now()) @map("consent_timestamp")
+
+    rawPayload Json? @map("raw_payload")
+
+    createdAt DateTime @default(now()) @map("created_at")
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    @@index([createdAt])
+    @@index([status])
+    @@map("contact_submissions")
+}
+
+/// ArtistInquiryForm.
+model ArtistLead {
+    id String @id @default(uuid())
+
+    artistName String  @map("artist_name") @db.VarChar(255)
+    /// Nullable for now — not on the form (see docs, §2.1). Tighten to
+    /// non-null once the form asks the question.
+    primaryCategory String? @map("primary_category") @db.VarChar(100)
+    country         String  @db.VarChar(100)
+    website         String? @db.VarChar(500)
+
+    /// Form field is `socials`, a free-text multi-line textarea, not a URL
+    /// field. The API route parses it into one primary + N additional URLs;
+    /// the original text is preserved in `rawPayload` regardless of parse
+    /// success. See docs/web-api-integration.md for the exact parsing rule.
+    primarySocialUrl     String?  @map("primary_social_url") @db.VarChar(500)
+    additionalSocialUrls String[] @default([]) @map("additional_social_urls")
+
+    /// Form field is `name` — mapped in the API route.
+    contactName String  @map("contact_name") @db.VarChar(255)
+    /// Nullable for now — not on the form (see docs, §2.1).
+    contactRole String? @map("contact_role") @db.VarChar(100)
+    /// Form field is `email`.
+    contactEmail String @map("contact_email") @db.VarChar(255)
+    /// Form field is `phone`.
+    contactPhone String? @map("contact_phone") @db.VarChar(50)
+
+    /// Form field is `management`.
+    managementCompany String? @map("management_company") @db.VarChar(255)
+    /// Form field is `label`.
+    recordLabel       String? @map("record_label") @db.VarChar(255)
+
+    audienceRange           String? @map("audience_range") @db.VarChar(50)
+    monthlyListenerRange    String? @map("monthly_listener_range") @db.VarChar(50)
+    socialFollowingRange    String? @map("social_following_range") @db.VarChar(50)
+
+    upcomingRelease      String? @map("upcoming_release") @db.VarChar(255)
+    upcomingTourOrEvent  String? @map("upcoming_tour_or_event") @db.VarChar(255)
+    existingMerchandise  String? @map("existing_merchandise") @db.VarChar(255)
+
+    /// Form field is `projectIdea`.
+    collaborationDescription String @map("collaboration_description")
+
+    /// Form field is `collectibleType`, a single <select> value. The API
+    /// route wraps it into a one-element array — see docs.
+    collectibleFormats String[] @default([]) @map("collectible_formats")
+    contentTypes       String[] @default([]) @map("content_types")
+
+    timeline String? @db.VarChar(100)
+
+    /// Nullable — the form has NO checkbox of any kind for this today (see
+    /// docs, §2.1). This is a legal/rights-authorization flag; leaving it
+    /// null is the honest representation of "never asked." Do not default
+    /// it to true or false — either would misrepresent an unasked question.
+    /// Tighten to non-null only once the form adds a real checkbox.
+    authorizedConfirmation Boolean? @map("authorized_confirmation")
+
+    /// Free text captured by the form (field name `additional`) with no
+    /// column in the original design (see docs, §2.2) — given its own
+    /// first-class column since ops reads it routinely, rather than leaving
+    /// it buried in rawPayload only.
+    additionalNotes String? @map("additional_notes")
+
+    leadStatus     LeadStatus   @default(new) @map("lead_status")
+    priority       LeadPriority @default(unreviewed)
+    assignedUserId String?      @map("assigned_user_id")
+    followUpAt     DateTime?    @map("follow_up_at")
+
+    sourcePage  String? @map("source_page") @db.VarChar(255)
+    utmSource   String? @map("utm_source") @db.VarChar(255)
+    utmMedium   String? @map("utm_medium") @db.VarChar(255)
+    utmCampaign String? @map("utm_campaign") @db.VarChar(255)
+    ipHash      String? @map("ip_hash") @db.VarChar(64)
+
+    consentVersion   String   @map("consent_version") @db.VarChar(20)
+    consentTimestamp DateTime @default(now()) @map("consent_timestamp")
+
+    rawPayload Json? @map("raw_payload")
+
+    createdAt DateTime @default(now()) @map("created_at")
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    @@index([createdAt])
+    @@index([leadStatus])
+    @@map("artist_leads")
+}
+
+/// BusinessPartnerForm.
+model PartnerLead {
+    id String @id @default(uuid())
+
+    /// Form field is `company`.
+    companyName String @map("company_name") @db.VarChar(255)
+    /// Form field is `name`.
+    contactName String @map("contact_name") @db.VarChar(255)
+    /// On the form but OPTIONAL there — schema originally said non-null;
+    /// relaxed to match what the form actually guarantees (see docs, §2.1).
+    jobTitle    String? @map("job_title") @db.VarChar(150)
+    /// Form field is `email`.
+    workEmail   String  @map("work_email") @db.VarChar(255)
+    phone       String? @db.VarChar(50)
+    country     String  @db.VarChar(100)
+
+    partnershipType String @map("partnership_type") @db.VarChar(100)
+
+    /// Form field is `website`, AND optional there — relaxed for the same
+    /// reason as jobTitle (see docs, §2.1).
+    companyWebsite String? @map("company_website") @db.VarChar(500)
+    companySize    String? @map("company_size") @db.VarChar(50)
+    linkedinUrl    String? @map("linkedin_url") @db.VarChar(500)
+
+    /// Distinct from the form's `companyDescription` — see companyDescription
+    /// below. This stays reserved for a narrower "what can you contribute"
+    /// question the form doesn't currently ask.
+    relevantCapabilities String? @map("relevant_capabilities")
+    /// Form field `companyDescription` is a DIFFERENT question from
+    /// relevantCapabilities (see docs, §2.2) — given its own column rather
+    /// than conflated into the field above.
+    companyDescription   String? @map("company_description")
+
+    /// Partner form has no timeline field — always null until one exists.
+    desiredTimeline String? @map("desired_timeline") @db.VarChar(100)
+
+    /// Form field is `projectDetails`.
+    message String @map("message")
+
+    leadStatus     LeadStatus   @default(new) @map("lead_status")
+    priority       LeadPriority @default(unreviewed)
+    assignedUserId String?      @map("assigned_user_id")
+    followUpAt     DateTime?    @map("follow_up_at")
+
+    sourcePage  String? @map("source_page") @db.VarChar(255)
+    utmSource   String? @map("utm_source") @db.VarChar(255)
+    utmMedium   String? @map("utm_medium") @db.VarChar(255)
+    utmCampaign String? @map("utm_campaign") @db.VarChar(255)
+    ipHash      String? @map("ip_hash") @db.VarChar(64)
+
+    consentVersion   String   @map("consent_version") @db.VarChar(20)
+    consentTimestamp DateTime @default(now()) @map("consent_timestamp")
+
+    /// Free text captured by the form (field name `additional`) with no
+    /// column in the original design (see docs, §2.2).
+    additionalNotes String? @map("additional_notes")
+
+    rawPayload Json? @map("raw_payload")
+
+    createdAt DateTime @default(now()) @map("created_at")
+    updatedAt DateTime @updatedAt @map("updated_at")
+
+    @@index([createdAt])
+    @@index([leadStatus])
+    @@map("partner_leads")
+}

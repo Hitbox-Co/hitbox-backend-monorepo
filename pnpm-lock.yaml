@@ -240,6 +240,9 @@ importers:
       '@hitbox/discover':
         specifier: workspace:*
         version: link:../../packages/discover
+      '@hitbox/leads':
+        specifier: workspace:*
+        version: link:../../packages/leads
       '@hitbox/marketplace':
         specifier: workspace:*
         version: link:../../packages/marketplace
@@ -426,6 +429,37 @@ importers:
       pino:
         specifier: ^9.5.0
         version: 9.14.0
+      typescript:
+        specifier: ^5.6.3
+        version: 5.9.3
+
+  packages/leads:
+    dependencies:
+      '@hitbox/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@prisma/client':
+        specifier: ^6.12.0
+        version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)
+      express:
+        specifier: ^4.19.0 || ^5.0.0
+        version: 5.2.1(supports-color@5.5.0)
+      zod:
+        specifier: ^3.24.1
+        version: 3.25.76
+    devDependencies:
+      '@types/express':
+        specifier: ^4.17.25
+        version: 4.17.25
+      dotenv-cli:
+        specifier: ^8.0.0
+        version: 8.0.0
+      pino:
+        specifier: ^9.5.0
+        version: 9.14.0
+      prisma:
+        specifier: ^6.12.0
+        version: 6.19.3(typescript@5.9.3)
       typescript:
         specifier: ^5.6.3
         version: 5.9.3

@@ -19,6 +19,7 @@
     "@hitbox/collections": "workspace:*",
     "@hitbox/database": "workspace:*",
     "@hitbox/discover": "workspace:*",
+    "@hitbox/leads": "workspace:*",
     "@hitbox/marketplace": "workspace:*",
     "@hitbox/products": "workspace:*",
     "@hitbox/shared": "workspace:*",

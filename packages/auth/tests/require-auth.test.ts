@@ -2,7 +2,10 @@ import type { Request } from 'express';
 
 // Clerk JWT verification is mocked — we test the middleware's decisions.
 const mockVerifyToken = jest.fn();
-jest.mock('@clerk/backend', () => ({ verifyToken: mockVerifyToken }));
+jest.mock('@clerk/backend', () => ({
+    verifyToken: mockVerifyToken,
+    createClerkClient: jest.fn(() => ({})),
+}));
 
 import { createRequireAuth } from '../src/middleware/require-auth.middleware';
 import { AccountStatus } from '../src/domain/enums/account-status.enum';
@@ -27,7 +30,7 @@ function makeAccounts(snapshot: AccountSnapshot | null): IAccountLookup {
 type Middleware = (req: Request, res: unknown, next: jest.Mock) => Promise<void>;
 
 async function run(accounts: IAccountLookup, req: Partial<Request>) {
-    const mw = createRequireAuth({ accounts }) as unknown as Middleware;
+    const mw = createRequireAuth({ accounts, clerkSecretKey: 'sk_test_dummy' }) as unknown as Middleware;
     const next = jest.fn();
     const req2 = { headers: {}, header: () => undefined, ...req } as unknown as Request;
     await mw(req2, {}, next);

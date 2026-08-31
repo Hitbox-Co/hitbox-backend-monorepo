@@ -64,18 +64,21 @@ Each business domain is isolated into its own package, making it easy to maintai
 hitbox/
 │
 ├── apps/
-│   └── backend/
+│   └── backend/           # the ONLY app — one Express server, one port
+│                          #   /api/v1/*      → mobile platform routes
+│                          #   /app/web/v1/*  → public website (lead capture) routes
 │
 ├── packages/
-│   ├── auth/
-│   ├── users/
-│   ├── products/
-│   ├── marketplace/
-│   ├── claims/
-│   ├── orders/
-│   ├── payments/
-│   ├── notifications/
-│   └── shared/
+│   ├── auth/              ┐
+│   ├── users/              │
+│   ├── products/          │  mobile platform (share @hitbox/database)
+│   ├── discover/           │
+│   ├── marketplace/       │
+│   ├── collections/        │
+│   ├── artist/            │
+│   ├── claims/             ┘
+│   ├── leads/            # public website (owns its own database)
+│   └── shared/            # infrastructure used by BOTH domains
 │
 ├── scripts/
 │
@@ -86,6 +89,10 @@ hitbox/
 ├── turbo.json
 └── README.md
 ```
+
+> Two independent domains — mobile platform and public website — share one server process,
+> distinguished by route prefix and database, not by app. See
+> [docs/repo-structure.md](docs/repo-structure.md) for the diagram and how to add an admin panel.
 
 ---
 
@@ -104,7 +111,8 @@ hitbox/
 | orders | Orders & Checkout |
 | payments | Payment Processing |
 | notifications | Notifications & Messaging |
-| shared | Shared Infrastructure |
+| leads | **Public website** lead capture (hitboxcollectibles.com) — separate database from every package above |
+| shared | Shared Infrastructure (used by both the mobile platform and the public website) |
 
 ---
 
@@ -326,8 +334,12 @@ Documentation lives in the [`docs/`](docs/) directory:
 | Document | Contents |
 |---|---|
 | [Getting Started](docs/getting-started.md) | Setup, environment, database workflow, Clerk webhook wiring, troubleshooting |
-| [Architecture](docs/hitbox-architecture.md) | Module anatomy, composition root, ports & events, hybrid Prisma pipeline, request lifecycle, adding a module, microservice extraction path |
-| [API Reference](docs/api-reference.md) | Every endpoint with parameters, request/response shapes, and error codes |
+| [Architecture](docs/hitbox-architecture.md) | **Mobile platform**: module anatomy, composition root, ports & events, hybrid Prisma pipeline, request lifecycle, adding a module, microservice extraction path |
+| [API Reference](docs/api-reference.md) | **Mobile platform**: every endpoint with parameters, request/response shapes, and error codes |
+| [Auth Testing](docs/auth-testing.md) | **Mobile platform**: auth/registration validation coverage and how to run the auth test suite |
+| [Repo Structure](docs/repo-structure.md) | How the mobile platform and public website share one server process (route prefix + database, not separate apps), and how to add an admin panel |
+| [Website Leads Schema](docs/leads-schema.md) | **Public website**: database design for the four lead-capture forms |
+| [Website API Integration](docs/web-api-integration.md) | **Public website**: request/response contracts for whoever builds the hitboxcollectibles.com forms |
 
 ---
 
