@@ -5,7 +5,7 @@
   "private": true,
   "packageManager": "pnpm@11.13.0",
   "scripts": {
-    "postinstall": "pnpm --filter @hitbox/database db:generate",
+    "postinstall": "pnpm --filter @hitbox/database db:generate && pnpm --filter @hitbox/leads db:generate",
     "dev": "turbo dev",
     "build": "turbo build",
     "start": "pnpm --filter backend start",
