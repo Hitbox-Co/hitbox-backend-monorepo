@@ -331,6 +331,15 @@ const DEFINITIONS: Record<string, string> = {
 
     // ── Audit ───────────────────────────────────────────────────────────────
     'audit-log:read:global': 'Read the platform audit log.',
+    'audit-log:read:organization': "Read your own organization's audit trail.",
+    // Export and retention are separate powers, not degrees of read: one
+    // copies the trail out of the platform, the other decides how long the
+    // trail exists. Neither is granted to any catalog role by default —
+    // @hitbox/audit refuses to mount the export route without a step-up gate,
+    // and shortening a retention window destroys evidence, so both are
+    // deliberate operator grants.
+    'audit-log:export:global': 'Export the platform audit log in bulk.',
+    'audit-log:manage:global': 'Change audit retention windows.',
 
     // ── Notifications ───────────────────────────────────────────────────────
     'notification-config:update:own': 'Change your own notification preferences.',

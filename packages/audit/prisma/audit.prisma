@@ -59,6 +59,30 @@ model AuditEvent {
   insertedAt        DateTime
 
   @@id([eventId, occurredAt])
+
+  // Read patterns, in the order the query API and the alerting rules hit
+  // them. All non-unique: uniqueness is the primary key's job, and a unique
+  // index here would reject the second event of a burst that legitimately
+  // shares an actor or a correlation id.
+
+  /// "Everything this person did" — the first question an incident asks.
+  @@index([actorId, occurredAt])
+  /// Tenant-scoped reads: an ORG-scoped reader only ever sees its own rows.
+  @@index([organizationId, occurredAt])
+  /// "Everything that happened to this row" — provenance for one record.
+  @@index([resourceType, resourceId])
+  /// Unqualified time-range scans, and the pruner's cutoff sweep.
+  @@index([occurredAt])
+  /// Denial alerting and per-severity retention queries.
+  @@index([actionResult, occurredAt])
+  /// Reassembling one request — a refund approval plus the ledger write it
+  /// caused. No occurredAt: a correlation covers a handful of rows, so the
+  /// planner sorts them for free.
+  @@index([correlationId])
+  /// Every alerting rule filters on eventType (`LIKE 'role.%'`,
+  /// `IN ('order.refund', ...)`) and Postgres does not index a foreign key
+  /// on its own. Leading column, so prefix matches can use it.
+  @@index([eventType, occurredAt])
 }
 
 /// How long events of each severity are kept. Keyed by severity itself, so
