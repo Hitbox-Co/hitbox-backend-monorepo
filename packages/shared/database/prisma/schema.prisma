@@ -12,14 +12,14 @@
 // ============================================================================
 
 generator client {
-  provider = "prisma-client-js"
+    provider = "prisma-client-js"
 }
 
 datasource db {
-  provider  = "postgresql"
-  url       = env("DATABASE_URL")
-  // Neon pools connections; migrations need a direct (unpooled) URL.
-  directUrl = env("DIRECT_URL")
+    provider  = "postgresql"
+    url       = env("DATABASE_URL")
+    // Neon pools connections; migrations need a direct (unpooled) URL.
+    directUrl = env("DIRECT_URL")
 }
 
 // ───── source: packages\shared\database\prisma\enums.prisma ────────────────────────
@@ -36,40 +36,40 @@ datasource db {
 /// Public/private toggle. Used by users (User.profileVisibility) and
 /// collections (BuyerCollection.visibility).
 enum Visibility {
-  PUBLIC
-  PRIVATE
+    PUBLIC
+    PRIVATE
 }
 
 /// Settlement currency. Used by markets, orders, payments, finance, resale and
 /// claims (ProductHistory.price). Every monetary column pairs an amount with
 /// one of these.
 enum Currency {
-  USD
-  INR
-  GBP
+    USD
+    INR
+    GBP
 }
 
 /// Regulatory clearance state. Used by products (Product.complianceStatus) and
 /// releases (ReleaseApproval.complianceStatus) — the release reviewer writes
 /// it, the catalog reflects it.
 enum ComplianceStatus {
-  PENDING
-  CLEARED
-  FLAGGED
+    PENDING
+    CLEARED
+    FLAGGED
 }
 
 /// Address nickname. Used by users (Address) and orders (OrderAddress), which
 /// snapshots the label alongside the address lines at purchase time.
 enum AddressLabel {
-  HOME
-  WORK
-  OTHER
+    HOME
+    WORK
+    OTHER
 }
 
 /// Payment provider. Used by orders (Order.gateway) and payments
 /// (PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent).
 enum PaymentGateway {
-  STRIPE
+    STRIPE
 }
 
 // ───── source: packages\access-control\prisma\access-control.prisma ────────────────
@@ -86,14 +86,26 @@ enum PaymentGateway {
 // to GLOBAL, one ORG, or the actor's OWN records.
 // ============================================================================
 
-/// A named bundle of permissions, e.g. `brand_release_manager`.
-/// `entityGroup` records which persona family the role belongs to (buyer,
-/// brand, artist, HitBox staff) for grouping in admin UIs.
+/// A named bundle of permissions, e.g. `HITBOX_CONTENT_MANAGER`.
+/// `entityGroup` records which persona family the role belongs to (end_user,
+/// brand_artist, hitbox_seller_org) for grouping in admin UIs.
+///
+/// `domain` is the security boundary: a BUSINESS role may hold only BUSINESS
+/// permissions and a TECHNICAL role only TECHNICAL ones. The engine and the
+/// role service both enforce it, so "platform engineer" can never quietly
+/// acquire `order:refund`. A person who genuinely needs both holds two role
+/// assignments.
+///
+/// `isSystem` marks roles seeded from the code-side catalog. They cannot be
+/// renamed or deleted through the admin API — deleting HITBOX_SYSTEM_ADMIN
+/// would lock everyone out of the platform.
 model Role {
-  id          String   @id @db.Uuid
-  name        String   @unique
+  id          String              @id @db.Uuid
+  name        String              @unique
   displayName String
   entityGroup String
+  domain      AuthorizationDomain
+  isSystem    Boolean
   isActive    Boolean
   createdAt   DateTime
 
@@ -105,11 +117,16 @@ model Role {
 /// `key` column is the flat form used in code checks (e.g. `drop:publish:org`);
 /// the (resource, action, scope) triple is the canonical identity.
 model Permission {
-  id          String           @id @db.Uuid
+  id          String              @id @db.Uuid
   resource    ResourceType
   action      PermissionAction
   scope       PermissionScope
-  key         String           @unique
+  key         String              @unique
+  /// Which authorization domain this capability belongs to. Derived from the
+  /// resource (see RESOURCE_DOMAIN in the permission catalog), never chosen
+  /// per-row, so a resource cannot be business in one permission and
+  /// technical in another.
+  domain      AuthorizationDomain
   description String?
   isActive    Boolean
   createdAt   DateTime
@@ -175,6 +192,10 @@ enum PermissionAction {
   EXPORT // reports & dashboards
   CONFIGURE // platform / gateway config
   OVERRIDE // admin override
+  // ── Technical-domain verbs (APPLICATION / INFRASTRUCTURE resources) ──────
+  DEBUG // read logs, traces, run diagnostics
+  DEPLOY // ship a release / apply infrastructure
+  RESTART // bounce a service or node
 }
 
 /// The protected surfaces a permission can apply to. Deliberately coarser than
@@ -203,21 +224,55 @@ enum ResourceType {
   GENERAL_LOCATION
   AGE_SPECIFIC_FLAG
   ADDRESS
+  /// Running THIS application: releases, logs, diagnostics, app config.
+  /// Technical domain — no business role holds these.
+  APPLICATION
+  /// Running the platform it sits on: nodes, networking, provisioning.
+  /// Technical domain — no business role holds these.
+  INFRASTRUCTURE
 }
 
-/// How wide a permission reaches. Mirrors RoleScopeType — a grant's breadth is
-/// declared on the Permission, an assignment's breadth on the RoleAssignment,
-/// and an access check requires both to line up.
+/// The two authorization domains. Domain is a hard boundary, not a label: a
+/// role may only be granted permissions of its own domain, so business roles
+/// never acquire deploy rights and technical roles never acquire refund
+/// rights. Cross-domain access is expressed by giving a person two role
+/// assignments, never by widening one role.
+enum AuthorizationDomain {
+  BUSINESS
+  TECHNICAL
+}
+
+/// How far a permission reaches, along two axes at once — *breadth* (whose
+/// records) and *visibility* (how much of each record). The engine resolves
+/// both from this single value (see SCOPE_REACH in the permission catalog):
+///
+///   value          breadth        visibility
+///   ─────────────  ─────────────  ──────────
+///   GLOBAL         all records    full
+///   ORG            one org        full
+///   OWN            actor's own    full
+///   MASKED_PARTIAL all records    partially redacted   (e.g. Order Manager)
+///   MASKED         all records    fully redacted       (e.g. Support)
+///   PUBLIC         all records    public fields only   (e.g. buyer browsing)
+///
+/// Two roles can therefore hold the *same* capability at different
+/// visibilities — `buyer-profile:read:masked` for Support vs
+/// `buyer-profile:read:masked-partial` for the Order Manager — and one
+/// endpoint serves both, shaping its response from the granted scope the
+/// engine returns.
 enum PermissionScope {
   GLOBAL
-  ORG
+  ORGANIZATION
   OWN
+  PUBLIC
+  MASKED
+  MASKED_PARTIAL
 }
 
 /// How wide a role assignment reaches: everything (GLOBAL), one organization
 /// (ORG, with scopeId set), or only the actor's own records (OWN).
 enum RoleScopeType {
-  ORG
+  ORGANIZATION
   OWN
   GLOBAL
 }
@@ -361,18 +416,18 @@ model AuditEventType {
 /// BlockchainLedger row. `insertedAt` is recorded separately from `occurredAt`
 /// so clock skew and late writes are visible.
 model AuditEvent {
-  eventId           String            @db.Uuid
+  eventId           String             @db.Uuid
   occurredAt        DateTime
   eventType         String
-  type              AuditEventType    @relation(fields: [eventType], references: [eventType])
+  type              AuditEventType     @relation(fields: [eventType], references: [eventType])
   actorType         AuditActorType
-  actorId           String?           @db.Uuid
+  actorId           String?            @db.Uuid
   /// The actor's roles at the time of the action — a snapshot, because a later
   /// role change must not rewrite what their authority was.
   actorRoleSnapshot String?
-  organizationId    String?           @db.Uuid
+  organizationId    String?            @db.Uuid
   resourceType      String?
-  resourceId        String?           @db.Uuid
+  resourceId        String?            @db.Uuid
   actionResult      AuditActionResult
   severity          AuditSeverity
   beforeState       Json?
@@ -380,8 +435,8 @@ model AuditEvent {
   ipAddress         String?
   userAgent         String?
   deviceId          String?
-  correlationId     String            @db.Uuid
-  ledgerReferenceId String?           @db.Uuid
+  correlationId     String             @db.Uuid
+  ledgerReferenceId String?            @db.Uuid
   metadata          Json
   insertedAt        DateTime
 
@@ -1012,25 +1067,25 @@ enum NotificationStatus {
 /// `unitPrice`, `amount`, `currency` and `gateway` are snapshotted at purchase
 /// time so later catalog or market edits never rewrite an order's totals.
 model Order {
-  id              String          @id @db.Uuid
-  buyerId         String          @db.Uuid
-  buyer           User            @relation(fields: [buyerId], references: [id])
-  productId       String          @db.Uuid
-  product         Product         @relation(fields: [productId], references: [id])
-  variantId       String?         @db.Uuid
-  variant         ProductVariant? @relation(fields: [variantId], references: [id])
-  skuId           String?         @db.Uuid
-  sku             Sku?            @relation(fields: [skuId], references: [id])
-  quantity        Int
-  organizationId  String?         @db.Uuid
-  organization    Organization?   @relation(fields: [organizationId], references: [id])
-  marketId        String?         @db.Uuid
-  market          Market?         @relation(fields: [marketId], references: [id])
-  status          OrderStatus
-  unitPrice       Decimal         @db.Decimal(12, 2)
-  amount          Decimal         @db.Decimal(12, 2)
-  currency        Currency
-  gateway         PaymentGateway
+  id             String          @id @db.Uuid
+  buyerId        String          @db.Uuid
+  buyer          User            @relation(fields: [buyerId], references: [id])
+  productId      String          @db.Uuid
+  product        Product         @relation(fields: [productId], references: [id])
+  variantId      String?         @db.Uuid
+  variant        ProductVariant? @relation(fields: [variantId], references: [id])
+  skuId          String?         @db.Uuid
+  sku            Sku?            @relation(fields: [skuId], references: [id])
+  quantity       Int
+  organizationId String?         @db.Uuid
+  organization   Organization?   @relation(fields: [organizationId], references: [id])
+  marketId       String?         @db.Uuid
+  market         Market?         @relation(fields: [marketId], references: [id])
+  status         OrderStatus
+  unitPrice      Decimal         @db.Decimal(12, 2)
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       Currency
+  gateway        PaymentGateway
   /// When the buyer accepted the drop's terms — evidence for disputes.
   termsAcceptedAt DateTime?
   shippedAt       DateTime?
@@ -1229,9 +1284,9 @@ model PaymentWebhookEvent {
   eventType         String
   payload           Json
   signatureVerified Boolean
-  processedAt       DateTime?
-  processingError   String?
-  receivedAt        DateTime
+  processedAt        DateTime?
+  processingError    String?
+  receivedAt         DateTime
 }
 
 /// A refund through its approval chain. `physicalReturnConfirmedAt` gates
@@ -1614,17 +1669,17 @@ enum IndexJobStatus {
 /// all live on this row; the provenance history is append-only in the claims
 /// module (ProductHistory + BlockchainLedger).
 model Sku {
-  id            String          @id @db.Uuid
-  skuCode       String          @unique
-  productId     String          @db.Uuid
-  product       Product         @relation(fields: [productId], references: [id])
-  variantId     String?         @db.Uuid
-  variant       ProductVariant? @relation(fields: [variantId], references: [id])
+  id          String  @id @db.Uuid
+  skuCode     String  @unique
+  productId   String  @db.Uuid
+  product     Product @relation(fields: [productId], references: [id])
+  variantId   String? @db.Uuid
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
   /// Position within the product's edition; unique per product (see @@unique).
-  serialNumber  Int
+  serialNumber Int
   /// Current holder. Null until first claimed.
-  ownerId       String?         @db.Uuid
-  owner         User?           @relation(fields: [ownerId], references: [id])
+  ownerId      String?       @db.Uuid
+  owner        User?         @relation(fields: [ownerId], references: [id])
   claimedStatus ClaimedStatus
 
   // ── NFC tag custody ───────────────────────────────────────────────────────
@@ -1896,37 +1951,37 @@ model User {
   addresss Address[]
 
   // ── Cross-module back-relations (see docs/database-architecture.md §6) ─────
-  artists                   Artist?
-  skus                      Sku[]
-  productClaims             ProductClaim[]
-  buyerCollections          BuyerCollection[]
-  productHistorys           ProductHistory[]
-  roleAssignment_user       RoleAssignment[]         @relation("User_user")
-  roleAssignment_grantedBy  RoleAssignment[]         @relation("User_grantedBy")
-  releaseApproval_approver  ReleaseApproval[]        @relation("User_approver")
-  releaseApproval_checkedBy ReleaseApproval[]        @relation("User_checkedBy")
-  mediaAssets               MediaAsset[]
-  contentUnlocks            ContentUnlock[]
-  orders                    Order[]
-  refundRequest_requestedBy RefundRequest[]          @relation("User_requestedBy")
-  refundRequest_approvedBy  RefundRequest[]          @relation("User_approvedBy")
-  notifications             Notification[]
-  notificationPreferences   NotificationPreference[]
-  wishlistItems             WishlistItem[]
-  follows                   Follow[]
-  resaleListings            ResaleListing[]
-  supportCase_reporter      SupportCase[]            @relation("User_reporter")
-  supportCase_resolvedBy    SupportCase[]            @relation("User_resolvedBy")
-  supplyBatchs              SupplyBatch[]
+  artists                  Artist?
+  skus                     Sku[]
+  productClaims            ProductClaim[]
+  buyerCollections         BuyerCollection[]
+  productHistorys          ProductHistory[]
+  roleAssignment_user      RoleAssignment[]        @relation("User_user")
+  roleAssignment_grantedBy RoleAssignment[]        @relation("User_grantedBy")
+  releaseApproval_approver ReleaseApproval[]       @relation("User_approver")
+  releaseApproval_checkedBy ReleaseApproval[]      @relation("User_checkedBy")
+  mediaAssets              MediaAsset[]
+  contentUnlocks           ContentUnlock[]
+  orders                   Order[]
+  refundRequest_requestedBy RefundRequest[]        @relation("User_requestedBy")
+  refundRequest_approvedBy  RefundRequest[]        @relation("User_approvedBy")
+  notifications            Notification[]
+  notificationPreferences  NotificationPreference[]
+  wishlistItems            WishlistItem[]
+  follows                  Follow[]
+  resaleListings           ResaleListing[]
+  supportCase_reporter     SupportCase[]           @relation("User_reporter")
+  supportCase_resolvedBy   SupportCase[]           @relation("User_resolvedBy")
+  supplyBatchs             SupplyBatch[]
 }
 
 /// A user's reusable address book entry. Orders never point at this row for
 /// their shipping/billing detail — they snapshot it into OrderAddress, so
 /// editing or archiving an address never rewrites order history.
 model Address {
-  id                String       @id @db.Uuid
-  userId            String       @db.Uuid
-  user              User         @relation(fields: [userId], references: [id])
+  id                String    @id @db.Uuid
+  userId            String    @db.Uuid
+  user              User      @relation(fields: [userId], references: [id])
   label             AddressLabel
   labelCustom       String?
   recipientName     String
@@ -1954,3 +2009,4 @@ model Address {
 enum UserRole {
   USER
 }
+

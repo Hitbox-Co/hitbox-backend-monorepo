@@ -10,14 +10,26 @@
 // to GLOBAL, one ORG, or the actor's OWN records.
 // ============================================================================
 
-/// A named bundle of permissions, e.g. `brand_release_manager`.
-/// `entityGroup` records which persona family the role belongs to (buyer,
-/// brand, artist, HitBox staff) for grouping in admin UIs.
+/// A named bundle of permissions, e.g. `HITBOX_CONTENT_MANAGER`.
+/// `entityGroup` records which persona family the role belongs to (end_user,
+/// brand_artist, hitbox_seller_org) for grouping in admin UIs.
+///
+/// `domain` is the security boundary: a BUSINESS role may hold only BUSINESS
+/// permissions and a TECHNICAL role only TECHNICAL ones. The engine and the
+/// role service both enforce it, so "platform engineer" can never quietly
+/// acquire `order:refund`. A person who genuinely needs both holds two role
+/// assignments.
+///
+/// `isSystem` marks roles seeded from the code-side catalog. They cannot be
+/// renamed or deleted through the admin API — deleting HITBOX_SYSTEM_ADMIN
+/// would lock everyone out of the platform.
 model Role {
-  id          String   @id @db.Uuid
-  name        String   @unique
+  id          String              @id @db.Uuid
+  name        String              @unique
   displayName String
   entityGroup String
+  domain      AuthorizationDomain
+  isSystem    Boolean
   isActive    Boolean
   createdAt   DateTime
 
@@ -29,11 +41,16 @@ model Role {
 /// `key` column is the flat form used in code checks (e.g. `drop:publish:org`);
 /// the (resource, action, scope) triple is the canonical identity.
 model Permission {
-  id          String           @id @db.Uuid
+  id          String              @id @db.Uuid
   resource    ResourceType
   action      PermissionAction
   scope       PermissionScope
-  key         String           @unique
+  key         String              @unique
+  /// Which authorization domain this capability belongs to. Derived from the
+  /// resource (see RESOURCE_DOMAIN in the permission catalog), never chosen
+  /// per-row, so a resource cannot be business in one permission and
+  /// technical in another.
+  domain      AuthorizationDomain
   description String?
   isActive    Boolean
   createdAt   DateTime
@@ -99,6 +116,10 @@ enum PermissionAction {
   EXPORT // reports & dashboards
   CONFIGURE // platform / gateway config
   OVERRIDE // admin override
+  // ── Technical-domain verbs (APPLICATION / INFRASTRUCTURE resources) ──────
+  DEBUG // read logs, traces, run diagnostics
+  DEPLOY // ship a release / apply infrastructure
+  RESTART // bounce a service or node
 }
 
 /// The protected surfaces a permission can apply to. Deliberately coarser than
@@ -127,21 +148,55 @@ enum ResourceType {
   GENERAL_LOCATION
   AGE_SPECIFIC_FLAG
   ADDRESS
+  /// Running THIS application: releases, logs, diagnostics, app config.
+  /// Technical domain — no business role holds these.
+  APPLICATION
+  /// Running the platform it sits on: nodes, networking, provisioning.
+  /// Technical domain — no business role holds these.
+  INFRASTRUCTURE
 }
 
-/// How wide a permission reaches. Mirrors RoleScopeType — a grant's breadth is
-/// declared on the Permission, an assignment's breadth on the RoleAssignment,
-/// and an access check requires both to line up.
+/// The two authorization domains. Domain is a hard boundary, not a label: a
+/// role may only be granted permissions of its own domain, so business roles
+/// never acquire deploy rights and technical roles never acquire refund
+/// rights. Cross-domain access is expressed by giving a person two role
+/// assignments, never by widening one role.
+enum AuthorizationDomain {
+  BUSINESS
+  TECHNICAL
+}
+
+/// How far a permission reaches, along two axes at once — *breadth* (whose
+/// records) and *visibility* (how much of each record). The engine resolves
+/// both from this single value (see SCOPE_REACH in the permission catalog):
+///
+///   value          breadth        visibility
+///   ─────────────  ─────────────  ──────────
+///   GLOBAL         all records    full
+///   ORG            one org        full
+///   OWN            actor's own    full
+///   MASKED_PARTIAL all records    partially redacted   (e.g. Order Manager)
+///   MASKED         all records    fully redacted       (e.g. Support)
+///   PUBLIC         all records    public fields only   (e.g. buyer browsing)
+///
+/// Two roles can therefore hold the *same* capability at different
+/// visibilities — `buyer-profile:read:masked` for Support vs
+/// `buyer-profile:read:masked-partial` for the Order Manager — and one
+/// endpoint serves both, shaping its response from the granted scope the
+/// engine returns.
 enum PermissionScope {
   GLOBAL
-  ORG
+  ORGANIZATION
   OWN
+  PUBLIC
+  MASKED
+  MASKED_PARTIAL
 }
 
 /// How wide a role assignment reaches: everything (GLOBAL), one organization
 /// (ORG, with scopeId set), or only the actor's own records (OWN).
 enum RoleScopeType {
-  ORG
+  ORGANIZATION
   OWN
   GLOBAL
 }
