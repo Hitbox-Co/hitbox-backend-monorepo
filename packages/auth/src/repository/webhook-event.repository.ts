@@ -15,8 +15,18 @@ export class WebhookEventRepository {
     }
 
     async markProcessed(id: string, type: string, payload: unknown): Promise<void> {
+        const now = new Date();
         await this.prisma.authWebhookEvent.create({
-            data: { id, type, payload: payload as Prisma.InputJsonValue },
+            // `type` was renamed `eventType` in the schema decomposition, and
+            // the model carries no column defaults, so both timestamps are
+            // written explicitly here.
+            data: {
+                id,
+                eventType: type,
+                payload: payload as Prisma.InputJsonValue,
+                receivedAt: now,
+                processedAt: now,
+            },
         });
     }
 }

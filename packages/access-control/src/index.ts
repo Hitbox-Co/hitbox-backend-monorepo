@@ -1,11 +1,115 @@
 /**
  * @hitbox/access-control
  *
- * RBAC — roles, permissions, role-permission grants and scoped role assignments.
+ * Authorization: roles, the system permission catalog, scoped role
+ * assignments, and the engine that turns them into ALLOW / DENY.
  *
- * Schema-only at this stage: this module owns its Prisma partial under
- * ./prisma, which shared/database merges into the generated schema. The
- * repository / service / controller layers land here as the feature is
- * built — see docs/database-architecture.md for the ownership map.
+ * Business modules should need only three things from here:
+ *   `guard.requirePermission('order:refund')` on a route,
+ *   `guard.authorize(req, 'order:refund', { organizationId })` after a load,
+ *   and `req.authz.visibility` to decide how much of a record to reveal.
+ *
+ * Nothing outside this package should branch on a role name.
  */
-export const MODULE_NAME = "access-control" as const;
+
+// Module factory
+export { createAccessControlModule } from './module';
+export type { AccessControlModule, AccessControlModuleDeps } from './module';
+
+// Constants
+export {
+    ACCESS_CONTROL_ERROR_CODES,
+    ACCESS_CONTROL_EVENTS,
+    ACCESS_CONTROL_MODULE,
+} from './constants/access-control.constant';
+export type { AccessControlEventName } from './constants/access-control.constant';
+
+// Engine
+export { can, decide, effectivePermissionKeys } from './engine/authorization-engine';
+export type {
+    AccessContext,
+    AccessDecision,
+    AccessGrantDetail,
+    AccessRequest,
+} from './engine/authorization-engine';
+
+// Guard
+export { createRequirePermission } from './middleware/require-permission.middleware';
+export type {
+    AccessContextResolver,
+    AuthzContext,
+    PermissionGuard,
+    PrincipalIdResolver,
+    RequirePermissionOptions,
+} from './middleware/require-permission.middleware';
+
+// Permission catalog (§10 — the authority on what exists)
+export {
+    ACTION_IMPLIES,
+    PERMISSION_CATALOG,
+    RESOURCE_DISPLAY,
+    RESOURCE_DOMAIN,
+    SCOPE_REACH,
+    ScopeBreadth,
+    ScopeVisibility,
+    VISIBILITY_RANK,
+    actionSatisfies,
+    catalogPermissionsForDomain,
+    findCatalogPermission,
+    isCatalogPermission,
+    permissionGroups,
+} from './domain/permission-catalog';
+export type {
+    CatalogPermission,
+    PermissionGroup,
+    ScopeReach,
+} from './domain/permission-catalog';
+
+// Role catalog
+export { ROLE_CATALOG, ROLE_NAMES, findRoleDefinition } from './domain/role-catalog';
+export type { EntityGroup, RoleDefinition } from './domain/role-catalog';
+
+// Permission key (de)serialisation
+export {
+    actionToken,
+    formatCapability,
+    formatPermissionKey,
+    parseCapability,
+    parsePermissionKey,
+    parsePermissionKeyOrThrow,
+    resourceToken,
+    scopeToken,
+} from './domain/permission-key';
+export type { ParsedCapability, ParsedPermissionKey } from './domain/permission-key';
+
+// Ports
+export type {
+    IPrincipalGrantsLookup,
+    Principal,
+    PrincipalGrant,
+} from './domain/interfaces/principal-grants.interface';
+
+// Service response contracts
+export type { RoleResponse } from './service/role.service';
+export type { AssignmentResponse } from './service/role-assignment.service';
+
+// DTOs
+export {
+    assignRoleSchema,
+    createRoleSchema,
+    listPermissionsQuerySchema,
+    listRolesQuerySchema,
+    revokeRoleQuerySchema,
+    updateRoleSchema,
+} from './dto/access-control.dto';
+export type {
+    AssignRoleDto,
+    CreateRoleDto,
+    ListPermissionsQuery,
+    ListRolesQuery,
+    UpdateRoleDto,
+} from './dto/access-control.dto';
+
+// Seeding
+export { seedAccessControl } from './seed/seed-access-control';
+export type { SeedResult } from './seed/seed-access-control';

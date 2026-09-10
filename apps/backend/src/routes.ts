@@ -11,6 +11,15 @@ export interface ApiRouters {
     claims: Router;
     verify: Router;
     ledger: Router;
+    /** The caller's own effective permissions — GET /authz/me. */
+    authz: Router;
+    /**
+     * Generic authorization administration: roles, the permission catalog and
+     * user-role assignments. ONE namespace for all of it — there is
+     * deliberately no /content-manager, /order-manager or /finance-admin
+     * route group, because roles are not API namespaces.
+     */
+    adminAuthz: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -30,6 +39,8 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/claims', routers.claims);
     api.use('/verify', routers.verify);
     api.use('/ledger', routers.ledger);
+    api.use('/authz', routers.authz);
+    api.use('/admin/authz', routers.adminAuthz);
 
     return api;
 }

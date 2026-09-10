@@ -2,6 +2,7 @@ import type { Router } from 'express';
 import { prisma } from '@hitbox/database';
 import { eventBus } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
+import { createAccessControlModule } from '@hitbox/access-control';
 import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
@@ -38,6 +39,16 @@ export function bootstrap(): Bootstrapped {
         accounts: usersModule.accountLookup,
     });
 
+    // Authorization. Depends on nothing but prisma + the event bus; the
+    // principal resolver is the adapter that lets it read the authenticated
+    // account without importing @hitbox/auth (see §6 of the architecture doc
+    // — consumer defines the port, bootstrap connects it).
+    const accessControlModule = createAccessControlModule({
+        prisma,
+        eventBus,
+        resolvePrincipalId: (req) => req.auth?.accountId,
+    });
+
     const productsModule = createProductsModule({ prisma, eventBus });
 
     const discoverModule = createDiscoverModule({
@@ -72,6 +83,8 @@ export function bootstrap(): Bootstrapped {
         claims: claimsRouters.claims,
         verify: claimsRouters.verify,
         ledger: claimsRouters.ledger,
+        authz: accessControlModule.createSelfRouter(authModule.requireAuth),
+        adminAuthz: accessControlModule.createAdminRouter(authModule.requireAuth),
     });
 
     // Public website (hitboxcollectibles.com) — its own database, no
