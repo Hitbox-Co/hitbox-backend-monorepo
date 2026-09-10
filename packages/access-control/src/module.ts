@@ -3,8 +3,12 @@ import type { RequestHandler } from 'express';
 import type { PrismaClient } from '@hitbox/database';
 import { createModuleLogger } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
+import { LayeredGrantsCache } from './cache/grants-cache';
+import type { GrantsCacheOptions, GrantsCacheStats } from './cache/grants-cache';
 import { ACCESS_CONTROL_MODULE } from './constants/access-control.constant';
 import { AuthzController } from './controller/authz.controller';
+import type { IGrantsInvalidator } from './domain/interfaces/grants-invalidator.interface';
+import { NOOP_GRANTS_INVALIDATOR } from './domain/interfaces/grants-invalidator.interface';
 import type { IPrincipalGrantsLookup } from './domain/interfaces/principal-grants.interface';
 import { createRequirePermission } from './middleware/require-permission.middleware';
 import type {
@@ -27,6 +31,13 @@ export interface AccessControlModuleDeps {
      * independent of the authentication provider.
      */
     resolvePrincipalId: PrincipalIdResolver;
+    /**
+     * Grant caching. Omit for the default three-layer cache
+     * (in-process → Redis → Postgres). Pass `false` to read straight from the
+     * database on every check — useful in tests and for debugging an
+     * authorization decision without cache interference.
+     */
+    cache?: false | GrantsCacheOptions;
 }
 
 export interface AccessControlModule {
@@ -44,6 +55,16 @@ export interface AccessControlModule {
     createSelfRouter(requireAuth: RequestHandler): Router;
     /** Mirrors the code catalog into the permissions table. */
     syncPermissionCatalog(): Promise<{ created: number; updated: number; deactivated: number }>;
+    /**
+     * Subscribes the in-process cache to cross-instance invalidation
+     * broadcasts. Call once after bootstrap; no-ops when caching is disabled
+     * or REDIS_URL is unset.
+     */
+    startCache(): Promise<void>;
+    /** Releases the pub/sub connection. Call on graceful shutdown. */
+    stopCache(): Promise<void>;
+    /** Per-layer hit/miss counters, or null when caching is disabled. */
+    cacheStats(): GrantsCacheStats | null;
 }
 
 export function createAccessControlModule(
@@ -55,8 +76,23 @@ export function createAccessControlModule(
     const roleRepo = new RoleRepository(deps.prisma);
     const assignmentRepo = new RoleAssignmentRepository(deps.prisma);
 
+    // The cache decorates the repository rather than living inside it: the
+    // repository stays a pure Postgres reader, and the engine is handed one
+    // IPrincipalGrantsLookup either way and never learns which it got.
+    const grantsCache =
+        deps.cache === false
+            ? null
+            : new LayeredGrantsCache({
+                source: assignmentRepo,
+                logger,
+                ...(deps.cache ? { options: deps.cache } : {}),
+            });
+
+    const grants: IPrincipalGrantsLookup = grantsCache ?? assignmentRepo;
+    const invalidator: IGrantsInvalidator = grantsCache ?? NOOP_GRANTS_INVALIDATOR;
+
     const guard = createRequirePermission({
-        grants: assignmentRepo,
+        grants,
         resolvePrincipalId: deps.resolvePrincipalId,
     });
 
@@ -64,6 +100,7 @@ export function createAccessControlModule(
         roles: roleRepo,
         permissions: permissionRepo,
         eventBus: deps.eventBus,
+        cache: invalidator,
         logger,
     });
     const permissionService = new PermissionService();
@@ -71,6 +108,7 @@ export function createAccessControlModule(
         assignments: assignmentRepo,
         roles: roleRepo,
         eventBus: deps.eventBus,
+        cache: invalidator,
         logger,
     });
 
@@ -85,7 +123,7 @@ export function createAccessControlModule(
 
     return {
         guard,
-        grants: assignmentRepo,
+        grants,
 
         createAdminRouter(requireAuth) {
             const router = Router();
@@ -167,8 +205,26 @@ export function createAccessControlModule(
             return router;
         },
 
-        syncPermissionCatalog() {
-            return permissionRepo.syncCatalog();
+        async syncPermissionCatalog() {
+            const result = await permissionRepo.syncCatalog();
+            // Deactivating a retired permission changes what its holders can
+            // do, so a sync that touched anything must flush.
+            if (result.created || result.updated || result.deactivated) {
+                await invalidator.invalidateAll('permission catalog synced');
+            }
+            return result;
+        },
+
+        startCache() {
+            return grantsCache?.start() ?? Promise.resolve();
+        },
+
+        stopCache() {
+            return grantsCache?.stop() ?? Promise.resolve();
+        },
+
+        cacheStats() {
+            return grantsCache?.stats() ?? null;
         },
     };
 }

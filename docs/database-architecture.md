@@ -269,7 +269,7 @@ exists. Both are already present in the root `.env`, which
 
 Applied to Neon as two migrations — the baseline `20260910073121_init_hitbox_platform` and
 `20260910101500_add_authorization_domain_and_scopes` (the RBAC additions, see
-[authorization-architecture.md](authorization-architecture.md) §2):
+[authorization-architecture.md](authorization/authorization-architecture.md) §2):
 
 - **54 tables** (53 models + `_prisma_migrations`)
 - **46 enum types**
@@ -306,7 +306,7 @@ These are deliberate records of what the schema does *not* yet do, not a backlog
    encode the PII visibility levels the RBAC work needed. `RoleScopeType`'s `ORG` member was
    renamed `ORGANIZATION` at the same time so both enums, the permission-key strings and the
    requirements matrix share one word. See
-   [authorization-architecture.md](authorization-architecture.md) §3.
+   [authorization-architecture.md](authorization/authorization-architecture.md) §3.
 
 5. **No `onDelete` behaviour is declared** on any relation, so every FK uses Prisma's default
    (`Restrict` for required relations, `SetNull` for optional). That is a safe default — nothing

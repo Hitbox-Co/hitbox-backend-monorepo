@@ -62,13 +62,18 @@ function makeService(overrides: {
             ),
         findAll: jest.fn().mockResolvedValue([]),
     };
+    const cache = {
+        invalidateUser: jest.fn().mockResolvedValue(undefined),
+        invalidateAll: jest.fn().mockResolvedValue(undefined),
+    };
     const service = new RoleService({
         roles: roles as never,
         permissions: permissions as never,
         eventBus: eventBus as never,
+        cache,
         logger,
     });
-    return { service, roles, permissions };
+    return { service, roles, permissions, cache };
 }
 
 beforeEach(() => {
@@ -227,6 +232,37 @@ describe('operator-defined roles', () => {
         expect(roles.delete).toHaveBeenCalledWith('role_1');
     });
 
+    it('flushes the grant cache when a permission set changes', async () => {
+        const { service, cache } = makeService();
+        await service.update('role_1', { permissions: ['order:read:global'] });
+        // Role-shaped changes affect an unknown set of holders.
+        expect(cache.invalidateAll).toHaveBeenCalled();
+    });
+
+    it('flushes the grant cache on delete', async () => {
+        const { service, cache } = makeService({ assignmentCount: 0 });
+        await service.delete('role_1');
+        expect(cache.invalidateAll).toHaveBeenCalled();
+    });
+
+    it('does not flush on create — nobody holds a brand-new role yet', async () => {
+        const { service, cache } = makeService();
+        await service.create({
+            name: 'FRESH_ROLE',
+            displayName: 'Fresh',
+            entityGroup: 'hitbox_seller_org',
+            domain: AuthorizationDomain.BUSINESS,
+            permissions: ['order:read:global'],
+        });
+        expect(cache.invalidateAll).not.toHaveBeenCalled();
+    });
+
+    it('does not flush when a write is rejected', async () => {
+        const { service, cache } = makeService({ assignmentCount: 3 });
+        await service.delete('role_1').catch(() => undefined);
+        expect(cache.invalidateAll).not.toHaveBeenCalled();
+    });
+
     it('404s on an unknown role', async () => {
         const { service } = makeService({ role: null });
         await expect(service.getById('nope')).rejects.toMatchObject({ statusCode: 404 });
@@ -265,13 +301,18 @@ describe('role assignment', () => {
         const roles = {
             findById: jest.fn().mockResolvedValue(overrides.role ?? roleRow()),
         };
+        const cache = {
+            invalidateUser: jest.fn().mockResolvedValue(undefined),
+            invalidateAll: jest.fn().mockResolvedValue(undefined),
+        };
         const service = new RoleAssignmentService({
             assignments: assignments as never,
             roles: roles as never,
             eventBus: eventBus as never,
+            cache,
             logger,
         });
-        return { service, assignments };
+        return { service, assignments, cache };
     }
 
     it('defaults a brand role to organization scope', async () => {
@@ -323,6 +364,36 @@ describe('role assignment', () => {
         await expect(
             service.assign({ userId: USER, dto: { roleId: 'role_1' }, grantedById: 'admin_1' }),
         ).rejects.toMatchObject({ statusCode: 400 });
+    });
+
+    it("evicts the target user's cached grants on assign", async () => {
+        const { service, cache } = makeAssignmentService();
+        await service.assign({
+            userId: USER,
+            dto: { roleId: 'role_1' },
+            grantedById: 'admin_1',
+        });
+        // Precise, not a full flush — only this user's grants changed.
+        expect(cache.invalidateUser).toHaveBeenCalledWith(USER);
+        expect(cache.invalidateAll).not.toHaveBeenCalled();
+    });
+
+    it("evicts the target user's cached grants on revoke", async () => {
+        const { service, cache } = makeAssignmentService({
+            userAssignments: [
+                { id: 'assign_1', roleId: 'role_1', scopeId: null, role: roleRow() },
+            ],
+        });
+        await service.revoke({ userId: USER, roleId: 'role_1', revokedById: 'admin_1' });
+        expect(cache.invalidateUser).toHaveBeenCalledWith(USER);
+    });
+
+    it('does not evict when an assignment is rejected as a duplicate', async () => {
+        const { service, cache } = makeAssignmentService({ live: { id: 'assign_existing' } });
+        await service
+            .assign({ userId: USER, dto: { roleId: 'role_1' }, grantedById: 'admin_1' })
+            .catch(() => undefined);
+        expect(cache.invalidateUser).not.toHaveBeenCalled();
     });
 
     it('records who granted the role', async () => {

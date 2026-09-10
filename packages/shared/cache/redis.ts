@@ -23,4 +23,25 @@ export function getRedis(): Redis | null {
     return client;
 }
 
+/**
+ * A dedicated connection for pub/sub subscriptions.
+ *
+ * Redis puts a connection into subscriber mode once it SUBSCRIBEs, after
+ * which it can no longer run normal commands — so a subscriber must never
+ * share the client returned by `getRedis()`. Returns null when REDIS_URL is
+ * unset, exactly like `getRedis()`, so callers degrade instead of failing.
+ *
+ * The caller owns the returned connection and should `quit()` it on shutdown.
+ */
+export function createRedisSubscriber(name: string): Redis | null {
+    const primary = getRedis();
+    if (!primary) return null;
+
+    const subscriber = primary.duplicate();
+    subscriber.on('error', (err: unknown) =>
+        logger.error({ err, subscriber: name }, 'redis subscriber error'),
+    );
+    return subscriber;
+}
+
 export type { Redis };

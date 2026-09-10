@@ -6,6 +6,7 @@ import {
     ACCESS_CONTROL_ERROR_CODES,
     ACCESS_CONTROL_EVENTS,
 } from '../constants/access-control.constant';
+import type { IGrantsInvalidator } from '../domain/interfaces/grants-invalidator.interface';
 import { findCatalogPermission } from '../domain/permission-catalog';
 import type { CreateRoleDto, ListRolesQuery, UpdateRoleDto } from '../dto/access-control.dto';
 import type { PermissionRepository } from '../repository/permission.repository';
@@ -27,6 +28,11 @@ export interface RoleServiceDeps {
     roles: RoleRepository;
     permissions: PermissionRepository;
     eventBus: IEventBus;
+    /**
+     * Editing or retiring a role changes what an unknown set of users may do,
+     * so these paths flush the whole cache rather than guess the set.
+     */
+    cache: IGrantsInvalidator;
     logger: Logger;
 }
 
@@ -99,6 +105,11 @@ export class RoleService {
             role = await this.deps.roles.replacePermissions(id, permissionIds);
         }
 
+        // A changed permission set or a deactivated role re-authorises every
+        // holder, and we do not know who they are without a query. Role
+        // definitions change rarely, so an O(1) flush is the right trade.
+        await this.deps.cache.invalidateAll(`role ${role.name} updated`);
+
         this.deps.logger.info({ roleId: id, name: role.name }, 'role updated');
         await this.deps.eventBus.publish(ACCESS_CONTROL_EVENTS.ROLE_UPDATED, {
             roleId: id,
@@ -130,6 +141,8 @@ export class RoleService {
         }
 
         await this.deps.roles.delete(id);
+        await this.deps.cache.invalidateAll(`role ${role.name} deleted`);
+
         this.deps.logger.info({ roleId: id, name: role.name }, 'role deleted');
         await this.deps.eventBus.publish(ACCESS_CONTROL_EVENTS.ROLE_DELETED, {
             roleId: id,

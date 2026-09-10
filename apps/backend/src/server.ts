@@ -4,13 +4,20 @@ import { leadsPrisma } from "@hitbox/leads";
 import { createApp } from "./app";
 import { bootstrap } from "./bootstrap";
 
-const app = createApp(bootstrap());
+const bootstrapped = bootstrap();
+const app = createApp(bootstrapped);
 
 const HOST = "0.0.0.0";
 
 const server = app.listen(env.PORT, HOST, () => {
     logger.info(`🚀 Server running on ${HOST}:${env.PORT}`);
 });
+
+// Subscribe the authorization cache to invalidation broadcasts so a role
+// revoked on another instance is evicted here within milliseconds rather
+// than waiting out the in-process TTL.
+void bootstrapped.startCaches().catch((err: unknown) =>
+    logger.warn({ err }, 'authz cache subscription failed — staleness bounded by its TTL'));
 
 // Warm the DB connection at boot, then keep it alive — Neon drops idle
 // connections, which otherwise makes the first request after idle slow/fail.
@@ -24,7 +31,11 @@ keepWarm.unref();
 function shutdown(signal: string): void {
     logger.info({ signal }, "shutting down");
     server.close(() => {
-        Promise.allSettled([prisma.$disconnect(), leadsPrisma.$disconnect()])
+        Promise.allSettled([
+            bootstrapped.stopCaches(),
+            prisma.$disconnect(),
+            leadsPrisma.$disconnect(),
+        ])
             .catch((error: unknown) => logger.error({ err: error }, "prisma disconnect failed"))
             .finally(() => process.exit(0));
     });

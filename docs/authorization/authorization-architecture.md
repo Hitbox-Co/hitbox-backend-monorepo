@@ -3,8 +3,8 @@
 > How the platform decides ALLOW or DENY: the two authorization domains, the permission catalog,
 > the engine, and the rules that keep a deploy key from issuing refunds.
 >
-> Companion reading: [hitbox-architecture.md](hitbox-architecture.md) (module layering, ports,
-> events), [database-architecture.md](database-architecture.md) (schema ownership).
+> Companion reading: [hitbox-architecture.md](../hitbox-architecture.md) (module layering, ports,
+> events), [database-architecture.md](../database-architecture.md) (schema ownership).
 
 ---
 
@@ -51,9 +51,10 @@ Two rules do most of the work:
 | Role catalog | `packages/access-control/src/domain/role-catalog.ts` | 12 roles |
 | Engine | `packages/access-control/src/engine/authorization-engine.ts` | 1 pure function |
 | Guard | `packages/access-control/src/middleware/require-permission.middleware.ts` | `requirePermission` / `authorize` |
+| Grant cache | `packages/access-control/src/cache/` | 3 layers + per-request memo |
 | Admin API | `/api/v1/admin/authz/*` | 9 endpoints |
 | Self API | `/api/v1/authz/me` | 1 endpoint |
-| Tests | `packages/access-control/tests/` | 228 across 6 suites |
+| Tests | `packages/access-control/tests/` | 265 across 7 suites |
 
 Seeded into Neon by `pnpm db:seed:authz`: **86 permissions** (74 BUSINESS + 12 TECHNICAL),
 **12 system roles**, **119 role-permission grants**, **0 cross-domain grants**.
@@ -223,7 +224,7 @@ not to this application's authorization system.
 
 2. requirePermission('order:refund')          ← the route names a CAPABILITY
       resolvePrincipalId(req)  ──▶ accountId        (no principal ⇒ 401, a wiring bug)
-      findGrantsByUserId(accountId)
+      findGrantsByUserId(accountId)             <- L1 -> L2 -> Postgres (see §7)
           RoleAssignment (revokedAt: null)
             → Role       (isActive)
               → RolePermission
@@ -270,7 +271,114 @@ The principal is loaded once per request, so the second check costs nothing.
 
 ---
 
-## 7. APIs
+## 7. Grant caching
+
+Loading a principal's grants means a four-table join
+(`RoleAssignment -> Role -> RolePermission -> Permission`) and it happens on **every** permission
+check. Three layers sit in front of it, plus a per-request memo:
+
+```text
+   L0  per-request WeakMap     several checks in one request -> one lookup
+        |  miss
+        v
+   L1  in-process Map          zero network. TTL 15 s, LRU-bounded to 5k users
+        |  miss
+        v
+   L2  Redis                   shared by every instance. TTL 60 s
+        |  miss                key: authz:grants:{epoch}:{userId}
+        v
+   L3  PostgreSQL              source of truth. Never bypassed on a miss.
+```
+
+A read walks down until something answers, then **back-fills upward** — so an instance with a cold
+L1 but a warm L2 costs one Redis `GET` instead of the join. Measured against the real stack: first
+read = 1 Postgres query; second read = 0; a second instance sharing Redis = 0 Postgres queries.
+
+The cache is a **decorator** around `RoleAssignmentRepository`, not logic inside it. The repository
+stays a pure Postgres reader, and the engine receives an `IPrincipalGrantsLookup` either way and
+never learns which one it got. `createAccessControlModule({ cache: false })` reads straight from
+Postgres — useful in tests and when debugging a decision without cache interference.
+
+### Why this needs more care than caching a product listing
+
+A stale product listing is a cosmetic bug. **A stale grant is a revoked administrator who still
+has access.** So the design is invalidation-first, with TTLs only as a backstop:
+
+| Trigger | Action | Cost |
+|---|---|---|
+| Role assigned / revoked | `invalidateUser` — evict L1, `DEL` the L2 key, broadcast | O(1), precise |
+| Role's permissions edited, role deactivated or deleted | `invalidateAll` — clear L1, `INCR` the epoch, broadcast | O(1), blunt |
+| Permission catalog re-synced (if anything changed) | `invalidateAll` | O(1) |
+
+Four mechanisms make that hold up in practice:
+
+1. **Invalidation is awaited before the response.** `RoleAssignmentService` awaits
+   `invalidateUser` *before* returning, so a revoke is effective by the time the caller sees its
+   `204` — not one TTL later. This is why invalidation is an injected port
+   (`IGrantsInvalidator`) rather than an event-bus subscriber: the in-process bus dispatches on
+   `setImmediate`, which would land after the response.
+
+2. **An epoch counter replaces `SCAN`.** Editing a role changes what an unknown set of users may
+   do. Finding them means querying every assignment; instead a counter in the L2 key namespace is
+   `INCR`'d, and every cached entry everywhere becomes unreachable in one command. The orphaned
+   keys expire on their own TTL — no `SCAN`, which blocks a production Redis, and no `DEL` storm.
+
+3. **Pub/sub evicts L1 across instances.** L1 lives inside a process, so Redis alone cannot reach
+   it. Every invalidation is published on `authz:grants:invalidate`; each instance subscribes on a
+   dedicated connection (a Redis connection in subscriber mode cannot run normal commands) and
+   clears the affected entry within milliseconds. A publisher ignores the echo of its own message,
+   having already applied it locally.
+
+4. **A failed eviction stops trusting L2.** Pub/sub is at-most-once and a `DEL` can fail. If the
+   distributed half of an invalidation does not land, a stale entry may still be sitting in Redis
+   — so that instance **bypasses L2 for one L2 TTL** rather than serving it back. The L2 TTL is
+   deliberately 60 s, not 5 minutes, because it is the blast radius of exactly this case.
+
+### Failure behaviour
+
+Every layer fails to **the layer below**, never to "allow":
+
+| Condition | Behaviour |
+|---|---|
+| `REDIS_URL` unset | L1 + Postgres only. Logged once at boot. Staleness bounded by the 15 s L1 TTL. |
+| Redis read throws | Falls through to Postgres. Warned; request succeeds with correct data. |
+| Redis write throws | Cache skipped. Request succeeds. |
+| Invalidation throws | L1 already evicted locally; L2 distrusted for one TTL; logged at `error`. The mutating request still succeeds — the database, the source of truth, was already written. |
+| Pub/sub message missed | That instance's L1 self-expires within 15 s. |
+
+There is no configuration in which a cache failure grants access that Postgres would deny.
+
+### Worst-case staleness
+
+| Scenario | Window |
+|---|---|
+| Normal revoke (Redis healthy) | Effective immediately on every instance |
+| Broadcast missed by one instance | <= 15 s (L1 TTL) on that instance |
+| Redis `DEL` failed during revoke | <= 15 s locally; <= 60 s on instances that had it cached |
+| Redis entirely down | <= 15 s |
+
+Note this is staleness of *cached grants*, not of the Clerk session — revoking a role does not
+invalidate a session, it removes what that session may do (see §13, open item 5).
+
+### Operating it
+
+`module.cacheStats()` returns per-layer counters — L1 hits/misses/evictions/expirations, L2
+hits/misses, source loads, current epoch, whether L2 is trusted, whether Redis is available, and
+whether the subscriber is live. Worth surfacing on an ops dashboard: a collapsing L1 hit rate
+means the TTL is too short for the traffic shape, and `l2Trusted: false` means invalidations are
+failing.
+
+Tunables live in `constants/access-control.constant.ts`
+(`AUTHZ_CACHE_L1_TTL_MS`, `AUTHZ_CACHE_L1_MAX_ENTRIES`, `AUTHZ_CACHE_L2_TTL_SECONDS`) and can be
+overridden per instance via `createAccessControlModule({ cache: { ... } })`.
+
+`bootstrap()` exposes `startCaches()` / `stopCaches()`, called from `server.ts` on boot and on
+`SIGINT`/`SIGTERM`. Skipping `startCaches()` is safe — caching still works, instances just learn
+about each other's invalidations via TTL rather than broadcast.
+
+---
+
+## 8. APIs
 
 One generic set of endpoints for all authorization administration — no screen or route per role.
 
@@ -317,7 +425,7 @@ prior system had none to preserve.
 
 ---
 
-## 8. Database changes
+## 9. Database changes
 
 Migration `20260910101500_add_authorization_domain_and_scopes`, applied to Neon.
 
@@ -347,7 +455,7 @@ exists". Every real privilege is a `RoleAssignment`.
 
 ---
 
-## 9. Seeding
+## 10. Seeding
 
 ```bash
 pnpm db:seed:authz
@@ -372,7 +480,7 @@ After that, every further grant goes through the API and is attributed and revoc
 
 ---
 
-## 10. Tests
+## 11. Tests
 
 228 tests, 6 suites, in `packages/access-control/tests/`. They build principals from the **real**
 catalogs and run the **real** engine, so a test cannot drift from the thing it checks — editing a
@@ -385,14 +493,15 @@ role's permissions changes what the tests see.
 | `authorization-engine.test.ts` | Default deny; MANAGE expansion and its limits; organization isolation both ways; own-record scoping; visibility precedence; multi-role union without escalation; field allowlist passthrough |
 | `require-permission.test.ts` | 403 on missing capability, 401 on missing principal, boot-time throw on a malformed guard, per-request principal memoisation, `authorize()` after load, `/authz/me` shape |
 | `permission-catalog.test.ts` | Catalog integrity, canonical keys, unique triples, scope decomposition, key parsing and aliases, §12 grouping, and that invented permission strings are rejected |
-| `role.service.test.ts` | Cross-domain writes rejected both directions; system roles immutable and undeletable; delete blocked while assigned; assignment scope defaults and duplicate/revoke handling |
+| `role.service.test.ts` | Cross-domain writes rejected both directions; system roles immutable and undeletable; delete blocked while assigned; assignment scope defaults and duplicate/revoke handling; that assign/revoke evict precisely and role edits flush, while rejected writes evict nothing |
+| `grants-cache.test.ts` | L1 TTL expiry and LRU bounding; the L1->L2->source walk and upward back-fill; per-user keying; empty-grant caching; precise vs. epoch invalidation; pub/sub eviction across instances and self-echo suppression; degradation with no Redis, on read failure, and on failed eviction (including the L2 distrust window) |
 
 The isolation suite is table-driven over every role, so a newly added role is automatically
 checked against both forbidden lists.
 
 ---
 
-## 11. Adding to the system
+## 12. Adding to the system
 
 **Guard a new endpoint** — name the capability, never the role:
 
@@ -413,7 +522,7 @@ resource a compile error.
 
 ---
 
-## 12. Decisions and open questions
+## 13. Decisions and open questions
 
 ### Decisions
 
@@ -469,9 +578,11 @@ resource a compile error.
 3. **No audit rows written yet.** Role create/update/delete/assign/revoke publish events on the
    bus and log structured lines, but nothing subscribes to write `AuditEvent`. The audit module
    owns those tables; wiring a subscriber is a small, separate change.
-4. **Grants are read per request, uncached.** One indexed query joining four tables. Fine now;
-   when it matters, cache by `userId` in Redis (`@hitbox/shared` already exposes `getRedis`) and
-   invalidate on the assign/revoke events that already exist.
+4. **Cache tuning is unmeasured.** The three-layer cache is in place (§7), but its TTLs
+   (15 s L1 / 60 s L2) are chosen for safety rather than from observed traffic — watch
+   `cacheStats()` under load and adjust. One case is knowingly unaddressed: a cold multi-instance
+   deployment can stampede, since N instances missing the same key all query Postgres. A per-key
+   in-flight promise map would coalesce them; not worth the complexity until the traffic exists.
 5. **Session invalidation on revoke is unresolved.** Revoking a role takes effect on the next
    request, since grants are read per request — but a Clerk session itself is not invalidated. That
    is the intended behaviour here; confirm it is acceptable.

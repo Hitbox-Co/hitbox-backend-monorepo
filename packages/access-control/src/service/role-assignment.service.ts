@@ -7,6 +7,7 @@ import {
     ACCESS_CONTROL_ERROR_CODES,
     ACCESS_CONTROL_EVENTS,
 } from '../constants/access-control.constant';
+import type { IGrantsInvalidator } from '../domain/interfaces/grants-invalidator.interface';
 import type { AssignRoleDto } from '../dto/access-control.dto';
 import type { RoleRepository } from '../repository/role.repository';
 import type {
@@ -32,6 +33,8 @@ export interface RoleAssignmentServiceDeps {
     assignments: RoleAssignmentRepository;
     roles: RoleRepository;
     eventBus: IEventBus;
+    /** Evicts the user's cached grants. Awaited, never fire-and-forget. */
+    cache: IGrantsInvalidator;
     logger: Logger;
 }
 
@@ -100,6 +103,10 @@ export class RoleAssignmentService {
             grantedById: input.grantedById,
         });
 
+        // Before the response, not on the event bus: a caller who just
+        // granted a role must see it take effect on their next request.
+        await this.deps.cache.invalidateUser(input.userId);
+
         this.deps.logger.info(
             {
                 assignmentId: assignment.id,
@@ -150,6 +157,12 @@ export class RoleAssignmentService {
         }
 
         const revoked = await this.deps.assignments.revoke(match.id);
+
+        // The security-critical direction. Awaiting this before responding is
+        // what makes a revoke effective by the time the caller sees 204,
+        // rather than up to one L1 TTL later.
+        await this.deps.cache.invalidateUser(input.userId);
+
         this.deps.logger.info(
             {
                 assignmentId: match.id,

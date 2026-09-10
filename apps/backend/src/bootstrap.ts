@@ -23,6 +23,14 @@ export interface Bootstrapped {
      * shares the mobile platform's @hitbox/database.
      */
     leadsRouter: Router;
+    /**
+     * Subscribes the authorization cache to cross-instance invalidation
+     * broadcasts. Until this runs, each process still caches locally but only
+     * learns about another instance's revoke when its short L1 TTL lapses.
+     */
+    startCaches(): Promise<void>;
+    /** Releases cache pub/sub connections on graceful shutdown. */
+    stopCaches(): Promise<void>;
 }
 
 /**
@@ -91,5 +99,10 @@ export function bootstrap(): Bootstrapped {
     // dependency on anything above. See docs/repo-structure.md.
     const leadsModule = createLeadsModule();
 
-    return { apiRouter, leadsRouter: leadsModule.router };
+    return {
+        apiRouter,
+        leadsRouter: leadsModule.router,
+        startCaches: () => accessControlModule.startCache(),
+        stopCaches: () => accessControlModule.stopCache(),
+    };
 }

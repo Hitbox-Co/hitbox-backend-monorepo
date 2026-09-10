@@ -82,6 +82,26 @@ export {
 } from './domain/permission-key';
 export type { ParsedCapability, ParsedPermissionKey } from './domain/permission-key';
 
+// Caching — three layers: in-process L1, Redis L2, Postgres source of truth
+export { LayeredGrantsCache } from './cache/grants-cache';
+export type {
+    GrantsCacheDeps,
+    GrantsCacheOptions,
+    GrantsCacheStats,
+} from './cache/grants-cache';
+export { InProcessStore } from './cache/in-process-store';
+export type { InProcessStoreOptions } from './cache/in-process-store';
+export { NOOP_GRANTS_INVALIDATOR } from './domain/interfaces/grants-invalidator.interface';
+export type { IGrantsInvalidator } from './domain/interfaces/grants-invalidator.interface';
+export {
+    AUTHZ_CACHE_EPOCH_KEY,
+    AUTHZ_CACHE_INVALIDATION_CHANNEL,
+    AUTHZ_CACHE_KEY_PREFIX,
+    AUTHZ_CACHE_L1_MAX_ENTRIES,
+    AUTHZ_CACHE_L1_TTL_MS,
+    AUTHZ_CACHE_L2_TTL_SECONDS,
+} from './constants/access-control.constant';
+
 // Ports
 export type {
     IPrincipalGrantsLookup,
