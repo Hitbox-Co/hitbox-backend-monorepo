@@ -1,0 +1,48 @@
+// ============================================================================
+// SUPPORT MODULE SCHEMA  (packages/support/prisma/support.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: SupportCase
+// ============================================================================
+
+/// A reported problem with a physical item or its tag. Both `skuId` and `tagId`
+/// are nullable and independent: a buyer can report a tag that resolves to no
+/// SKU at all (the CLONED case), which is exactly the report the platform most
+/// needs to capture. `tagId` is a raw string, not a foreign key, for the same
+/// reason. Resolving a case is what flips a SKU to FLAGGED or a tag to
+/// REVOKED/DISPUTED in the skus module.
+model SupportCase {
+  id             String            @id @db.Uuid
+  reporterId     String            @db.Uuid
+  reporter       User              @relation("User_reporter", fields: [reporterId], references: [id])
+  skuId          String?           @db.Uuid
+  sku            Sku?              @relation(fields: [skuId], references: [id])
+  tagId          String?
+  caseType       SupportCaseType
+  status         SupportCaseStatus
+  description    String
+  resolutionNote String?
+  resolvedById   String?           @db.Uuid
+  resolvedBy     User?             @relation("User_resolvedBy", fields: [resolvedById], references: [id])
+  resolvedAt     DateTime?
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+/// What is being reported. CLONED is the anti-counterfeit path; DISPUTE covers
+/// contested ownership between two users.
+enum SupportCaseType {
+  LOST
+  DAMAGED
+  STOLEN
+  CLONED
+  DISPUTE
+}
+
+/// Case state.
+enum SupportCaseStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  REJECTED
+}

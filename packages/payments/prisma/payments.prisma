@@ -1,0 +1,121 @@
+// ============================================================================
+// PAYMENTS MODULE SCHEMA  (packages/payments/prisma/payments.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent,
+//       RefundRequest
+//
+// Everything that talks to a payment provider. No card data or credentials are
+// ever stored — only opaque gateway references and a secrets-manager pointer.
+// ============================================================================
+
+/// One charge attempt against a gateway for an order. `idempotencyKey` is
+/// globally unique, which is what makes a retried charge safe. `needsReview`
+/// plus the reviewer columns support manual settlement review; `gatewayRef` is
+/// the provider's own id for reconciliation.
+model PaymentTransaction {
+  id             String                   @id @db.Uuid
+  orderId        String                   @db.Uuid
+  order          Order                    @relation(fields: [orderId], references: [id])
+  gateway        PaymentGateway
+  gatewayRef     String?
+  status         PaymentTransactionStatus
+  idempotencyKey String                   @unique
+  amount         Decimal                  @db.Decimal(12, 2)
+  currency       Currency
+  needsReview    Boolean
+  /// Reviewer's user id. Intentionally not a foreign key — a financial review
+  /// record must outlive the reviewer's account.
+  reviewedById   String?                  @db.Uuid
+  reviewedAt     DateTime?
+  reviewNote     String?
+  failureReason  String?
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+/// Gateway credentials binding at one scope: PLATFORM-wide, per ORGANIZATION,
+/// or per DROP. `credentialsRef` is a pointer into the secrets manager — the
+/// actual keys are never in this database.
+model PaymentGatewayConfig {
+  id             String             @id @db.Uuid
+  scope          GatewayConfigScope
+  organizationId String?            @db.Uuid
+  organization   Organization?      @relation(fields: [organizationId], references: [id])
+  gateway        PaymentGateway
+  isDefault      Boolean
+  credentialsRef String
+  status         ConfigStatus
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+/// Raw gateway webhook deliveries, keyed by the provider's event id (`id`), so
+/// a row's existence is the replay guard. `signatureVerified` is recorded
+/// rather than assumed, and `processingError` keeps failed deliveries around
+/// for replay instead of dropping them.
+model PaymentWebhookEvent {
+  id                String         @id
+  provider          PaymentGateway
+  eventType         String
+  payload           Json
+  signatureVerified Boolean
+  processedAt        DateTime?
+  processingError    String?
+  receivedAt         DateTime
+}
+
+/// A refund through its approval chain. `physicalReturnConfirmedAt` gates
+/// refunds on physical goods — money moves only once the item is back.
+/// `gatewayRefundId` links to the provider's refund object.
+model RefundRequest {
+  id                        String       @id @db.Uuid
+  orderId                   String       @db.Uuid
+  order                     Order        @relation(fields: [orderId], references: [id])
+  requestedById             String       @db.Uuid
+  requestedBy               User         @relation("User_requestedBy", fields: [requestedById], references: [id])
+  reason                    String
+  status                    RefundStatus
+  amount                    Decimal      @db.Decimal(12, 2)
+  physicalReturnConfirmedAt DateTime?
+  approvedById              String?      @db.Uuid
+  approvedBy                User?        @relation("User_approvedBy", fields: [approvedById], references: [id])
+  approvedAt                DateTime?
+  gatewayRefundId           String?
+  createdAt                 DateTime
+  updatedAt                 DateTime
+}
+
+/// Charge attempt state. NEEDS_REVIEW parks a transaction for a human instead
+/// of failing it outright.
+enum PaymentTransactionStatus {
+  INITIATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  NEEDS_REVIEW
+}
+
+/// How widely a gateway config applies. More specific scopes win: DROP over
+/// ORGANIZATION over PLATFORM.
+enum GatewayConfigScope {
+  PLATFORM
+  ORGANIZATION
+  DROP
+}
+
+/// Whether a gateway config is live.
+enum ConfigStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Refund lifecycle. AWAITING_RETURN is the physical-goods hold before
+/// approval; PROCESSED means the gateway confirmed the money moved.
+enum RefundStatus {
+  REQUESTED
+  AWAITING_RETURN
+  APPROVED
+  PROCESSED
+  REJECTED
+}

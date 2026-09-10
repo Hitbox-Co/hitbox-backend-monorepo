@@ -1,24 +1,27 @@
 // ============================================================================
 // COLLECTIONS MODULE SCHEMA  (packages/collections/prisma/collections.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: BuyerCollection
+//
+// The buyer's shelf. Distinct from ArtistCollection (artist module), which is
+// the curated series a buyer is trying to complete.
 // ============================================================================
 
-/// A buyer's owned/claimed collectibles; buyer chooses public/private showcase.
+/// One item on a buyer's shelf. Unique per (user, sku), so an item appears
+/// once. `shareToken` is a capability URL for showing a private shelf to
+/// someone without making it PUBLIC — unique so tokens are unguessable and
+/// individually revocable by nulling the column.
 model BuyerCollection {
-    id             String               @id @default(cuid())
-    totalClaimedNo Int                  @default(0) @map("total_claimed_no")
-    genre          ProductGenre?
-    visibility     CollectionVisibility @default(PRIVATE)
-    createdAt      DateTime             @default(now()) @map("created_at")
+  id         String     @id @db.Uuid
+  userId     String     @db.Uuid
+  user       User       @relation(fields: [userId], references: [id])
+  skuId      String     @db.Uuid
+  sku        Sku        @relation(fields: [skuId], references: [id])
+  visibility Visibility
+  shareToken String?    @unique
+  acquiredAt DateTime
+  archivedAt DateTime?
 
-    userId String @map("user_id")
-    user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id])
-
-    @@unique([userId, productId])
-    @@index([userId])
-    @@index([productId])
-    @@map("buyer_collections")
+  @@unique([userId, skuId])
 }

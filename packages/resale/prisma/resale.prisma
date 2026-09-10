@@ -1,0 +1,35 @@
+// ============================================================================
+// RESALE MODULE SCHEMA  (packages/resale/prisma/resale.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ResaleListing
+//
+// The secondary market. Distinct from the `marketplace` package, which is a
+// read-side feed over the primary catalog and owns no tables.
+// ============================================================================
+
+/// A holder's offer to sell a SKU they own. BLOCKED is set when the SKU carries
+/// `resaleBlocked` (fraud hold, artist restriction) — the listing is kept
+/// rather than deleted so the seller can see why it stopped. A resale that
+/// completes writes a TRANSFER onto the SKU's provenance chain in the claims
+/// module; nothing about ownership is decided here.
+model ResaleListing {
+  id        String       @id @db.Uuid
+  sellerId  String       @db.Uuid
+  seller    User         @relation(fields: [sellerId], references: [id])
+  skuId     String       @db.Uuid
+  sku       Sku          @relation(fields: [skuId], references: [id])
+  price     Decimal      @db.Decimal(12, 2)
+  currency  Currency
+  status    ResaleStatus
+  createdAt DateTime
+  updatedAt DateTime
+}
+
+/// Listing state. BLOCKED is platform-imposed; CANCELLED is seller-initiated.
+enum ResaleStatus {
+  ACTIVE
+  SOLD
+  CANCELLED
+  BLOCKED
+}

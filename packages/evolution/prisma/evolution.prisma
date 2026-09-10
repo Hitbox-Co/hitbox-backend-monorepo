@@ -1,0 +1,57 @@
+// ============================================================================
+// EVOLUTION MODULE SCHEMA  (packages/evolution/prisma/evolution.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: EvolutionRule, EvolutionEvent
+//
+// "Collectibles that change over time": a rule watches a threshold, and when a
+// SKU crosses it an event fires once and (optionally) grants a content bundle.
+// ============================================================================
+
+/// A condition that upgrades a SKU. Scoped to a product or a collection (both
+/// nullable). `thresholdType` + `thresholdValue` cover the simple numeric
+/// cases; `thresholdConfig` carries the structured extras for LOCATION and
+/// EVENT_SPECIFIC rules that a single integer cannot express.
+model EvolutionRule {
+  id              String                 @id @db.Uuid
+  name            String
+  collectionId    String?                @db.Uuid
+  collection      ArtistCollection?      @relation(fields: [collectionId], references: [id])
+  productId       String?                @db.Uuid
+  product         Product?               @relation(fields: [productId], references: [id])
+  thresholdType   EvolutionThresholdType
+  thresholdValue  Int
+  thresholdConfig Json?
+  grantsBundleId  String?                @db.Uuid
+  grantsBundle    ContentBundle?         @relation(fields: [grantsBundleId], references: [id])
+  isActive        Boolean
+  archivedAt      DateTime?
+  createdAt       DateTime
+
+  evolutionEvents EvolutionEvent[]
+}
+
+/// Records that a rule fired for a SKU. Unique per (rule, sku) — this row IS
+/// the idempotency guard, so the evaluator can run as often as it likes and a
+/// reward is never granted twice.
+model EvolutionEvent {
+  id          String        @id @db.Uuid
+  ruleId      String        @db.Uuid
+  rule        EvolutionRule @relation(fields: [ruleId], references: [id])
+  skuId       String        @db.Uuid
+  sku         Sku           @relation(fields: [skuId], references: [id])
+  triggeredAt DateTime
+
+  @@unique([ruleId, skuId])
+}
+
+/// What the rule measures. OWNED_DURATION is held-time in days; the COUNT
+/// variants are tallies; LOCATION and EVENT_SPECIFIC read thresholdConfig.
+enum EvolutionThresholdType {
+  OWNED_DURATION
+  CLAIM_COUNT
+  PURCHASE_COUNT
+  TRADE_COUNT
+  LOCATION
+  EVENT_SPECIFIC
+}

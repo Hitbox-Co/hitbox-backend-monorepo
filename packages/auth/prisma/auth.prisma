@@ -1,17 +1,18 @@
 // ============================================================================
 // AUTH MODULE SCHEMA  (packages/auth/prisma/auth.prisma)
-// Merged by the shared build script into shared/database/prisma/schema.prisma.
-// Datasource + generator + shared enums live in shared/database/prisma.
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: AuthWebhookEvent
 // ============================================================================
 
-/// Clerk webhook deliveries, keyed by the svix-id header.
-/// Presence of a row = the delivery has been processed (idempotency guard).
+/// Clerk webhook deliveries, keyed by the `svix-id` header.
+/// Presence of a row = the delivery has already been processed (idempotency
+/// guard against replays). No relation to User on purpose: the payload arrives
+/// before the local projection exists, and auth must never depend on users.
 model AuthWebhookEvent {
-    id          String   @id // svix-id header — unique per delivery
-    type        String
-    payload     Json
-    processedAt DateTime @default(now()) @map("processed_at")
-
-    @@index([processedAt])
-    @@map("auth_webhook_events")
+  id          String    @id
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  receivedAt  DateTime
 }

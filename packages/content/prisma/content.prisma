@@ -1,0 +1,80 @@
+// ============================================================================
+// CONTENT MODULE SCHEMA  (packages/content/prisma/content.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ContentBundle, ContentBundleItem, ContentUnlock
+//
+// The reward layer: exclusive content attached to a drop or collection, and
+// the per-user grants that open it. Files themselves belong to the media
+// module — a bundle is only a curated list plus an access policy.
+// ============================================================================
+
+/// A named set of exclusive assets, attached to a product or a collection
+/// (both nullable — a bundle can hang off either). `accessType` states how it
+/// is earned rather than who has it; the grants are ContentUnlock rows.
+model ContentBundle {
+  id           String            @id @db.Uuid
+  name         String
+  description  String?
+  productId    String?           @db.Uuid
+  product      Product?          @relation(fields: [productId], references: [id])
+  collectionId String?           @db.Uuid
+  collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
+  accessType   ContentAccessType
+  isActive     Boolean
+  archivedAt   DateTime?
+  createdAt    DateTime
+  updatedAt    DateTime
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  contentBundleItems ContentBundleItem[]
+  contentUnlocks     ContentUnlock[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  evolutionRules EvolutionRule[]
+}
+
+/// Places one media asset in one bundle at a position. Unique per
+/// (bundle, asset) so an asset cannot be listed twice in the same bundle.
+model ContentBundleItem {
+  id       String        @id @db.Uuid
+  bundleId String        @db.Uuid
+  bundle   ContentBundle @relation(fields: [bundleId], references: [id])
+  assetId  String        @db.Uuid
+  asset    MediaAsset    @relation(fields: [assetId], references: [id])
+  position Int
+
+  @@unique([bundleId, assetId])
+}
+
+/// A user's grant to one bundle, optionally tied to the specific SKU that
+/// earned it (`skuId` in the unique key — owning two copies grants two rows).
+/// `accessExpiresAt` supports time-limited drops; the notified/acknowledged/
+/// lastAccessed/accessCount columns are engagement telemetry, not access
+/// control.
+model ContentUnlock {
+  id              String        @id @db.Uuid
+  userId          String        @db.Uuid
+  user            User          @relation(fields: [userId], references: [id])
+  bundleId        String        @db.Uuid
+  bundle          ContentBundle @relation(fields: [bundleId], references: [id])
+  skuId           String?       @db.Uuid
+  sku             Sku?          @relation(fields: [skuId], references: [id])
+  grantedAt       DateTime
+  notifiedAt      DateTime?
+  acknowledgedAt  DateTime?
+  accessExpiresAt DateTime?
+  lastAccessedAt  DateTime?
+  accessCount     Int
+
+  @@unique([userId, bundleId, skuId])
+}
+
+/// How a bundle is earned: simply by owning the item (OWNER_ONLY), by hitting
+/// an evolution threshold (EVOLUTION_GRANT), or by a campaign/reward
+/// (REWARD_GRANT).
+enum ContentAccessType {
+  OWNER_ONLY
+  EVOLUTION_GRANT
+  REWARD_GRANT
+}

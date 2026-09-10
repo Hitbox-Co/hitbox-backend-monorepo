@@ -31,7 +31,7 @@ document.
 
 | Domain | Route prefix | Owning package(s) | Database | Docs |
 | --- | --- | --- | --- | --- |
-| **Mobile platform** | `/api/v1/*` | `auth`, `users`, `products`, `discover`, `marketplace`, `collections`, `artist`, `claims` | `DATABASE_URL` (Neon) | [hitbox-architecture.md](hitbox-architecture.md) |
+| **Mobile platform** | `/api/v1/*` | `auth`, `users`, `access-control`, `organizations`, `artist`, `products`, `markets`, `releases`, `skus`, `claims`, `collections`, `media`, `content`, `evolution`, `orders`, `payments`, `finance`, `notifications`, `social`, `resale`, `search`, `audit`, `support`, `supply`, `platform`, plus the table-less read models `discover`, `marketplace` | `DATABASE_URL` (Neon) | [hitbox-architecture.md](hitbox-architecture.md), [database-architecture.md](database-architecture.md) |
 | **Public website** | `/app/web/v1/*` | `leads` | `LEADS_DATABASE_URL` (separate Neon project) | [leads-schema.md](leads-schema.md), [web-api-integration.md](web-api-integration.md) |
 
 ## Why one server, not two (or three)

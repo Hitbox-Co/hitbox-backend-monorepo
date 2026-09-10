@@ -1,0 +1,41 @@
+// ============================================================================
+// MARKETS MODULE SCHEMA  (packages/markets/prisma/markets.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Market, MarketCountry
+//
+// A market is the pricing/currency region a buyer shops in. Products carry one
+// ProductPrice row per market; orders record which market they were placed in.
+// ============================================================================
+
+/// A selling region with a single settlement currency. Exactly one row should
+/// carry `isDefault = true` — the fallback when a buyer's country maps nowhere.
+model Market {
+  id         String    @id @db.Uuid
+  code       String    @unique
+  name       String
+  currency   Currency
+  isActive   Boolean
+  isDefault  Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  marketCountrys MarketCountry[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  users         User[]
+  productPrices ProductPrice[]
+  orders        Order[]
+}
+
+/// Maps an ISO country code to its market. `countryCode` is globally unique, so
+/// a country belongs to exactly one market and resolution is unambiguous.
+model MarketCountry {
+  id          String   @id @db.Uuid
+  marketId    String   @db.Uuid
+  market      Market   @relation(fields: [marketId], references: [id])
+  countryCode String   @unique
+  createdAt   DateTime
+}

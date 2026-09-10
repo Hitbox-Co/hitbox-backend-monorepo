@@ -12,244 +12,535 @@
 // ============================================================================
 
 generator client {
-    provider = "prisma-client-js"
+  provider = "prisma-client-js"
 }
 
 datasource db {
-    provider  = "postgresql"
-    url       = env("DATABASE_URL")
-    // Neon pools connections; migrations need a direct (unpooled) URL.
-    directUrl = env("DIRECT_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  // Neon pools connections; migrations need a direct (unpooled) URL.
+  directUrl = env("DIRECT_URL")
 }
 
 // ───── source: packages\shared\database\prisma\enums.prisma ────────────────────────
 
 // ============================================================================
-// SOURCE PARTIAL — shared enums used across modules. Owned by shared/database.
+// SOURCE PARTIAL — shared enums. Owned by shared/database.
+//
+// OWNERSHIP RULE: an enum lives here ONLY if two or more module partials
+// reference it. An enum used by a single module belongs in that module's own
+// partial, so the module carries it along when it is extracted into a service.
+// See docs/database-architecture.md §5.
 // ============================================================================
 
-enum ProductType {
-    GROUP
-    INDIVIDUAL
+/// Public/private toggle. Used by users (User.profileVisibility) and
+/// collections (BuyerCollection.visibility).
+enum Visibility {
+  PUBLIC
+  PRIVATE
 }
 
-enum ProductCategory {
-    TRADING_CARD
-    FIGURE
-    POSTER
-    BOOK
-    AUTOGRAPH
-    JERSEY
-    DIGITAL_ASSET
-    ACCESSORY
-    GAME_BOX
-    CARD_PACK
-    OTHER
+/// Settlement currency. Used by markets, orders, payments, finance, resale and
+/// claims (ProductHistory.price). Every monetary column pairs an amount with
+/// one of these.
+enum Currency {
+  USD
+  INR
+  GBP
 }
 
-enum ProductGenre {
-    MUSIC
-    SPORTS
-    FILM
-    GAMING
-    PUBLICATION
-    ART
-    ANIME
-    OTHER
+/// Regulatory clearance state. Used by products (Product.complianceStatus) and
+/// releases (ReleaseApproval.complianceStatus) — the release reviewer writes
+/// it, the catalog reflects it.
+enum ComplianceStatus {
+  PENDING
+  CLEARED
+  FLAGGED
 }
 
-enum MarketplaceStatus {
-    TRENDING_NOW
-    NEW_RELEASE
-    TOP_CREATORS
+/// Address nickname. Used by users (Address) and orders (OrderAddress), which
+/// snapshots the label alongside the address lines at purchase time.
+enum AddressLabel {
+  HOME
+  WORK
+  OTHER
 }
 
-enum ProductRarity {
-    COMMON
-    UNCOMMON
-    RARE
-    EPIC
-    LEGENDARY
-    EXCLUSIVE
+/// Payment provider. Used by orders (Order.gateway) and payments
+/// (PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent).
+enum PaymentGateway {
+  STRIPE
 }
 
-enum UserRole {
-    USER
+// ───── source: packages\access-control\prisma\access-control.prisma ────────────────
+
+// ============================================================================
+// ACCESS-CONTROL MODULE SCHEMA  (packages/access-control/prisma/access-control.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Role, Permission, RolePermission, RoleAssignment
+//
+// This is authorisation (what an actor may do), distinct from the auth module
+// which is authentication (who the actor is). A user's UserRole says only that
+// they hold an account; every real privilege is a RoleAssignment here, scoped
+// to GLOBAL, one ORG, or the actor's OWN records.
+// ============================================================================
+
+/// A named bundle of permissions, e.g. `brand_release_manager`.
+/// `entityGroup` records which persona family the role belongs to (buyer,
+/// brand, artist, HitBox staff) for grouping in admin UIs.
+model Role {
+  id          String   @id @db.Uuid
+  name        String   @unique
+  displayName String
+  entityGroup String
+  isActive    Boolean
+  createdAt   DateTime
+
+  rolePermissions RolePermission[]
+  roleAssignments RoleAssignment[]
 }
 
-enum UserState {
-    ACTIVE
-    INACTIVE
-    SUSPENDED
+/// One atomic capability: an action on a resource at a scope. The
+/// `key` column is the flat form used in code checks (e.g. `drop:publish:org`);
+/// the (resource, action, scope) triple is the canonical identity.
+model Permission {
+  id          String           @id @db.Uuid
+  resource    ResourceType
+  action      PermissionAction
+  scope       PermissionScope
+  key         String           @unique
+  description String?
+  isActive    Boolean
+  createdAt   DateTime
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action, scope])
 }
 
-enum ProductState {
-    ACTIVE
-    INACTIVE
-    SUSPENDED
+/// Grants a permission to a role. `fieldAllowlist` narrows the grant to
+/// specific columns (field-level authorisation for partial-update endpoints).
+/// `isInferred` + `sourceCitation` mark rows derived from the requirements
+/// matrix rather than hand-authored, so they can be re-derived safely.
+model RolePermission {
+  id             String     @id @db.Uuid
+  roleId         String     @db.Uuid
+  role           Role       @relation(fields: [roleId], references: [id])
+  permissionId   String     @db.Uuid
+  permission     Permission @relation(fields: [permissionId], references: [id])
+  fieldAllowlist String[]
+  isInferred     Boolean
+  sourceCitation String?
+  createdAt      DateTime
+
+  @@unique([roleId, permissionId])
 }
 
-enum CollectionVisibility {
-    PUBLIC
-    PRIVATE
+/// Binds a user to a role within a scope. For `scopeType = ORG`, `scopeId`
+/// points at an Organization (the relation below); for OWN/GLOBAL it is null.
+/// `revokedAt` is set instead of deleting the row, so the audit trail keeps
+/// the full grant history.
+model RoleAssignment {
+  id           String        @id @db.Uuid
+  userId       String        @db.Uuid
+  user         User          @relation("User_user", fields: [userId], references: [id])
+  roleId       String        @db.Uuid
+  role         Role          @relation(fields: [roleId], references: [id])
+  scopeType    RoleScopeType
+  scopeId      String?       @db.Uuid
+  organization Organization? @relation(fields: [scopeId], references: [id])
+  grantedById  String        @db.Uuid
+  grantedBy    User          @relation("User_grantedBy", fields: [grantedById], references: [id])
+  grantedAt    DateTime
+  revokedAt    DateTime?
+
+  @@unique([userId, roleId, scopeType, scopeId])
 }
 
-enum ClaimedStatus {
-    UNCLAIMED
-    CLAIMED
+/// The verbs a permission can grant.
+enum PermissionAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  MANAGE // superset of CREATE+READ+UPDATE+DELETE for the resource
+  APPROVE
+  REJECT
+  PUBLISH
+  REFUND
+  CLAIM // NFC tag / product claim
+  TRANSFER // ownership transfer
+  ASSIGN // assign roles / ownership
+  EXPORT // reports & dashboards
+  CONFIGURE // platform / gateway config
+  OVERRIDE // admin override
 }
 
-// Kind of ownership event recorded on the provenance ledger. Each product's
-// ledger is an append-only chain: MINT (origin, seller = HitBox) → CLAIM
-// (first buyer) → TRANSFER (0..n subsequent owner changes).
-enum LedgerTxType {
-    MINT
-    CLAIM
-    TRANSFER
+/// The protected surfaces a permission can apply to. Deliberately coarser than
+/// the table list: one ResourceType may cover several tables owned by the same
+/// module (e.g. ORDER covers Order + OrderAddress + InventoryReservation).
+enum ResourceType {
+  SELF_PROFILE
+  BUYER_PROFILE
+  DROP
+  RELEASE_APPROVAL
+  COLLECTIBLE_INSTANCE
+  REPORTS_DASHBOARDS
+  MY_COLLECTIONS
+  ORDER
+  PAYMENT_ROYALTY
+  CONTENT_UNLOCK
+  NFC_TAG_CLAIM
+  BRAND_ARTIST_RECORD
+  EMPLOYEE_ROLE_MGMT
+  AUDIT_LOG
+  NOTIFICATION_CONFIG
+  SEARCH_DISCOVER
+  OPS_DASHBOARD_INFRA
+  PLATFORM_CONFIG
+  ASSETS_DOCUMENTS_UPLOAD
+  GENERAL_LOCATION
+  AGE_SPECIFIC_FLAG
+  ADDRESS
+}
+
+/// How wide a permission reaches. Mirrors RoleScopeType — a grant's breadth is
+/// declared on the Permission, an assignment's breadth on the RoleAssignment,
+/// and an access check requires both to line up.
+enum PermissionScope {
+  GLOBAL
+  ORG
+  OWN
+}
+
+/// How wide a role assignment reaches: everything (GLOBAL), one organization
+/// (ORG, with scopeId set), or only the actor's own records (OWN).
+enum RoleScopeType {
+  ORG
+  OWN
+  GLOBAL
 }
 
 // ───── source: packages\artist\prisma\artist.prisma ────────────────────────────────
 
 // ============================================================================
 // ARTIST MODULE SCHEMA  (packages/artist/prisma/artist.prisma)
-// Artists and their collections. Owned by the artist module.
-// Product / ProductClaim relation fields point here across partials — Prisma
-// resolves them because the merge script produces one schema.
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Artist, ArtistCollection, ArtistBrandLink
 // ============================================================================
 
+/// A creator's public identity. Optionally linked to a platform User (a
+/// claimed, self-managed artist profile) and/or to an Organization (a brand
+/// that manages the artist). Both are nullable so an artist can be catalogued
+/// before either link exists.
 model Artist {
-    id         String        @id @default(cuid())
-    name       String        @db.VarChar(255)
-    slug       String        @unique @db.VarChar(255)
-    bio        String?
-    imageUrl   String?       @map("image_url")
-    genre      ProductGenre?
-    isVerified Boolean       @default(false) @map("is_verified")
-    createdAt  DateTime      @default(now()) @map("created_at")
-    updatedAt  DateTime      @updatedAt @map("updated_at")
+  id                   String        @id @db.Uuid
+  name                 String
+  slug                 String        @unique
+  bio                  String?
+  avatarUrl            String?
+  coverUrl             String?
+  genre                String?
+  isPublic             Boolean
+  organizationId       String?       @db.Uuid
+  organization         Organization? @relation(fields: [organizationId], references: [id])
+  /// Unique — one User can back at most one Artist profile.
+  userId               String?       @unique @db.Uuid
+  user                 User?         @relation(fields: [userId], references: [id])
+  complianceAttestedAt DateTime?
+  /// User id of the staff member who attested compliance. Intentionally NOT a
+  /// foreign key — an attestation must survive that account being removed.
+  complianceAttestedBy String?       @db.Uuid
+  isActive             Boolean
+  archivedAt           DateTime?
+  createdAt            DateTime
+  updatedAt            DateTime
 
-    collections ArtistCollection[]
-    claims      ProductClaim[]
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  artistCollections ArtistCollection[]
+  artistBrandLinks  ArtistBrandLink[]
 
-    @@map("artists")
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  products      Product[]
+  productClaims ProductClaim[]
+  mediaAssets   MediaAsset[]
+  royaltyRules  RoyaltyRule[]
+  follows       Follow[]
 }
 
+/// A curated series of products by one artist — the unit buyers try to
+/// complete. `position` orders collections on the artist's page.
 model ArtistCollection {
-    id            String    @id @default(cuid())
-    name          String    @db.VarChar(255)
-    description   String?
-    coverImageUrl String?   @map("cover_image_url")
-    releaseDate   DateTime? @map("release_date") @db.Date
-    // Cap of collectibles this collection can hold. Denominator of a buyer's
-    // "collection progress" (see @hitbox/collections stats).
-    maximumLimit  Int       @default(10) @map("maximum_limit")
-    createdAt     DateTime  @default(now()) @map("created_at")
-    updatedAt     DateTime  @updatedAt @map("updated_at")
+  id             String        @id @db.Uuid
+  name           String
+  slug           String        @unique
+  description    String?
+  heroImageUrl   String?
+  position       Int
+  artistId       String        @db.Uuid
+  artist         Artist        @relation(fields: [artistId], references: [id])
+  organizationId String?       @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  isPublic       Boolean
+  isActive       Boolean
+  archivedAt     DateTime?
+  createdAt      DateTime
+  updatedAt      DateTime
 
-    artistId String @map("artist_id")
-    artist   Artist @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  products       Product[]
+  productClaims  ProductClaim[]
+  mediaAssets    MediaAsset[]
+  contentBundles ContentBundle[]
+  evolutionRules EvolutionRule[]
+  royaltyRules   RoyaltyRule[]
+}
 
-    products Product[]
-    claims   ProductClaim[]
+/// A time-bounded commercial relationship between an artist and a brand.
+/// The composite unique lets the same pair hold several link types at once
+/// (e.g. PRIMARY plus MERCHANDISE) but never duplicate one.
+model ArtistBrandLink {
+  id             String              @id @db.Uuid
+  artistId       String              @db.Uuid
+  artist         Artist              @relation(fields: [artistId], references: [id])
+  organizationId String              @db.Uuid
+  organization   Organization        @relation(fields: [organizationId], references: [id])
+  linkType       ArtistBrandLinkType
+  startDate      DateTime
+  endDate        DateTime?
+  isActive       Boolean
+  createdAt      DateTime
 
-    @@index([artistId])
-    @@map("artist_collections")
+  @@unique([artistId, organizationId, linkType])
+}
+
+/// What an artist ↔ brand link covers.
+enum ArtistBrandLinkType {
+  PRIMARY
+  MERCHANDISE
+  DISTRIBUTION
+}
+
+// ───── source: packages\audit\prisma\audit.prisma ──────────────────────────────────
+
+// ============================================================================
+// AUDIT MODULE SCHEMA  (packages/audit/prisma/audit.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: AuditEventType, AuditEvent, AuditRetentionPolicy
+//
+// The compliance trail. Every actor id, resource id and organization id here is
+// stored WITHOUT a foreign key on purpose: the audit log must remain readable
+// and complete after the records it describes are archived or deleted, and it
+// must never be the reason a delete fails.
+// ============================================================================
+
+/// Catalog of auditable event names — a real table rather than an enum, so new
+/// events can be registered without a migration. `defaultSeverity` feeds the
+/// retention policy; `sourceStories` cites the requirement each event came
+/// from, which is what makes the trail defensible in a review.
+model AuditEventType {
+  eventType       String        @id
+  personaGroup    String
+  description     String
+  defaultSeverity AuditSeverity
+  sourceStories   String[]
+  isActive        Boolean
+  createdAt       DateTime
+
+  auditEvents AuditEvent[]
+}
+
+/// One append-only audit record. The primary key is (eventId, occurredAt) —
+/// composite so the table can be range-partitioned by time for retention and
+/// pruning without losing per-event uniqueness. `beforeState`/`afterState`
+/// capture the diff; `correlationId` stitches one request's events together;
+/// `ledgerReferenceId` links a provenance-affecting action to its
+/// BlockchainLedger row. `insertedAt` is recorded separately from `occurredAt`
+/// so clock skew and late writes are visible.
+model AuditEvent {
+  eventId           String            @db.Uuid
+  occurredAt        DateTime
+  eventType         String
+  type              AuditEventType    @relation(fields: [eventType], references: [eventType])
+  actorType         AuditActorType
+  actorId           String?           @db.Uuid
+  /// The actor's roles at the time of the action — a snapshot, because a later
+  /// role change must not rewrite what their authority was.
+  actorRoleSnapshot String?
+  organizationId    String?           @db.Uuid
+  resourceType      String?
+  resourceId        String?           @db.Uuid
+  actionResult      AuditActionResult
+  severity          AuditSeverity
+  beforeState       Json?
+  afterState        Json?
+  ipAddress         String?
+  userAgent         String?
+  deviceId          String?
+  correlationId     String            @db.Uuid
+  ledgerReferenceId String?           @db.Uuid
+  metadata          Json
+  insertedAt        DateTime
+
+  @@id([eventId, occurredAt])
+}
+
+/// How long events of each severity are kept. Keyed by severity itself, so
+/// there is exactly one policy per level and no ambiguity for the pruner.
+model AuditRetentionPolicy {
+  severity      AuditSeverity @id
+  retentionDays Int
+  notes         String
+}
+
+/// Which persona performed the action. SYSTEM covers scheduled jobs and
+/// webhook-driven changes with no human actor.
+enum AuditActorType {
+  BUYER
+  BRAND_EMPLOYEE
+  ARTIST
+  HITBOX_EMPLOYEE
+  HITBOX_ADMIN
+  SYSTEM
+}
+
+/// Outcome. DENIED (authorisation refused) is kept distinct from FAILURE
+/// (attempted but errored) — they mean very different things in a review.
+enum AuditActionResult {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+/// Event importance; drives retention via AuditRetentionPolicy.
+enum AuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
 }
 
 // ───── source: packages\auth\prisma\auth.prisma ────────────────────────────────────
 
 // ============================================================================
 // AUTH MODULE SCHEMA  (packages/auth/prisma/auth.prisma)
-// Merged by the shared build script into shared/database/prisma/schema.prisma.
-// Datasource + generator + shared enums live in shared/database/prisma.
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: AuthWebhookEvent
 // ============================================================================
 
-/// Clerk webhook deliveries, keyed by the svix-id header.
-/// Presence of a row = the delivery has been processed (idempotency guard).
+/// Clerk webhook deliveries, keyed by the `svix-id` header.
+/// Presence of a row = the delivery has already been processed (idempotency
+/// guard against replays). No relation to User on purpose: the payload arrives
+/// before the local projection exists, and auth must never depend on users.
 model AuthWebhookEvent {
-    id          String   @id // svix-id header — unique per delivery
-    type        String
-    payload     Json
-    processedAt DateTime @default(now()) @map("processed_at")
-
-    @@index([processedAt])
-    @@map("auth_webhook_events")
+  id          String    @id
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  receivedAt  DateTime
 }
 
 // ───── source: packages\claims\prisma\claims.prisma ────────────────────────────────
 
 // ============================================================================
 // CLAIMS MODULE SCHEMA  (packages/claims/prisma/claims.prisma)
-// NFC claims + provenance ledger (ledger lives here: authenticity domain).
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ProductClaim, BlockchainLedger, ProductHistory
+//
+// Provenance. Three append-only views of the same truth:
+//   ProductClaim     — the act of claiming (who tapped, when, which drop)
+//   ProductHistory   — the ownership timeline (queryable "who held it when")
+//   BlockchainLedger — the tamper-evident hash chain (verifiable, not queried)
+// Nothing here is ever updated in place except the two revocation columns and
+// ProductHistory.isCurrent/endedAt when a period closes.
 // ============================================================================
 
-/// NFC claim events: which user claimed which product, when.
+/// A successful claim of one SKU by one user. `claimedNo` counts claims on that
+/// SKU (1 = first owner, 2 = second, …), so the composite unique makes a
+/// duplicate claim at the same position impossible. artistId/collectionId are
+/// denormalised snapshots so the claim reads correctly even if the product is
+/// later re-filed.
 model ProductClaim {
-    id        String   @id @default(cuid())
-    claimCode String   @unique @db.VarChar(10) // old hb_pc_claimid (CHAR(10))
-    claimedNo Int      @default(1) @map("claimed_no")
-    claimedAt DateTime @default(now()) @map("claimed_at")
+  id            String            @id @db.Uuid
+  claimCode     String            @unique
+  claimedNo     Int
+  claimedAt     DateTime
+  userId        String            @db.Uuid
+  user          User              @relation(fields: [userId], references: [id])
+  skuId         String            @db.Uuid
+  sku           Sku               @relation(fields: [skuId], references: [id])
+  productId     String            @db.Uuid
+  product       Product           @relation(fields: [productId], references: [id])
+  artistId      String?           @db.Uuid
+  artist        Artist?           @relation(fields: [artistId], references: [id])
+  collectionId  String?           @db.Uuid
+  collection    ArtistCollection? @relation(fields: [collectionId], references: [id])
+  revokedAt     DateTime?
+  revokedReason String?
 
-    userId String @map("user_id")
-    user   User   @relation(fields: [userId], references: [id])
-
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id])
-
-    artistId String? @map("artist_id")
-    artist   Artist? @relation(fields: [artistId], references: [id])
-
-    collectionId String?           @map("collection_id")
-    collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
-
-    ledgerEntries BlockchainLedger[]
-
-    @@index([userId])
-    @@index([productId])
-    @@map("product_claims")
+  @@unique([skuId, claimedNo])
 }
 
-/// Provenance ledger: origin data + cryptographic signatures + hash per
-/// transaction. Append-only per product — rows form a chain ordered by
-/// `sequenceNo`, each linking to the prior row's hash via `previousHash`.
-/// The seq-0 MINT row's seller signature is HitBox.
+/// Append-only hash chain per SKU. Each row commits to the previous one
+/// (`previousHash` → `currentHash`), so any retroactive edit breaks the chain
+/// and is detectable. `sequenceNo` is unique per SKU, which prevents forks.
+/// Signatures are captured on transfers to prove both parties consented.
 model BlockchainLedger {
-    id                     String       @id @default(cuid())
-    txType                 LedgerTxType @default(MINT) @map("tx_type")
-    // 0-based position in this product's chain. seq 0 = MINT (origin).
-    sequenceNo             Int          @map("sequence_no")
-    originDateTime         DateTime     @map("origin_date_time")
-    originOwner            String       @map("origin_owner") @db.VarChar(255)
-    sellerDigitalSignature String       @map("seller_digital_signature")
-    buyerDigitalSignature  String?      @map("buyer_digital_signature")
-    receiverPublicKey      String?      @map("receiver_public_key")
-    productBuyerHash       String       @map("product_buyer_hash")
-    // Hash of the immediately preceding chain row (null for seq 0). Tampering
-    // with any earlier row breaks every subsequent link.
-    previousHash           String?      @map("previous_hash")
-    transactionDateTime    DateTime     @default(now()) @map("transaction_date_time")
-    transactionAmount      Decimal      @default(0) @map("transaction_amount") @db.Decimal(12, 2)
+  id                     String       @id @db.Uuid
+  skuId                  String       @db.Uuid
+  sku                    Sku          @relation(fields: [skuId], references: [id])
+  sequenceNo             Int
+  previousHash           String?
+  currentHash            String
+  txType                 LedgerTxType
+  sellerDigitalSignature String?
+  buyerDigitalSignature  String?
+  receiverPublicKey      String?
+  payload                Json?
+  createdAt              DateTime
 
-    originProductId String  @map("origin_product_id")
-    originProduct   Product @relation(fields: [originProductId], references: [id])
+  @@unique([skuId, sequenceNo])
+}
 
-    claimId String?       @map("claim_id")
-    claim   ProductClaim? @relation(fields: [claimId], references: [id])
+/// One ownership period for a SKU. Exactly one row per SKU should carry
+/// `isCurrent = true`, with `endedAt` null; closing a period sets both. `price`
+/// + `currency` record what the holder paid, which is what makes resale and
+/// royalty analytics possible.
+model ProductHistory {
+  id          String            @id @db.Uuid
+  skuId       String            @db.Uuid
+  sku         Sku               @relation(fields: [skuId], references: [id])
+  ownerId     String?           @db.Uuid
+  owner       User?             @relation(fields: [ownerId], references: [id])
+  acquiredVia AcquisitionMethod
+  price       Decimal?          @db.Decimal(12, 2)
+  currency    Currency?
+  startedAt   DateTime
+  endedAt     DateTime?
+  isCurrent   Boolean
+}
 
-    // Ownership delta captured by this row. `fromUser` is null on MINT/CLAIM
-    // (origin is HitBox, not a local user); `toUser` is null only on MINT.
-    fromUserId String? @map("from_user_id")
-    fromUser   User?   @relation("LedgerFromUser", fields: [fromUserId], references: [id])
+/// Kind of ownership event on the provenance chain. Each SKU's ledger runs
+/// MINT (origin) → CLAIM (first buyer) → TRANSFER (0..n owner changes), with
+/// FLAG / UNFLAG recording fraud holds without rewriting history.
+enum LedgerTxType {
+  MINT
+  CLAIM
+  TRANSFER
+  FLAG
+  UNFLAG
+}
 
-    toUserId String? @map("to_user_id")
-    toUser   User?   @relation("LedgerToUser", fields: [toUserId], references: [id])
-
-    @@unique([originProductId, sequenceNo])
-    @@index([originProductId])
-    @@index([claimId])
-    @@map("blockchain_ledger")
+/// How a holder came to own the item: a first-party CLAIM, a peer TRANSFER, or
+/// an ADMIN correction (support resolution, mis-ship recovery).
+enum AcquisitionMethod {
+  CLAIM
+  TRANSFER
+  ADMIN
 }
 
 // ───── source: packages\collections\prisma\collections.prisma ──────────────────────
@@ -257,26 +548,772 @@ model BlockchainLedger {
 // ============================================================================
 // COLLECTIONS MODULE SCHEMA  (packages/collections/prisma/collections.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: BuyerCollection
+//
+// The buyer's shelf. Distinct from ArtistCollection (artist module), which is
+// the curated series a buyer is trying to complete.
 // ============================================================================
 
-/// A buyer's owned/claimed collectibles; buyer chooses public/private showcase.
+/// One item on a buyer's shelf. Unique per (user, sku), so an item appears
+/// once. `shareToken` is a capability URL for showing a private shelf to
+/// someone without making it PUBLIC — unique so tokens are unguessable and
+/// individually revocable by nulling the column.
 model BuyerCollection {
-    id             String               @id @default(cuid())
-    totalClaimedNo Int                  @default(0) @map("total_claimed_no")
-    genre          ProductGenre?
-    visibility     CollectionVisibility @default(PRIVATE)
-    createdAt      DateTime             @default(now()) @map("created_at")
+  id         String     @id @db.Uuid
+  userId     String     @db.Uuid
+  user       User       @relation(fields: [userId], references: [id])
+  skuId      String     @db.Uuid
+  sku        Sku        @relation(fields: [skuId], references: [id])
+  visibility Visibility
+  shareToken String?    @unique
+  acquiredAt DateTime
+  archivedAt DateTime?
 
-    userId String @map("user_id")
-    user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, skuId])
+}
 
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id])
+// ───── source: packages\content\prisma\content.prisma ──────────────────────────────
 
-    @@unique([userId, productId])
-    @@index([userId])
-    @@index([productId])
-    @@map("buyer_collections")
+// ============================================================================
+// CONTENT MODULE SCHEMA  (packages/content/prisma/content.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ContentBundle, ContentBundleItem, ContentUnlock
+//
+// The reward layer: exclusive content attached to a drop or collection, and
+// the per-user grants that open it. Files themselves belong to the media
+// module — a bundle is only a curated list plus an access policy.
+// ============================================================================
+
+/// A named set of exclusive assets, attached to a product or a collection
+/// (both nullable — a bundle can hang off either). `accessType` states how it
+/// is earned rather than who has it; the grants are ContentUnlock rows.
+model ContentBundle {
+  id           String            @id @db.Uuid
+  name         String
+  description  String?
+  productId    String?           @db.Uuid
+  product      Product?          @relation(fields: [productId], references: [id])
+  collectionId String?           @db.Uuid
+  collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
+  accessType   ContentAccessType
+  isActive     Boolean
+  archivedAt   DateTime?
+  createdAt    DateTime
+  updatedAt    DateTime
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  contentBundleItems ContentBundleItem[]
+  contentUnlocks     ContentUnlock[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  evolutionRules EvolutionRule[]
+}
+
+/// Places one media asset in one bundle at a position. Unique per
+/// (bundle, asset) so an asset cannot be listed twice in the same bundle.
+model ContentBundleItem {
+  id       String        @id @db.Uuid
+  bundleId String        @db.Uuid
+  bundle   ContentBundle @relation(fields: [bundleId], references: [id])
+  assetId  String        @db.Uuid
+  asset    MediaAsset    @relation(fields: [assetId], references: [id])
+  position Int
+
+  @@unique([bundleId, assetId])
+}
+
+/// A user's grant to one bundle, optionally tied to the specific SKU that
+/// earned it (`skuId` in the unique key — owning two copies grants two rows).
+/// `accessExpiresAt` supports time-limited drops; the notified/acknowledged/
+/// lastAccessed/accessCount columns are engagement telemetry, not access
+/// control.
+model ContentUnlock {
+  id              String        @id @db.Uuid
+  userId          String        @db.Uuid
+  user            User          @relation(fields: [userId], references: [id])
+  bundleId        String        @db.Uuid
+  bundle          ContentBundle @relation(fields: [bundleId], references: [id])
+  skuId           String?       @db.Uuid
+  sku             Sku?          @relation(fields: [skuId], references: [id])
+  grantedAt       DateTime
+  notifiedAt      DateTime?
+  acknowledgedAt  DateTime?
+  accessExpiresAt DateTime?
+  lastAccessedAt  DateTime?
+  accessCount     Int
+
+  @@unique([userId, bundleId, skuId])
+}
+
+/// How a bundle is earned: simply by owning the item (OWNER_ONLY), by hitting
+/// an evolution threshold (EVOLUTION_GRANT), or by a campaign/reward
+/// (REWARD_GRANT).
+enum ContentAccessType {
+  OWNER_ONLY
+  EVOLUTION_GRANT
+  REWARD_GRANT
+}
+
+// ───── source: packages\evolution\prisma\evolution.prisma ──────────────────────────
+
+// ============================================================================
+// EVOLUTION MODULE SCHEMA  (packages/evolution/prisma/evolution.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: EvolutionRule, EvolutionEvent
+//
+// "Collectibles that change over time": a rule watches a threshold, and when a
+// SKU crosses it an event fires once and (optionally) grants a content bundle.
+// ============================================================================
+
+/// A condition that upgrades a SKU. Scoped to a product or a collection (both
+/// nullable). `thresholdType` + `thresholdValue` cover the simple numeric
+/// cases; `thresholdConfig` carries the structured extras for LOCATION and
+/// EVENT_SPECIFIC rules that a single integer cannot express.
+model EvolutionRule {
+  id              String                 @id @db.Uuid
+  name            String
+  collectionId    String?                @db.Uuid
+  collection      ArtistCollection?      @relation(fields: [collectionId], references: [id])
+  productId       String?                @db.Uuid
+  product         Product?               @relation(fields: [productId], references: [id])
+  thresholdType   EvolutionThresholdType
+  thresholdValue  Int
+  thresholdConfig Json?
+  grantsBundleId  String?                @db.Uuid
+  grantsBundle    ContentBundle?         @relation(fields: [grantsBundleId], references: [id])
+  isActive        Boolean
+  archivedAt      DateTime?
+  createdAt       DateTime
+
+  evolutionEvents EvolutionEvent[]
+}
+
+/// Records that a rule fired for a SKU. Unique per (rule, sku) — this row IS
+/// the idempotency guard, so the evaluator can run as often as it likes and a
+/// reward is never granted twice.
+model EvolutionEvent {
+  id          String        @id @db.Uuid
+  ruleId      String        @db.Uuid
+  rule        EvolutionRule @relation(fields: [ruleId], references: [id])
+  skuId       String        @db.Uuid
+  sku         Sku           @relation(fields: [skuId], references: [id])
+  triggeredAt DateTime
+
+  @@unique([ruleId, skuId])
+}
+
+/// What the rule measures. OWNED_DURATION is held-time in days; the COUNT
+/// variants are tallies; LOCATION and EVENT_SPECIFIC read thresholdConfig.
+enum EvolutionThresholdType {
+  OWNED_DURATION
+  CLAIM_COUNT
+  PURCHASE_COUNT
+  TRADE_COUNT
+  LOCATION
+  EVENT_SPECIFIC
+}
+
+// ───── source: packages\finance\prisma\finance.prisma ──────────────────────────────
+
+// ============================================================================
+// FINANCE MODULE SCHEMA  (packages/finance/prisma/finance.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: RoyaltyRule, RoyaltyLedgerEntry, FinanceLedgerEntry
+//
+// Accounting. Both ledgers are append-only: a mistake is corrected by posting
+// an ADJUSTMENT entry that references the original, never by editing a row.
+// ============================================================================
+
+/// A royalty split, resolved most-specific-first: product → collection →
+/// artist → organization (all four scope columns nullable). `basis` decides
+/// whether the split applies to gross revenue or net profit; `percentage` is
+/// the simple case and `splitConfig` carries multi-party breakdowns.
+/// `effectiveFrom`/`effectiveTo` make rules versioned rather than mutable, so
+/// re-running an old order's royalties reproduces the original numbers.
+model RoyaltyRule {
+  id             String            @id @db.Uuid
+  organizationId String?           @db.Uuid
+  organization   Organization?     @relation(fields: [organizationId], references: [id])
+  artistId       String?           @db.Uuid
+  artist         Artist?           @relation(fields: [artistId], references: [id])
+  collectionId   String?           @db.Uuid
+  collection     ArtistCollection? @relation(fields: [collectionId], references: [id])
+  productId      String?           @db.Uuid
+  product        Product?          @relation(fields: [productId], references: [id])
+  basis          RoyaltyBasis
+  splitType      String
+  splitConfig    Json
+  percentage     Decimal?          @db.Decimal(6, 3)
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime
+
+  royaltyLedgerEntrys RoyaltyLedgerEntry[]
+}
+
+/// What one order owes under one royalty rule. `entryType = ADJUSTMENT` with
+/// `adjustsEntryId` set is how a correction is posted; `adjustsEntryId` is a
+/// self-reference kept as a plain id (no FK) so the append-only chain never
+/// blocks on referential checks. A payee's balance is the sum of its rows.
+model RoyaltyLedgerEntry {
+  id             String          @id @db.Uuid
+  orderId        String          @db.Uuid
+  order          Order           @relation(fields: [orderId], references: [id])
+  ruleId         String          @db.Uuid
+  rule           RoyaltyRule     @relation(fields: [ruleId], references: [id])
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       Currency
+  entryType      LedgerEntryType
+  adjustsEntryId String?         @db.Uuid
+  createdAt      DateTime
+}
+
+/// Platform-side double-entry line. `direction` (CREDIT/DEBIT) plus `amount`
+/// is the posting; `costOfGoods` and `gatewayFee` are carried alongside so
+/// margin is reportable without re-reading the catalog or the gateway.
+/// `orderId` is nullable for entries with no order behind them (platform fees,
+/// manual adjustments, payouts).
+model FinanceLedgerEntry {
+  id          String           @id @db.Uuid
+  orderId     String?          @db.Uuid
+  order       Order?           @relation(fields: [orderId], references: [id])
+  entryType   LedgerEntryType
+  direction   FinanceDirection
+  amount      Decimal          @db.Decimal(12, 2)
+  currency    Currency
+  costOfGoods Decimal?         @db.Decimal(12, 2)
+  gatewayFee  Decimal?         @db.Decimal(12, 2)
+  description String?
+  createdAt   DateTime
+}
+
+/// What a royalty percentage is taken from.
+enum RoyaltyBasis {
+  NET_PROFIT
+  GROSS_REVENUE
+}
+
+/// Whether a ledger row is the first posting for its event (ORIGINAL) or a
+/// correction to an earlier one (ADJUSTMENT).
+enum LedgerEntryType {
+  ORIGINAL
+  ADJUSTMENT
+}
+
+/// Direction of a finance posting from the platform's point of view.
+enum FinanceDirection {
+  CREDIT
+  DEBIT
+}
+
+// ───── source: packages\markets\prisma\markets.prisma ──────────────────────────────
+
+// ============================================================================
+// MARKETS MODULE SCHEMA  (packages/markets/prisma/markets.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Market, MarketCountry
+//
+// A market is the pricing/currency region a buyer shops in. Products carry one
+// ProductPrice row per market; orders record which market they were placed in.
+// ============================================================================
+
+/// A selling region with a single settlement currency. Exactly one row should
+/// carry `isDefault = true` — the fallback when a buyer's country maps nowhere.
+model Market {
+  id         String    @id @db.Uuid
+  code       String    @unique
+  name       String
+  currency   Currency
+  isActive   Boolean
+  isDefault  Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  marketCountrys MarketCountry[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  users         User[]
+  productPrices ProductPrice[]
+  orders        Order[]
+}
+
+/// Maps an ISO country code to its market. `countryCode` is globally unique, so
+/// a country belongs to exactly one market and resolution is unambiguous.
+model MarketCountry {
+  id          String   @id @db.Uuid
+  marketId    String   @db.Uuid
+  market      Market   @relation(fields: [marketId], references: [id])
+  countryCode String   @unique
+  createdAt   DateTime
+}
+
+// ───── source: packages\media\prisma\media.prisma ──────────────────────────────────
+
+// ============================================================================
+// MEDIA MODULE SCHEMA  (packages/media/prisma/media.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: MediaAsset
+//
+// The single upload registry for the whole platform. Nothing else stores a
+// storage path: products reference assets via ProductImage, content bundles via
+// ContentBundleItem. One place to enforce virus scanning and one place to
+// revoke a file.
+// ============================================================================
+
+/// An uploaded file. `storageRef` is the object-store key — never a public URL,
+/// so signed-URL policy stays a runtime decision. `checksum` deduplicates and
+/// detects corruption; `virusScanStatus` gates serving (only CLEAN is
+/// servable). The four nullable owner columns scope the asset to whichever
+/// entity it belongs to; `uploadedBy` always records the actor.
+model MediaAsset {
+  id              String          @id @db.Uuid
+  assetType       AssetType
+  storageRef      String
+  fileName        String
+  mimeType        String
+  sizeBytes       Int?
+  checksum        String?
+  virusScanStatus VirusScanStatus
+  uploadedById    String          @db.Uuid
+  uploadedBy      User            @relation(fields: [uploadedById], references: [id])
+
+  // ── Optional ownership scoping — at most one is normally set ──────────────
+  organizationId String?           @db.Uuid
+  organization   Organization?     @relation(fields: [organizationId], references: [id])
+  artistId       String?           @db.Uuid
+  artist         Artist?           @relation(fields: [artistId], references: [id])
+  productId      String?           @db.Uuid
+  product        Product?          @relation(fields: [productId], references: [id])
+  collectionId   String?           @db.Uuid
+  collection     ArtistCollection? @relation(fields: [collectionId], references: [id])
+
+  archivedAt DateTime?
+  createdAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  productImages      ProductImage[]
+  contentBundleItems ContentBundleItem[]
+}
+
+/// What the file is for. Drives storage tier, retention and who may read it —
+/// EXCLUSIVE_CONTENT and LEGAL_DOCUMENT are never publicly servable.
+enum AssetType {
+  DROP_IMAGE
+  PROFILE_IMAGE
+  EXCLUSIVE_CONTENT
+  LEGAL_DOCUMENT
+  SUPPLY_SPREADSHEET
+  OTHER
+}
+
+/// Malware scan outcome. Only CLEAN may be served; SKIPPED covers trusted
+/// internal uploads that bypassed the scanner.
+enum VirusScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SKIPPED
+}
+
+// ───── source: packages\notifications\prisma\notifications.prisma ──────────────────
+
+// ============================================================================
+// NOTIFICATIONS MODULE SCHEMA  (packages/notifications/prisma/notifications.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: NotificationTemplate, Notification, NotificationPreference
+// ============================================================================
+
+/// The message body for one event type on one channel. `eventType` is unique,
+/// so the domain event name is the lookup key and publishers never hard-code
+/// copy. `parameters` lists the placeholders the template expects, which lets
+/// the sender validate its payload before dispatch.
+model NotificationTemplate {
+  id           String              @id @db.Uuid
+  eventType    String              @unique
+  channel      NotificationChannel
+  subject      String?
+  bodyTemplate String
+  parameters   String[]
+  isActive     Boolean
+  createdAt    DateTime
+  updatedAt    DateTime
+
+  notifications Notification[]
+}
+
+/// One rendered delivery to one user. `payload` keeps the values the template
+/// was filled with, so the message can be re-rendered or audited later.
+/// `failureReason` is retained on FAILED rows for retry triage.
+model Notification {
+  id            String               @id @db.Uuid
+  userId        String               @db.Uuid
+  user          User                 @relation(fields: [userId], references: [id])
+  templateId    String               @db.Uuid
+  template      NotificationTemplate @relation(fields: [templateId], references: [id])
+  channel       NotificationChannel
+  payload       Json?
+  status        NotificationStatus
+  sentAt        DateTime?
+  readAt        DateTime?
+  failureReason String?
+  createdAt     DateTime
+}
+
+/// A user's opt-in per channel. Unique per (user, channel); a missing row means
+/// the channel default applies.
+model NotificationPreference {
+  id      String              @id @db.Uuid
+  userId  String              @db.Uuid
+  user    User                @relation(fields: [userId], references: [id])
+  channel NotificationChannel
+  enabled Boolean
+
+  @@unique([userId, channel])
+}
+
+/// Delivery channel. Push/SMS join this enum when those transports ship.
+enum NotificationChannel {
+  EMAIL
+  IN_APP
+}
+
+/// Delivery state. READ only applies to IN_APP.
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  READ
+}
+
+// ───── source: packages\orders\prisma\orders.prisma ────────────────────────────────
+
+// ============================================================================
+// ORDERS MODULE SCHEMA  (packages/orders/prisma/orders.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Order, OrderAddress, InventoryReservation
+//
+// The purchase record. Money movement is the payments module; margin and
+// royalty postings are the finance module. This module owns only the order's
+// own lifecycle and the stock it is holding.
+// ============================================================================
+
+/// A purchase. `skuId` is nullable because a serialized unit is only assigned
+/// once payment settles — before that the order holds an InventoryReservation.
+/// `unitPrice`, `amount`, `currency` and `gateway` are snapshotted at purchase
+/// time so later catalog or market edits never rewrite an order's totals.
+model Order {
+  id              String          @id @db.Uuid
+  buyerId         String          @db.Uuid
+  buyer           User            @relation(fields: [buyerId], references: [id])
+  productId       String          @db.Uuid
+  product         Product         @relation(fields: [productId], references: [id])
+  variantId       String?         @db.Uuid
+  variant         ProductVariant? @relation(fields: [variantId], references: [id])
+  skuId           String?         @db.Uuid
+  sku             Sku?            @relation(fields: [skuId], references: [id])
+  quantity        Int
+  organizationId  String?         @db.Uuid
+  organization    Organization?   @relation(fields: [organizationId], references: [id])
+  marketId        String?         @db.Uuid
+  market          Market?         @relation(fields: [marketId], references: [id])
+  status          OrderStatus
+  unitPrice       Decimal         @db.Decimal(12, 2)
+  amount          Decimal         @db.Decimal(12, 2)
+  currency        Currency
+  gateway         PaymentGateway
+  /// When the buyer accepted the drop's terms — evidence for disputes.
+  termsAcceptedAt DateTime?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  trackingNote    String?
+  placedAt        DateTime
+  updatedAt       DateTime
+  archivedAt      DateTime?
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  orderAddresss         OrderAddress[]
+  inventoryReservations InventoryReservation[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  paymentTransactions PaymentTransaction[]
+  refundRequests      RefundRequest[]
+  royaltyLedgerEntrys RoyaltyLedgerEntry[]
+  financeLedgerEntrys FinanceLedgerEntry[]
+}
+
+/// A frozen copy of the shipping or billing address for one order. The address
+/// lines are duplicated (not read through `sourceAddressId`) on purpose: an
+/// order must always show where it was actually sent, even after the user edits
+/// or deletes the address book entry. Unique per (order, usage).
+model OrderAddress {
+  id              String       @id @db.Uuid
+  orderId         String       @db.Uuid
+  order           Order        @relation(fields: [orderId], references: [id])
+  usage           AddressUsage
+  /// Provenance pointer to the Address it was copied from; nullable because the
+  /// source may be gone and the snapshot must remain valid regardless.
+  sourceAddressId String?      @db.Uuid
+  sourceAddress   Address?     @relation(fields: [sourceAddressId], references: [id])
+  label           AddressLabel
+  labelCustom     String?
+  recipientName   String
+  line1           String
+  line2           String?
+  city            String
+  state           String?
+  postalCode      String
+  countryCode     String
+  phone           String?
+  createdAt       DateTime
+
+  @@unique([orderId, usage])
+}
+
+/// A temporary hold on a specific SKU while an order is paying. HELD expires at
+/// `expiresAt` (a sweeper RELEASEs it); COMMITTED means payment settled and the
+/// SKU is now the order's. This is what stops two buyers claiming one unit.
+model InventoryReservation {
+  id        String            @id @db.Uuid
+  orderId   String            @db.Uuid
+  order     Order             @relation(fields: [orderId], references: [id])
+  skuId     String            @db.Uuid
+  sku       Sku               @relation(fields: [skuId], references: [id])
+  status    ReservationStatus
+  expiresAt DateTime
+  createdAt DateTime
+}
+
+/// Order lifecycle. Fulfilment states (SHIPPED/DELIVERED) apply to physical
+/// items; REFUNDED is set once the payments module completes a refund.
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+/// Which role an OrderAddress snapshot plays for its order.
+enum AddressUsage {
+  SHIPPING
+  BILLING
+}
+
+/// State of a stock hold: HELD (pending payment), COMMITTED (payment settled),
+/// RELEASED (expired or cancelled — the SKU is available again).
+enum ReservationStatus {
+  HELD
+  COMMITTED
+  RELEASED
+}
+
+// ───── source: packages\organizations\prisma\organizations.prisma ──────────────────
+
+// ============================================================================
+// ORGANIZATIONS MODULE SCHEMA  (packages/organizations/prisma/organizations.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Organization
+//
+// The tenant root. Almost every commercial record (product, order, media,
+// royalty rule, gateway config) carries an optional organizationId, and
+// RoleAssignment uses an Organization id as its ORG scope.
+// ============================================================================
+
+/// A commercial entity on the platform: the HITBOX organization itself, a
+/// BRAND, or a solo artist operating as their own org (ARTIST_INDIVIDUAL).
+model Organization {
+  id         String           @id @db.Uuid
+  name       String
+  type       OrganizationType
+  slug       String           @unique
+  isActive   Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  artists               Artist[]
+  artistCollections     ArtistCollection[]
+  products              Product[]
+  artistBrandLinks      ArtistBrandLink[]
+  roleAssignments       RoleAssignment[]
+  mediaAssets           MediaAsset[]
+  orders                Order[]
+  paymentGatewayConfigs PaymentGatewayConfig[]
+  royaltyRules          RoyaltyRule[]
+}
+
+/// Which kind of entity an Organization represents. HITBOX is the platform's
+/// own org (there is exactly one); ARTIST_INDIVIDUAL lets a solo artist hold
+/// commercial records without a separate brand behind them.
+enum OrganizationType {
+  HITBOX
+  BRAND
+  ARTIST_INDIVIDUAL
+}
+
+// ───── source: packages\payments\prisma\payments.prisma ────────────────────────────
+
+// ============================================================================
+// PAYMENTS MODULE SCHEMA  (packages/payments/prisma/payments.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent,
+//       RefundRequest
+//
+// Everything that talks to a payment provider. No card data or credentials are
+// ever stored — only opaque gateway references and a secrets-manager pointer.
+// ============================================================================
+
+/// One charge attempt against a gateway for an order. `idempotencyKey` is
+/// globally unique, which is what makes a retried charge safe. `needsReview`
+/// plus the reviewer columns support manual settlement review; `gatewayRef` is
+/// the provider's own id for reconciliation.
+model PaymentTransaction {
+  id             String                   @id @db.Uuid
+  orderId        String                   @db.Uuid
+  order          Order                    @relation(fields: [orderId], references: [id])
+  gateway        PaymentGateway
+  gatewayRef     String?
+  status         PaymentTransactionStatus
+  idempotencyKey String                   @unique
+  amount         Decimal                  @db.Decimal(12, 2)
+  currency       Currency
+  needsReview    Boolean
+  /// Reviewer's user id. Intentionally not a foreign key — a financial review
+  /// record must outlive the reviewer's account.
+  reviewedById   String?                  @db.Uuid
+  reviewedAt     DateTime?
+  reviewNote     String?
+  failureReason  String?
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+/// Gateway credentials binding at one scope: PLATFORM-wide, per ORGANIZATION,
+/// or per DROP. `credentialsRef` is a pointer into the secrets manager — the
+/// actual keys are never in this database.
+model PaymentGatewayConfig {
+  id             String             @id @db.Uuid
+  scope          GatewayConfigScope
+  organizationId String?            @db.Uuid
+  organization   Organization?      @relation(fields: [organizationId], references: [id])
+  gateway        PaymentGateway
+  isDefault      Boolean
+  credentialsRef String
+  status         ConfigStatus
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+/// Raw gateway webhook deliveries, keyed by the provider's event id (`id`), so
+/// a row's existence is the replay guard. `signatureVerified` is recorded
+/// rather than assumed, and `processingError` keeps failed deliveries around
+/// for replay instead of dropping them.
+model PaymentWebhookEvent {
+  id                String         @id
+  provider          PaymentGateway
+  eventType         String
+  payload           Json
+  signatureVerified Boolean
+  processedAt       DateTime?
+  processingError   String?
+  receivedAt        DateTime
+}
+
+/// A refund through its approval chain. `physicalReturnConfirmedAt` gates
+/// refunds on physical goods — money moves only once the item is back.
+/// `gatewayRefundId` links to the provider's refund object.
+model RefundRequest {
+  id                        String       @id @db.Uuid
+  orderId                   String       @db.Uuid
+  order                     Order        @relation(fields: [orderId], references: [id])
+  requestedById             String       @db.Uuid
+  requestedBy               User         @relation("User_requestedBy", fields: [requestedById], references: [id])
+  reason                    String
+  status                    RefundStatus
+  amount                    Decimal      @db.Decimal(12, 2)
+  physicalReturnConfirmedAt DateTime?
+  approvedById              String?      @db.Uuid
+  approvedBy                User?        @relation("User_approvedBy", fields: [approvedById], references: [id])
+  approvedAt                DateTime?
+  gatewayRefundId           String?
+  createdAt                 DateTime
+  updatedAt                 DateTime
+}
+
+/// Charge attempt state. NEEDS_REVIEW parks a transaction for a human instead
+/// of failing it outright.
+enum PaymentTransactionStatus {
+  INITIATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  NEEDS_REVIEW
+}
+
+/// How widely a gateway config applies. More specific scopes win: DROP over
+/// ORGANIZATION over PLATFORM.
+enum GatewayConfigScope {
+  PLATFORM
+  ORGANIZATION
+  DROP
+}
+
+/// Whether a gateway config is live.
+enum ConfigStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Refund lifecycle. AWAITING_RETURN is the physical-goods hold before
+/// approval; PROCESSED means the gateway confirmed the money moved.
+enum RefundStatus {
+  REQUESTED
+  AWAITING_RETURN
+  APPROVED
+  PROCESSED
+  REJECTED
+}
+
+// ───── source: packages\platform\prisma\platform.prisma ────────────────────────────
+
+// ============================================================================
+// PLATFORM MODULE SCHEMA  (packages/platform/prisma/platform.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: PlatformConfig
+// ============================================================================
+
+/// Runtime configuration and feature flags, keyed by a unique `key`. Distinct
+/// from `packages/shared/config/env.ts`, which holds boot-time secrets and
+/// connection strings validated at startup: this table is for values that
+/// change while the process is running and must be editable without a deploy.
+/// `isFeatureFlag` separates on/off toggles from tunables so a flag UI can
+/// filter to just the switches. `updatedById` is FK-free so a config row
+/// outlives the account that last changed it.
+model PlatformConfig {
+  id            String   @id @db.Uuid
+  key           String   @unique
+  value         Json
+  isFeatureFlag Boolean
+  description   String?
+  updatedById   String?  @db.Uuid
+  updatedAt     DateTime
+  createdAt     DateTime
 }
 
 // ───── source: packages\products\prisma\products.prisma ────────────────────────────
@@ -284,79 +1321,542 @@ model BuyerCollection {
 // ============================================================================
 // PRODUCTS MODULE SCHEMA  (packages/products/prisma/products.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Product, ProductVariant, ProductImage, ProductPrice
+//
+// This module is the CATALOG — the definition of what is for sale. The
+// serialized physical items are the skus module (Sku); the two are deliberately
+// separate so catalog editing and item/tag custody can scale apart.
 // ============================================================================
 
+/// A drop: one sellable product definition. `totalSupply` is the number of
+/// serialized SKUs that will exist. `status` drives the release workflow
+/// (DRAFT → SUBMITTED → IN_REVIEW → APPROVED → PUBLISHED → ACTIVE → ENDED),
+/// with the decisions themselves recorded in the releases module.
 model Product {
-    id                String             @id @default(cuid())
-    productCode       String             @unique @db.VarChar(12) // 12 digits: 8 unique + 4 group (format CHECK in migration)
-    name              String             @db.VarChar(255)
-    type              ProductType
-    category          ProductCategory
-    genre             ProductGenre
-    description       String?
-    rewardPoints      Int                @default(0) @map("reward_points")
-    state             ProductState       @default(ACTIVE)
-    marketplaceStatus MarketplaceStatus? @map("marketplace_status")
-    rarity            ProductRarity      @default(COMMON)
-    priceInDollars    Decimal            @default(0) @map("price_in_dollars") @db.Decimal(12, 2)
-    inventoryUnit     Int                @default(0) @map("inventory_unit")
-    unitsSold         Int                @default(0) @map("units_sold")
-    tagId             String?            @unique @map("tag_id") @db.VarChar(64) // NFC tag used for claiming
-    claimedStatus     ClaimedStatus      @default(UNCLAIMED) @map("claimed_status")
-    claimedAt         DateTime?          @map("claimed_at")
-    releaseDate       DateTime?          @map("release_date") @db.Date
-    createdAt         DateTime           @default(now()) @map("created_at")
-    updatedAt         DateTime           @updatedAt @map("updated_at") // replaces the old lastupdate trigger
+  id                String            @id @db.Uuid
+  groupCode         String            @unique
+  name              String
+  description       String?
+  collectionId      String?           @db.Uuid
+  collection        ArtistCollection? @relation(fields: [collectionId], references: [id])
+  artistId          String?           @db.Uuid
+  artist            Artist?           @relation(fields: [artistId], references: [id])
+  organizationId    String?           @db.Uuid
+  organization      Organization?     @relation(fields: [organizationId], references: [id])
+  vertical          String?
+  category          String?
+  rarity            String?
+  /// Max units one buyer may purchase; null = unlimited.
+  purchaseLimit     Int?
+  totalSupply       Int
+  releaseStart      DateTime?
+  releaseEnd        DateTime?
+  status            DropStatus
+  publishedAt       DateTime?
+  complianceStatus  ComplianceStatus
+  /// Pointer to the published odds disclosure (required for randomised drops).
+  oddsDisclosureRef String?
+  isAgeSpecific     Boolean
+  minimumAge        Int?
+  isActive          Boolean
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
 
-    ownerId String? @map("owner_id")
-    owner   User?   @relation(fields: [ownerId], references: [id])
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  productImages   ProductImage[]
+  productVariants ProductVariant[]
+  productPrices   ProductPrice[]
 
-    collectionId String?           @map("collection_id")
-    collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
-
-    images           ProductImage[]
-    history          ProductHistory[]
-    claims           ProductClaim[]
-    ledgerEntries    BlockchainLedger[]
-    buyerCollections BuyerCollection[]
-
-    @@index([ownerId])
-    @@index([category])
-    @@index([genre])
-    @@index([marketplaceStatus])
-    @@map("products")
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skus             Sku[]
+  productClaims    ProductClaim[]
+  releaseApprovals ReleaseApproval[]
+  mediaAssets      MediaAsset[]
+  contentBundles   ContentBundle[]
+  evolutionRules   EvolutionRule[]
+  orders           Order[]
+  royaltyRules     RoyaltyRule[]
+  wishlistItems    WishlistItem[]
 }
 
-/// One row per ownership/price period. (Draft PK was product_id, which forced
-/// one row per product — fixed to a surrogate PK so a product can have many.)
-model ProductHistory {
-    id                 String    @id @default(cuid())
-    price              Decimal?  @db.Decimal(12, 2)
-    ownershipStartDate DateTime? @map("ownership_start_date")
-    ownershipEndDate   DateTime? @map("ownership_end_date") // CHECK end >= start added in migration
+/// A purchasable option of a product — size, colourway, edition. Modelled as a
+/// single name/value pair per row, with the composite unique preventing the
+/// same option value twice on one product.
+model ProductVariant {
+  id          String    @id @db.Uuid
+  productId   String    @db.Uuid
+  product     Product   @relation(fields: [productId], references: [id])
+  variantCode String    @unique
+  label       String
+  optionName  String
+  optionValue String
+  position    Int
+  /// Per-variant supply cap; null = drawn from the product's totalSupply.
+  totalSupply Int?
+  isActive    Boolean
+  archivedAt  DateTime?
+  createdAt   DateTime
+  updatedAt   DateTime
 
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  productPrices ProductPrice[]
 
-    ownerId String? @map("owner_id")
-    owner   User?   @relation(fields: [ownerId], references: [id])
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skus          Sku[]
+  orders        Order[]
+  wishlistItems WishlistItem[]
 
-    @@index([productId])
-    @@index([ownerId])
-    @@map("product_history")
+  @@unique([productId, optionName, optionValue])
 }
 
+/// Joins a product to a media asset for gallery display. The asset itself is
+/// owned by the media module; this row only carries the placement (position,
+/// primary flag, alt text).
 model ProductImage {
-    id          String  @id @default(cuid())
-    title       String? @db.VarChar(255)
-    description String?
-    url         String
+  id         String     @id @db.Uuid
+  productId  String     @db.Uuid
+  product    Product    @relation(fields: [productId], references: [id])
+  assetId    String     @db.Uuid
+  asset      MediaAsset @relation(fields: [assetId], references: [id])
+  position   Int
+  isPrimary  Boolean
+  altText    String?
+  archivedAt DateTime?
+  createdAt  DateTime
 
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  @@unique([productId, assetId])
+}
 
-    @@index([productId])
-    @@map("product_images")
+/// Price of a product (optionally a specific variant) in one market. The
+/// composite unique guarantees a single active price point per
+/// product/variant/market triple. `costOfGoods` is stored here so the finance
+/// ledger can compute margin without re-deriving it.
+model ProductPrice {
+  id          String             @id @db.Uuid
+  productId   String             @db.Uuid
+  product     Product            @relation(fields: [productId], references: [id])
+  variantId   String?            @db.Uuid
+  variant     ProductVariant?    @relation(fields: [variantId], references: [id])
+  marketId    String             @db.Uuid
+  market      Market             @relation(fields: [marketId], references: [id])
+  amount      Decimal?           @db.Decimal(12, 2)
+  isFree      Boolean
+  costOfGoods Decimal?           @db.Decimal(12, 2)
+  status      ProductPriceStatus
+  createdAt   DateTime
+  updatedAt   DateTime
+
+  @@unique([productId, variantId, marketId])
+}
+
+/// Lifecycle state of a drop. APPROVED means cleared for release; PUBLISHED
+/// means visible; ACTIVE means inside its release window and buyable.
+enum DropStatus {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  PUBLISHED
+  ACTIVE
+  ENDED
+  ARCHIVED
+}
+
+/// Whether a price point is currently in effect.
+enum ProductPriceStatus {
+  ACTIVE
+  DISABLED
+}
+
+// ───── source: packages\releases\prisma\releases.prisma ────────────────────────────
+
+// ============================================================================
+// RELEASES MODULE SCHEMA  (packages/releases/prisma/releases.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ReleaseApproval
+//
+// The review workflow that gates Product.status. Separated from products
+// because it is a different actor's surface (HitBox reviewer / compliance)
+// with its own audit expectations.
+// ============================================================================
+
+/// One approval decision on one version of a drop. `version` increments each
+/// time the drop is resubmitted, so the full review history is preserved rather
+/// than overwritten. The compliance fields are the reviewer's sign-off and are
+/// mirrored onto Product.complianceStatus once decided.
+model ReleaseApproval {
+  id                String           @id @db.Uuid
+  productId         String           @db.Uuid
+  product           Product          @relation(fields: [productId], references: [id])
+  approverId        String           @db.Uuid
+  approver          User             @relation("User_approver", fields: [approverId], references: [id])
+  status            ApprovalStatus
+  comment           String?
+  version           Int
+  decidedAt         DateTime?
+  complianceStatus  ComplianceStatus
+  oddsDisclosureRef String?
+  checkedById       String?          @db.Uuid
+  checkedBy         User?            @relation("User_checkedBy", fields: [checkedById], references: [id])
+  checkedAt         DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+}
+
+/// Outcome of a release review.
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ───── source: packages\resale\prisma\resale.prisma ────────────────────────────────
+
+// ============================================================================
+// RESALE MODULE SCHEMA  (packages/resale/prisma/resale.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ResaleListing
+//
+// The secondary market. Distinct from the `marketplace` package, which is a
+// read-side feed over the primary catalog and owns no tables.
+// ============================================================================
+
+/// A holder's offer to sell a SKU they own. BLOCKED is set when the SKU carries
+/// `resaleBlocked` (fraud hold, artist restriction) — the listing is kept
+/// rather than deleted so the seller can see why it stopped. A resale that
+/// completes writes a TRANSFER onto the SKU's provenance chain in the claims
+/// module; nothing about ownership is decided here.
+model ResaleListing {
+  id        String       @id @db.Uuid
+  sellerId  String       @db.Uuid
+  seller    User         @relation(fields: [sellerId], references: [id])
+  skuId     String       @db.Uuid
+  sku       Sku          @relation(fields: [skuId], references: [id])
+  price     Decimal      @db.Decimal(12, 2)
+  currency  Currency
+  status    ResaleStatus
+  createdAt DateTime
+  updatedAt DateTime
+}
+
+/// Listing state. BLOCKED is platform-imposed; CANCELLED is seller-initiated.
+enum ResaleStatus {
+  ACTIVE
+  SOLD
+  CANCELLED
+  BLOCKED
+}
+
+// ───── source: packages\search\prisma\search.prisma ────────────────────────────────
+
+// ============================================================================
+// SEARCH MODULE SCHEMA  (packages/search/prisma/search.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: SearchIndexJob
+// ============================================================================
+
+/// Outbox row for the search indexer. Writers enqueue a job in the same
+/// transaction as the data change, so an index update can never be lost even
+/// if the indexer is down. `entityType` + `entityId` are a deliberately
+/// FK-free polymorphic pointer — the indexer covers products, artists,
+/// collections and organizations, and must not couple to any of their tables.
+/// `entityId` is null for a FULL_REINDEX. `attempts` + `lastError` drive
+/// bounded retry with a dead-letter threshold.
+model SearchIndexJob {
+  id          String         @id @db.Uuid
+  entityType  String
+  entityId    String?        @db.Uuid
+  operation   IndexOperation
+  status      IndexJobStatus
+  attempts    Int
+  lastError   String?
+  createdAt   DateTime
+  completedAt DateTime?
+}
+
+/// What the indexer should do with the entity.
+enum IndexOperation {
+  UPSERT
+  DELETE
+  FULL_REINDEX
+}
+
+/// Job state. RUNNING rows left behind by a crashed worker are requeued by age.
+enum IndexJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ───── source: packages\skus\prisma\skus.prisma ────────────────────────────────────
+
+// ============================================================================
+// SKUS MODULE SCHEMA  (packages/skus/prisma/skus.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Sku
+//
+// The serialized-item registry: one row per physical collectible, its NFC tag
+// binding, and its current owner. This is the platform's most security-
+// sensitive table — the digital twin of an object in someone's hands — which
+// is why it is its own module rather than a folder inside products.
+// ============================================================================
+
+/// One serialized unit of a product. `serialNumber` is unique within the
+/// product ("#014 of 500"). Ownership, NFC tag custody and resale eligibility
+/// all live on this row; the provenance history is append-only in the claims
+/// module (ProductHistory + BlockchainLedger).
+model Sku {
+  id            String          @id @db.Uuid
+  skuCode       String          @unique
+  productId     String          @db.Uuid
+  product       Product         @relation(fields: [productId], references: [id])
+  variantId     String?         @db.Uuid
+  variant       ProductVariant? @relation(fields: [variantId], references: [id])
+  /// Position within the product's edition; unique per product (see @@unique).
+  serialNumber  Int
+  /// Current holder. Null until first claimed.
+  ownerId       String?         @db.Uuid
+  owner         User?           @relation(fields: [ownerId], references: [id])
+  claimedStatus ClaimedStatus
+
+  // ── NFC tag custody ───────────────────────────────────────────────────────
+  /// Physical tag UID. Unique platform-wide — two SKUs can never claim the
+  /// same tag, which is the primary defence against cloned tags.
+  tagId                 String?           @unique
+  /// Vendor provisioning batch reference. Not a foreign key: batches are
+  /// recorded by the supply module and tags may arrive before that row exists.
+  provisioningBatchId   String?
+  tagLifecycleState     TagLifecycleState
+  vendorId              String?           @db.Uuid
+  vendor                Vendor?           @relation(fields: [vendorId], references: [id])
+  vendorAuthenticatedAt DateTime?
+
+  // ── One-shot claim token ──────────────────────────────────────────────────
+  /// Single-use token minted on tap and burned on claim. Unique so a token can
+  /// never be replayed against a second SKU.
+  claimToken         String?   @unique
+  claimTokenIssuedAt DateTime?
+  claimTokenUsedAt   DateTime?
+
+  // ── Trust / anti-fraud state ──────────────────────────────────────────────
+  resaleBlocked       Boolean
+  resaleBlockedReason String?
+  /// Monotonic NFC tap counter — a counter that goes backwards indicates a
+  /// replayed or cloned tag.
+  lastTapCounter      Int
+  tamperStatus        String?
+
+  isActive   Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  productClaims         ProductClaim[]
+  blockchainLedgers     BlockchainLedger[]
+  buyerCollections      BuyerCollection[]
+  productHistorys       ProductHistory[]
+  contentUnlocks        ContentUnlock[]
+  evolutionEvents       EvolutionEvent[]
+  orders                Order[]
+  inventoryReservations InventoryReservation[]
+  resaleListings        ResaleListing[]
+  supportCases          SupportCase[]
+
+  @@unique([productId, serialNumber])
+}
+
+/// Whether the item has been claimed by an owner. IN_TRANSFER blocks
+/// concurrent claims while ownership is moving; FLAGGED freezes the item
+/// pending a support/fraud investigation.
+enum ClaimedStatus {
+  UNCLAIMED
+  CLAIMED
+  IN_TRANSFER
+  FLAGGED
+}
+
+/// Custody state of the physical NFC tag, from manufacture to retirement.
+/// UNPROVISIONED → BOUND (written to a SKU) → ACTIVE (claimed & in use);
+/// LOST / REVOKED / DISPUTED are terminal states that block claims.
+enum TagLifecycleState {
+  UNPROVISIONED
+  BOUND
+  ACTIVE
+  LOST
+  REVOKED
+  DISPUTED
+}
+
+// ───── source: packages\social\prisma\social.prisma ────────────────────────────────
+
+// ============================================================================
+// SOCIAL MODULE SCHEMA  (packages/social/prisma/social.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Follow, WishlistItem
+//
+// Buyer intent signals. Both tables feed the discover/marketplace read-side
+// feeds and the notification triggers ("a drop you wishlisted is live").
+// ============================================================================
+
+/// A follow edge. Polymorphic by nullable target: exactly one of `artistId` or
+/// `followedOrganizationId` is set. The two partial uniques prevent duplicate
+/// follows of the same target while still allowing many rows per follower —
+/// Postgres treats NULLs as distinct, so a row with a null target column never
+/// collides on that key. `followedOrganizationId` is kept FK-free so the
+/// organizations module can be extracted without touching this table.
+model Follow {
+  id                     String   @id @db.Uuid
+  followerId             String   @db.Uuid
+  follower               User     @relation(fields: [followerId], references: [id])
+  artistId               String?  @db.Uuid
+  artist                 Artist?  @relation(fields: [artistId], references: [id])
+  followedOrganizationId String?  @db.Uuid
+  createdAt              DateTime
+
+  @@unique([followerId, artistId])
+  @@unique([followerId, followedOrganizationId])
+}
+
+/// A saved product, optionally narrowed to a variant. Unique per
+/// (user, product, variant). `notifyOnAvailable` is the hook the notifications
+/// module reads when a drop opens or restocks.
+model WishlistItem {
+  id                String          @id @db.Uuid
+  userId            String          @db.Uuid
+  user              User            @relation(fields: [userId], references: [id])
+  productId         String          @db.Uuid
+  product           Product         @relation(fields: [productId], references: [id])
+  variantId         String?         @db.Uuid
+  variant           ProductVariant? @relation(fields: [variantId], references: [id])
+  notifyOnAvailable Boolean
+  note              String?
+  createdAt         DateTime
+
+  @@unique([userId, productId, variantId])
+}
+
+// ───── source: packages\supply\prisma\supply.prisma ────────────────────────────────
+
+// ============================================================================
+// SUPPLY MODULE SCHEMA  (packages/supply/prisma/supply.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Vendor, SupplyBatch
+//
+// The physical side: who manufactures tags and merchandise, and what arrived.
+// This is the upstream of the skus module — a Sku's `vendorId` and
+// `provisioningBatchId` trace an item back to the shipment it came from.
+// ============================================================================
+
+/// A manufacturer or supplier.
+model Vendor {
+  id           String     @id @db.Uuid
+  name         String
+  vendorType   VendorType
+  contactEmail String?
+  isActive     Boolean
+  archivedAt   DateTime?
+  createdAt    DateTime
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  supplyBatchs SupplyBatch[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skus Sku[]
+}
+
+/// A received shipment of tags or merchandise. `sourceFileRef` points at the
+/// uploaded manifest (a media asset) that the batch was entered from, and
+/// `enteredBy` records who keyed it in — together they make a physical
+/// reconciliation auditable. `batchRef` is the vendor's own batch label, which
+/// is what Sku.provisioningBatchId matches against.
+model SupplyBatch {
+  id            String         @id @db.Uuid
+  vendorId      String         @db.Uuid
+  vendor        Vendor         @relation(fields: [vendorId], references: [id])
+  itemType      SupplyItemType
+  quantity      Int
+  batchRef      String?
+  receivedAt    DateTime
+  sourceFileRef String?
+  enteredById   String         @db.Uuid
+  enteredBy     User           @relation(fields: [enteredById], references: [id])
+  notes         String?
+  createdAt     DateTime
+}
+
+/// What kind of supplier this is.
+enum VendorType {
+  NFC_TAG_MANUFACTURER
+  MERCHANDISE_MANUFACTURER
+  OTHER
+}
+
+/// What a supply batch contains.
+enum SupplyItemType {
+  NFC_TAG
+  MERCHANDISE
+}
+
+// ───── source: packages\support\prisma\support.prisma ──────────────────────────────
+
+// ============================================================================
+// SUPPORT MODULE SCHEMA  (packages/support/prisma/support.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: SupportCase
+// ============================================================================
+
+/// A reported problem with a physical item or its tag. Both `skuId` and `tagId`
+/// are nullable and independent: a buyer can report a tag that resolves to no
+/// SKU at all (the CLONED case), which is exactly the report the platform most
+/// needs to capture. `tagId` is a raw string, not a foreign key, for the same
+/// reason. Resolving a case is what flips a SKU to FLAGGED or a tag to
+/// REVOKED/DISPUTED in the skus module.
+model SupportCase {
+  id             String            @id @db.Uuid
+  reporterId     String            @db.Uuid
+  reporter       User              @relation("User_reporter", fields: [reporterId], references: [id])
+  skuId          String?           @db.Uuid
+  sku            Sku?              @relation(fields: [skuId], references: [id])
+  tagId          String?
+  caseType       SupportCaseType
+  status         SupportCaseStatus
+  description    String
+  resolutionNote String?
+  resolvedById   String?           @db.Uuid
+  resolvedBy     User?             @relation("User_resolvedBy", fields: [resolvedById], references: [id])
+  resolvedAt     DateTime?
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+/// What is being reported. CLONED is the anti-counterfeit path; DISPUTE covers
+/// contested ownership between two users.
+enum SupportCaseType {
+  LOST
+  DAMAGED
+  STOLEN
+  CLONED
+  DISPUTE
+}
+
+/// Case state.
+enum SupportCaseStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  REJECTED
 }
 
 // ───── source: packages\users\prisma\users.prisma ──────────────────────────────────
@@ -364,38 +1864,93 @@ model ProductImage {
 // ============================================================================
 // USERS MODULE SCHEMA  (packages/users/prisma/users.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: User, Address
 // ============================================================================
 
-/// Platform account. Identity (credentials, sessions) lives in Clerk — this
-/// row is the local projection, created/updated via auth module events.
+/// Platform account. Identity (credentials, sessions) lives in Clerk — this row
+/// is the local projection, created/updated from auth-module webhook events, so
+/// every other module can use a plain `userId` foreign key.
 model User {
-    id           String    @id @default(cuid())
-    clerkUserId  String    @unique @map("clerk_user_id")
-    email        String    @unique @db.VarChar(255)
-    username     String?   @unique @db.VarChar(50)
-    firstName    String?   @map("first_name") @db.VarChar(100)
-    lastName     String?   @map("last_name") @db.VarChar(100)
-    avatarUrl    String?   @map("avatar_url")
-    // Verification status of the primary email, mirrored from Clerk on sync.
-    // requireAuth blocks protected routes when false. Defaults true so rows
-    // created before this column stay usable; the sync path writes the real value.
-    emailVerified Boolean  @default(true) @map("email_verified")
-    role         UserRole  @default(USER)
-    state        UserState @default(ACTIVE)
-    rewardPoints Int       @default(0) @map("reward_points")
-    createdAt    DateTime  @default(now()) @map("created_at")
-    updatedAt    DateTime  @updatedAt @map("updated_at")
-    deletedAt    DateTime? @map("deleted_at") // soft delete — set when Clerk sends user.deleted
+  id                String     @id @db.Uuid
+  clerkId           String     @unique
+  email             String     @unique
+  phone             String?
+  handle            String?    @unique
+  fullName          String?
+  bio               String?
+  avatarUrl         String?
+  role              UserRole
+  profileVisibility Visibility
+  /// Coarse location shown on the public profile — never a precise address.
+  generalLocation   String?
+  preferredMarketId String?    @db.Uuid
+  preferredMarket   Market?    @relation(fields: [preferredMarketId], references: [id])
+  isActive          Boolean
+  deactivatedAt     DateTime?
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
 
-    products         Product[]
-    productHistory   ProductHistory[]
-    claims           ProductClaim[]
-    buyerCollections BuyerCollection[]
-    // Ledger rows where this user is the outgoing / incoming owner (transfers).
-    ledgerFrom       BlockchainLedger[] @relation("LedgerFromUser")
-    ledgerTo         BlockchainLedger[] @relation("LedgerToUser")
+  // ── Own-module back-relations ──────────────────────────────────────────────
+  addresss Address[]
 
-    @@index([state])
-    @@map("users")
+  // ── Cross-module back-relations (see docs/database-architecture.md §6) ─────
+  artists                   Artist?
+  skus                      Sku[]
+  productClaims             ProductClaim[]
+  buyerCollections          BuyerCollection[]
+  productHistorys           ProductHistory[]
+  roleAssignment_user       RoleAssignment[]         @relation("User_user")
+  roleAssignment_grantedBy  RoleAssignment[]         @relation("User_grantedBy")
+  releaseApproval_approver  ReleaseApproval[]        @relation("User_approver")
+  releaseApproval_checkedBy ReleaseApproval[]        @relation("User_checkedBy")
+  mediaAssets               MediaAsset[]
+  contentUnlocks            ContentUnlock[]
+  orders                    Order[]
+  refundRequest_requestedBy RefundRequest[]          @relation("User_requestedBy")
+  refundRequest_approvedBy  RefundRequest[]          @relation("User_approvedBy")
+  notifications             Notification[]
+  notificationPreferences   NotificationPreference[]
+  wishlistItems             WishlistItem[]
+  follows                   Follow[]
+  resaleListings            ResaleListing[]
+  supportCase_reporter      SupportCase[]            @relation("User_reporter")
+  supportCase_resolvedBy    SupportCase[]            @relation("User_resolvedBy")
+  supplyBatchs              SupplyBatch[]
 }
 
+/// A user's reusable address book entry. Orders never point at this row for
+/// their shipping/billing detail — they snapshot it into OrderAddress, so
+/// editing or archiving an address never rewrites order history.
+model Address {
+  id                String       @id @db.Uuid
+  userId            String       @db.Uuid
+  user              User         @relation(fields: [userId], references: [id])
+  label             AddressLabel
+  labelCustom       String?
+  recipientName     String
+  line1             String
+  line2             String?
+  city              String
+  state             String?
+  postalCode        String
+  countryCode       String
+  phone             String?
+  isDefaultShipping Boolean
+  isDefaultBilling  Boolean
+  isActive          Boolean
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  orderAddresss OrderAddress[]
+}
+
+/// Account role on the platform. Single-module enum — only User.role uses it.
+/// Staff/brand/artist privileges are NOT modelled here: they are grants in the
+/// access-control module (RoleAssignment), so a user can hold several scoped
+/// roles at once.
+enum UserRole {
+  USER
+}

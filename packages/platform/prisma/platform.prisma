@@ -1,0 +1,24 @@
+// ============================================================================
+// PLATFORM MODULE SCHEMA  (packages/platform/prisma/platform.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: PlatformConfig
+// ============================================================================
+
+/// Runtime configuration and feature flags, keyed by a unique `key`. Distinct
+/// from `packages/shared/config/env.ts`, which holds boot-time secrets and
+/// connection strings validated at startup: this table is for values that
+/// change while the process is running and must be editable without a deploy.
+/// `isFeatureFlag` separates on/off toggles from tunables so a flag UI can
+/// filter to just the switches. `updatedById` is FK-free so a config row
+/// outlives the account that last changed it.
+model PlatformConfig {
+  id            String   @id @db.Uuid
+  key           String   @unique
+  value         Json
+  isFeatureFlag Boolean
+  description   String?
+  updatedById   String?  @db.Uuid
+  updatedAt     DateTime
+  createdAt     DateTime
+}

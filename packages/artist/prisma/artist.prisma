@@ -1,46 +1,98 @@
 // ============================================================================
 // ARTIST MODULE SCHEMA  (packages/artist/prisma/artist.prisma)
-// Artists and their collections. Owned by the artist module.
-// Product / ProductClaim relation fields point here across partials — Prisma
-// resolves them because the merge script produces one schema.
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Artist, ArtistCollection, ArtistBrandLink
 // ============================================================================
 
+/// A creator's public identity. Optionally linked to a platform User (a
+/// claimed, self-managed artist profile) and/or to an Organization (a brand
+/// that manages the artist). Both are nullable so an artist can be catalogued
+/// before either link exists.
 model Artist {
-    id         String        @id @default(cuid())
-    name       String        @db.VarChar(255)
-    slug       String        @unique @db.VarChar(255)
-    bio        String?
-    imageUrl   String?       @map("image_url")
-    genre      ProductGenre?
-    isVerified Boolean       @default(false) @map("is_verified")
-    createdAt  DateTime      @default(now()) @map("created_at")
-    updatedAt  DateTime      @updatedAt @map("updated_at")
+  id                   String        @id @db.Uuid
+  name                 String
+  slug                 String        @unique
+  bio                  String?
+  avatarUrl            String?
+  coverUrl             String?
+  genre                String?
+  isPublic             Boolean
+  organizationId       String?       @db.Uuid
+  organization         Organization? @relation(fields: [organizationId], references: [id])
+  /// Unique — one User can back at most one Artist profile.
+  userId               String?       @unique @db.Uuid
+  user                 User?         @relation(fields: [userId], references: [id])
+  complianceAttestedAt DateTime?
+  /// User id of the staff member who attested compliance. Intentionally NOT a
+  /// foreign key — an attestation must survive that account being removed.
+  complianceAttestedBy String?       @db.Uuid
+  isActive             Boolean
+  archivedAt           DateTime?
+  createdAt            DateTime
+  updatedAt            DateTime
 
-    collections ArtistCollection[]
-    claims      ProductClaim[]
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  artistCollections ArtistCollection[]
+  artistBrandLinks  ArtistBrandLink[]
 
-    @@map("artists")
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  products      Product[]
+  productClaims ProductClaim[]
+  mediaAssets   MediaAsset[]
+  royaltyRules  RoyaltyRule[]
+  follows       Follow[]
 }
 
+/// A curated series of products by one artist — the unit buyers try to
+/// complete. `position` orders collections on the artist's page.
 model ArtistCollection {
-    id            String    @id @default(cuid())
-    name          String    @db.VarChar(255)
-    description   String?
-    coverImageUrl String?   @map("cover_image_url")
-    releaseDate   DateTime? @map("release_date") @db.Date
-    // Cap of collectibles this collection can hold. Denominator of a buyer's
-    // "collection progress" (see @hitbox/collections stats).
-    maximumLimit  Int       @default(10) @map("maximum_limit")
-    createdAt     DateTime  @default(now()) @map("created_at")
-    updatedAt     DateTime  @updatedAt @map("updated_at")
+  id             String        @id @db.Uuid
+  name           String
+  slug           String        @unique
+  description    String?
+  heroImageUrl   String?
+  position       Int
+  artistId       String        @db.Uuid
+  artist         Artist        @relation(fields: [artistId], references: [id])
+  organizationId String?       @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  isPublic       Boolean
+  isActive       Boolean
+  archivedAt     DateTime?
+  createdAt      DateTime
+  updatedAt      DateTime
 
-    artistId String @map("artist_id")
-    artist   Artist @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  products       Product[]
+  productClaims  ProductClaim[]
+  mediaAssets    MediaAsset[]
+  contentBundles ContentBundle[]
+  evolutionRules EvolutionRule[]
+  royaltyRules   RoyaltyRule[]
+}
 
-    products Product[]
-    claims   ProductClaim[]
+/// A time-bounded commercial relationship between an artist and a brand.
+/// The composite unique lets the same pair hold several link types at once
+/// (e.g. PRIMARY plus MERCHANDISE) but never duplicate one.
+model ArtistBrandLink {
+  id             String              @id @db.Uuid
+  artistId       String              @db.Uuid
+  artist         Artist              @relation(fields: [artistId], references: [id])
+  organizationId String              @db.Uuid
+  organization   Organization        @relation(fields: [organizationId], references: [id])
+  linkType       ArtistBrandLinkType
+  startDate      DateTime
+  endDate        DateTime?
+  isActive       Boolean
+  createdAt      DateTime
 
-    @@index([artistId])
-    @@map("artist_collections")
+  @@unique([artistId, organizationId, linkType])
+}
+
+/// What an artist ↔ brand link covers.
+enum ArtistBrandLinkType {
+  PRIMARY
+  MERCHANDISE
+  DISTRIBUTION
 }

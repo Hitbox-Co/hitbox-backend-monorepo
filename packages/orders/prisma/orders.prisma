@@ -1,0 +1,122 @@
+// ============================================================================
+// ORDERS MODULE SCHEMA  (packages/orders/prisma/orders.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Order, OrderAddress, InventoryReservation
+//
+// The purchase record. Money movement is the payments module; margin and
+// royalty postings are the finance module. This module owns only the order's
+// own lifecycle and the stock it is holding.
+// ============================================================================
+
+/// A purchase. `skuId` is nullable because a serialized unit is only assigned
+/// once payment settles — before that the order holds an InventoryReservation.
+/// `unitPrice`, `amount`, `currency` and `gateway` are snapshotted at purchase
+/// time so later catalog or market edits never rewrite an order's totals.
+model Order {
+  id             String          @id @db.Uuid
+  buyerId        String          @db.Uuid
+  buyer          User            @relation(fields: [buyerId], references: [id])
+  productId      String          @db.Uuid
+  product        Product         @relation(fields: [productId], references: [id])
+  variantId      String?         @db.Uuid
+  variant        ProductVariant? @relation(fields: [variantId], references: [id])
+  skuId          String?         @db.Uuid
+  sku            Sku?            @relation(fields: [skuId], references: [id])
+  quantity       Int
+  organizationId String?         @db.Uuid
+  organization   Organization?   @relation(fields: [organizationId], references: [id])
+  marketId       String?         @db.Uuid
+  market         Market?         @relation(fields: [marketId], references: [id])
+  status         OrderStatus
+  unitPrice      Decimal         @db.Decimal(12, 2)
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       Currency
+  gateway        PaymentGateway
+  /// When the buyer accepted the drop's terms — evidence for disputes.
+  termsAcceptedAt DateTime?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  trackingNote    String?
+  placedAt        DateTime
+  updatedAt       DateTime
+  archivedAt      DateTime?
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  orderAddresss         OrderAddress[]
+  inventoryReservations InventoryReservation[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  paymentTransactions PaymentTransaction[]
+  refundRequests      RefundRequest[]
+  royaltyLedgerEntrys RoyaltyLedgerEntry[]
+  financeLedgerEntrys FinanceLedgerEntry[]
+}
+
+/// A frozen copy of the shipping or billing address for one order. The address
+/// lines are duplicated (not read through `sourceAddressId`) on purpose: an
+/// order must always show where it was actually sent, even after the user edits
+/// or deletes the address book entry. Unique per (order, usage).
+model OrderAddress {
+  id              String       @id @db.Uuid
+  orderId         String       @db.Uuid
+  order           Order        @relation(fields: [orderId], references: [id])
+  usage           AddressUsage
+  /// Provenance pointer to the Address it was copied from; nullable because the
+  /// source may be gone and the snapshot must remain valid regardless.
+  sourceAddressId String?      @db.Uuid
+  sourceAddress   Address?     @relation(fields: [sourceAddressId], references: [id])
+  label           AddressLabel
+  labelCustom     String?
+  recipientName   String
+  line1           String
+  line2           String?
+  city            String
+  state           String?
+  postalCode      String
+  countryCode     String
+  phone           String?
+  createdAt       DateTime
+
+  @@unique([orderId, usage])
+}
+
+/// A temporary hold on a specific SKU while an order is paying. HELD expires at
+/// `expiresAt` (a sweeper RELEASEs it); COMMITTED means payment settled and the
+/// SKU is now the order's. This is what stops two buyers claiming one unit.
+model InventoryReservation {
+  id        String            @id @db.Uuid
+  orderId   String            @db.Uuid
+  order     Order             @relation(fields: [orderId], references: [id])
+  skuId     String            @db.Uuid
+  sku       Sku               @relation(fields: [skuId], references: [id])
+  status    ReservationStatus
+  expiresAt DateTime
+  createdAt DateTime
+}
+
+/// Order lifecycle. Fulfilment states (SHIPPED/DELIVERED) apply to physical
+/// items; REFUNDED is set once the payments module completes a refund.
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+/// Which role an OrderAddress snapshot plays for its order.
+enum AddressUsage {
+  SHIPPING
+  BILLING
+}
+
+/// State of a stock hold: HELD (pending payment), COMMITTED (payment settled),
+/// RELEASED (expired or cancelled — the SKU is available again).
+enum ReservationStatus {
+  HELD
+  COMMITTED
+  RELEASED
+}

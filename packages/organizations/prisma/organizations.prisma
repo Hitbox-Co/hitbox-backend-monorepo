@@ -1,0 +1,43 @@
+// ============================================================================
+// ORGANIZATIONS MODULE SCHEMA  (packages/organizations/prisma/organizations.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Organization
+//
+// The tenant root. Almost every commercial record (product, order, media,
+// royalty rule, gateway config) carries an optional organizationId, and
+// RoleAssignment uses an Organization id as its ORG scope.
+// ============================================================================
+
+/// A commercial entity on the platform: the HITBOX organization itself, a
+/// BRAND, or a solo artist operating as their own org (ARTIST_INDIVIDUAL).
+model Organization {
+  id         String           @id @db.Uuid
+  name       String
+  type       OrganizationType
+  slug       String           @unique
+  isActive   Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  artists               Artist[]
+  artistCollections     ArtistCollection[]
+  products              Product[]
+  artistBrandLinks      ArtistBrandLink[]
+  roleAssignments       RoleAssignment[]
+  mediaAssets           MediaAsset[]
+  orders                Order[]
+  paymentGatewayConfigs PaymentGatewayConfig[]
+  royaltyRules          RoyaltyRule[]
+}
+
+/// Which kind of entity an Organization represents. HITBOX is the platform's
+/// own org (there is exactly one); ARTIST_INDIVIDUAL lets a solo artist hold
+/// commercial records without a separate brand behind them.
+enum OrganizationType {
+  HITBOX
+  BRAND
+  ARTIST_INDIVIDUAL
+}

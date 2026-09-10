@@ -1,0 +1,68 @@
+// ============================================================================
+// NOTIFICATIONS MODULE SCHEMA  (packages/notifications/prisma/notifications.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: NotificationTemplate, Notification, NotificationPreference
+// ============================================================================
+
+/// The message body for one event type on one channel. `eventType` is unique,
+/// so the domain event name is the lookup key and publishers never hard-code
+/// copy. `parameters` lists the placeholders the template expects, which lets
+/// the sender validate its payload before dispatch.
+model NotificationTemplate {
+  id           String              @id @db.Uuid
+  eventType    String              @unique
+  channel      NotificationChannel
+  subject      String?
+  bodyTemplate String
+  parameters   String[]
+  isActive     Boolean
+  createdAt    DateTime
+  updatedAt    DateTime
+
+  notifications Notification[]
+}
+
+/// One rendered delivery to one user. `payload` keeps the values the template
+/// was filled with, so the message can be re-rendered or audited later.
+/// `failureReason` is retained on FAILED rows for retry triage.
+model Notification {
+  id            String               @id @db.Uuid
+  userId        String               @db.Uuid
+  user          User                 @relation(fields: [userId], references: [id])
+  templateId    String               @db.Uuid
+  template      NotificationTemplate @relation(fields: [templateId], references: [id])
+  channel       NotificationChannel
+  payload       Json?
+  status        NotificationStatus
+  sentAt        DateTime?
+  readAt        DateTime?
+  failureReason String?
+  createdAt     DateTime
+}
+
+/// A user's opt-in per channel. Unique per (user, channel); a missing row means
+/// the channel default applies.
+model NotificationPreference {
+  id      String              @id @db.Uuid
+  userId  String              @db.Uuid
+  user    User                @relation(fields: [userId], references: [id])
+  channel NotificationChannel
+  enabled Boolean
+
+  @@unique([userId, channel])
+}
+
+/// Delivery channel. Push/SMS join this enum when those transports ship.
+enum NotificationChannel {
+  EMAIL
+  IN_APP
+}
+
+/// Delivery state. READ only applies to IN_APP.
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  READ
+}

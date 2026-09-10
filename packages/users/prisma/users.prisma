@@ -1,37 +1,93 @@
 // ============================================================================
 // USERS MODULE SCHEMA  (packages/users/prisma/users.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: User, Address
 // ============================================================================
 
-/// Platform account. Identity (credentials, sessions) lives in Clerk — this
-/// row is the local projection, created/updated via auth module events.
+/// Platform account. Identity (credentials, sessions) lives in Clerk — this row
+/// is the local projection, created/updated from auth-module webhook events, so
+/// every other module can use a plain `userId` foreign key.
 model User {
-    id           String    @id @default(cuid())
-    clerkUserId  String    @unique @map("clerk_user_id")
-    email        String    @unique @db.VarChar(255)
-    username     String?   @unique @db.VarChar(50)
-    firstName    String?   @map("first_name") @db.VarChar(100)
-    lastName     String?   @map("last_name") @db.VarChar(100)
-    avatarUrl    String?   @map("avatar_url")
-    // Verification status of the primary email, mirrored from Clerk on sync.
-    // requireAuth blocks protected routes when false. Defaults true so rows
-    // created before this column stay usable; the sync path writes the real value.
-    emailVerified Boolean  @default(true) @map("email_verified")
-    role         UserRole  @default(USER)
-    state        UserState @default(ACTIVE)
-    rewardPoints Int       @default(0) @map("reward_points")
-    createdAt    DateTime  @default(now()) @map("created_at")
-    updatedAt    DateTime  @updatedAt @map("updated_at")
-    deletedAt    DateTime? @map("deleted_at") // soft delete — set when Clerk sends user.deleted
+  id                String     @id @db.Uuid
+  clerkId           String     @unique
+  email             String     @unique
+  phone             String?
+  handle            String?    @unique
+  fullName          String?
+  bio               String?
+  avatarUrl         String?
+  role              UserRole
+  profileVisibility Visibility
+  /// Coarse location shown on the public profile — never a precise address.
+  generalLocation   String?
+  preferredMarketId String?    @db.Uuid
+  preferredMarket   Market?    @relation(fields: [preferredMarketId], references: [id])
+  isActive          Boolean
+  deactivatedAt     DateTime?
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
 
-    products         Product[]
-    productHistory   ProductHistory[]
-    claims           ProductClaim[]
-    buyerCollections BuyerCollection[]
-    // Ledger rows where this user is the outgoing / incoming owner (transfers).
-    ledgerFrom       BlockchainLedger[] @relation("LedgerFromUser")
-    ledgerTo         BlockchainLedger[] @relation("LedgerToUser")
+  // ── Own-module back-relations ──────────────────────────────────────────────
+  addresss Address[]
 
-    @@index([state])
-    @@map("users")
+  // ── Cross-module back-relations (see docs/database-architecture.md §6) ─────
+  artists                  Artist?
+  skus                     Sku[]
+  productClaims            ProductClaim[]
+  buyerCollections         BuyerCollection[]
+  productHistorys          ProductHistory[]
+  roleAssignment_user      RoleAssignment[]        @relation("User_user")
+  roleAssignment_grantedBy RoleAssignment[]        @relation("User_grantedBy")
+  releaseApproval_approver ReleaseApproval[]       @relation("User_approver")
+  releaseApproval_checkedBy ReleaseApproval[]      @relation("User_checkedBy")
+  mediaAssets              MediaAsset[]
+  contentUnlocks           ContentUnlock[]
+  orders                   Order[]
+  refundRequest_requestedBy RefundRequest[]        @relation("User_requestedBy")
+  refundRequest_approvedBy  RefundRequest[]        @relation("User_approvedBy")
+  notifications            Notification[]
+  notificationPreferences  NotificationPreference[]
+  wishlistItems            WishlistItem[]
+  follows                  Follow[]
+  resaleListings           ResaleListing[]
+  supportCase_reporter     SupportCase[]           @relation("User_reporter")
+  supportCase_resolvedBy   SupportCase[]           @relation("User_resolvedBy")
+  supplyBatchs             SupplyBatch[]
+}
+
+/// A user's reusable address book entry. Orders never point at this row for
+/// their shipping/billing detail — they snapshot it into OrderAddress, so
+/// editing or archiving an address never rewrites order history.
+model Address {
+  id                String    @id @db.Uuid
+  userId            String    @db.Uuid
+  user              User      @relation(fields: [userId], references: [id])
+  label             AddressLabel
+  labelCustom       String?
+  recipientName     String
+  line1             String
+  line2             String?
+  city              String
+  state             String?
+  postalCode        String
+  countryCode       String
+  phone             String?
+  isDefaultShipping Boolean
+  isDefaultBilling  Boolean
+  isActive          Boolean
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  orderAddresss OrderAddress[]
+}
+
+/// Account role on the platform. Single-module enum — only User.role uses it.
+/// Staff/brand/artist privileges are NOT modelled here: they are grants in the
+/// access-control module (RoleAssignment), so a user can hold several scoped
+/// roles at once.
+enum UserRole {
+  USER
 }

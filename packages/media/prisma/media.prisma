@@ -1,0 +1,66 @@
+// ============================================================================
+// MEDIA MODULE SCHEMA  (packages/media/prisma/media.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: MediaAsset
+//
+// The single upload registry for the whole platform. Nothing else stores a
+// storage path: products reference assets via ProductImage, content bundles via
+// ContentBundleItem. One place to enforce virus scanning and one place to
+// revoke a file.
+// ============================================================================
+
+/// An uploaded file. `storageRef` is the object-store key — never a public URL,
+/// so signed-URL policy stays a runtime decision. `checksum` deduplicates and
+/// detects corruption; `virusScanStatus` gates serving (only CLEAN is
+/// servable). The four nullable owner columns scope the asset to whichever
+/// entity it belongs to; `uploadedBy` always records the actor.
+model MediaAsset {
+  id              String          @id @db.Uuid
+  assetType       AssetType
+  storageRef      String
+  fileName        String
+  mimeType        String
+  sizeBytes       Int?
+  checksum        String?
+  virusScanStatus VirusScanStatus
+  uploadedById    String          @db.Uuid
+  uploadedBy      User            @relation(fields: [uploadedById], references: [id])
+
+  // ── Optional ownership scoping — at most one is normally set ──────────────
+  organizationId String?           @db.Uuid
+  organization   Organization?     @relation(fields: [organizationId], references: [id])
+  artistId       String?           @db.Uuid
+  artist         Artist?           @relation(fields: [artistId], references: [id])
+  productId      String?           @db.Uuid
+  product        Product?          @relation(fields: [productId], references: [id])
+  collectionId   String?           @db.Uuid
+  collection     ArtistCollection? @relation(fields: [collectionId], references: [id])
+
+  archivedAt DateTime?
+  createdAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  productImages      ProductImage[]
+  contentBundleItems ContentBundleItem[]
+}
+
+/// What the file is for. Drives storage tier, retention and who may read it —
+/// EXCLUSIVE_CONTENT and LEGAL_DOCUMENT are never publicly servable.
+enum AssetType {
+  DROP_IMAGE
+  PROFILE_IMAGE
+  EXCLUSIVE_CONTENT
+  LEGAL_DOCUMENT
+  SUPPLY_SPREADSHEET
+  OTHER
+}
+
+/// Malware scan outcome. Only CLEAN may be served; SKIPPED covers trusted
+/// internal uploads that bypassed the scanner.
+enum VirusScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SKIPPED
+}

@@ -1,0 +1,98 @@
+// ============================================================================
+// SKUS MODULE SCHEMA  (packages/skus/prisma/skus.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Sku
+//
+// The serialized-item registry: one row per physical collectible, its NFC tag
+// binding, and its current owner. This is the platform's most security-
+// sensitive table — the digital twin of an object in someone's hands — which
+// is why it is its own module rather than a folder inside products.
+// ============================================================================
+
+/// One serialized unit of a product. `serialNumber` is unique within the
+/// product ("#014 of 500"). Ownership, NFC tag custody and resale eligibility
+/// all live on this row; the provenance history is append-only in the claims
+/// module (ProductHistory + BlockchainLedger).
+model Sku {
+  id          String  @id @db.Uuid
+  skuCode     String  @unique
+  productId   String  @db.Uuid
+  product     Product @relation(fields: [productId], references: [id])
+  variantId   String? @db.Uuid
+  variant     ProductVariant? @relation(fields: [variantId], references: [id])
+  /// Position within the product's edition; unique per product (see @@unique).
+  serialNumber Int
+  /// Current holder. Null until first claimed.
+  ownerId      String?       @db.Uuid
+  owner        User?         @relation(fields: [ownerId], references: [id])
+  claimedStatus ClaimedStatus
+
+  // ── NFC tag custody ───────────────────────────────────────────────────────
+  /// Physical tag UID. Unique platform-wide — two SKUs can never claim the
+  /// same tag, which is the primary defence against cloned tags.
+  tagId                 String?           @unique
+  /// Vendor provisioning batch reference. Not a foreign key: batches are
+  /// recorded by the supply module and tags may arrive before that row exists.
+  provisioningBatchId   String?
+  tagLifecycleState     TagLifecycleState
+  vendorId              String?           @db.Uuid
+  vendor                Vendor?           @relation(fields: [vendorId], references: [id])
+  vendorAuthenticatedAt DateTime?
+
+  // ── One-shot claim token ──────────────────────────────────────────────────
+  /// Single-use token minted on tap and burned on claim. Unique so a token can
+  /// never be replayed against a second SKU.
+  claimToken         String?   @unique
+  claimTokenIssuedAt DateTime?
+  claimTokenUsedAt   DateTime?
+
+  // ── Trust / anti-fraud state ──────────────────────────────────────────────
+  resaleBlocked       Boolean
+  resaleBlockedReason String?
+  /// Monotonic NFC tap counter — a counter that goes backwards indicates a
+  /// replayed or cloned tag.
+  lastTapCounter      Int
+  tamperStatus        String?
+
+  isActive   Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  productClaims         ProductClaim[]
+  blockchainLedgers     BlockchainLedger[]
+  buyerCollections      BuyerCollection[]
+  productHistorys       ProductHistory[]
+  contentUnlocks        ContentUnlock[]
+  evolutionEvents       EvolutionEvent[]
+  orders                Order[]
+  inventoryReservations InventoryReservation[]
+  resaleListings        ResaleListing[]
+  supportCases          SupportCase[]
+
+  @@unique([productId, serialNumber])
+}
+
+/// Whether the item has been claimed by an owner. IN_TRANSFER blocks
+/// concurrent claims while ownership is moving; FLAGGED freezes the item
+/// pending a support/fraud investigation.
+enum ClaimedStatus {
+  UNCLAIMED
+  CLAIMED
+  IN_TRANSFER
+  FLAGGED
+}
+
+/// Custody state of the physical NFC tag, from manufacture to retirement.
+/// UNPROVISIONED → BOUND (written to a SKU) → ACTIVE (claimed & in use);
+/// LOST / REVOKED / DISPUTED are terminal states that block claims.
+enum TagLifecycleState {
+  UNPROVISIONED
+  BOUND
+  ACTIVE
+  LOST
+  REVOKED
+  DISPUTED
+}

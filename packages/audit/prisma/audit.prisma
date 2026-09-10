@@ -1,0 +1,96 @@
+// ============================================================================
+// AUDIT MODULE SCHEMA  (packages/audit/prisma/audit.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: AuditEventType, AuditEvent, AuditRetentionPolicy
+//
+// The compliance trail. Every actor id, resource id and organization id here is
+// stored WITHOUT a foreign key on purpose: the audit log must remain readable
+// and complete after the records it describes are archived or deleted, and it
+// must never be the reason a delete fails.
+// ============================================================================
+
+/// Catalog of auditable event names — a real table rather than an enum, so new
+/// events can be registered without a migration. `defaultSeverity` feeds the
+/// retention policy; `sourceStories` cites the requirement each event came
+/// from, which is what makes the trail defensible in a review.
+model AuditEventType {
+  eventType       String        @id
+  personaGroup    String
+  description     String
+  defaultSeverity AuditSeverity
+  sourceStories   String[]
+  isActive        Boolean
+  createdAt       DateTime
+
+  auditEvents AuditEvent[]
+}
+
+/// One append-only audit record. The primary key is (eventId, occurredAt) —
+/// composite so the table can be range-partitioned by time for retention and
+/// pruning without losing per-event uniqueness. `beforeState`/`afterState`
+/// capture the diff; `correlationId` stitches one request's events together;
+/// `ledgerReferenceId` links a provenance-affecting action to its
+/// BlockchainLedger row. `insertedAt` is recorded separately from `occurredAt`
+/// so clock skew and late writes are visible.
+model AuditEvent {
+  eventId           String             @db.Uuid
+  occurredAt        DateTime
+  eventType         String
+  type              AuditEventType     @relation(fields: [eventType], references: [eventType])
+  actorType         AuditActorType
+  actorId           String?            @db.Uuid
+  /// The actor's roles at the time of the action — a snapshot, because a later
+  /// role change must not rewrite what their authority was.
+  actorRoleSnapshot String?
+  organizationId    String?            @db.Uuid
+  resourceType      String?
+  resourceId        String?            @db.Uuid
+  actionResult      AuditActionResult
+  severity          AuditSeverity
+  beforeState       Json?
+  afterState        Json?
+  ipAddress         String?
+  userAgent         String?
+  deviceId          String?
+  correlationId     String             @db.Uuid
+  ledgerReferenceId String?            @db.Uuid
+  metadata          Json
+  insertedAt        DateTime
+
+  @@id([eventId, occurredAt])
+}
+
+/// How long events of each severity are kept. Keyed by severity itself, so
+/// there is exactly one policy per level and no ambiguity for the pruner.
+model AuditRetentionPolicy {
+  severity      AuditSeverity @id
+  retentionDays Int
+  notes         String
+}
+
+/// Which persona performed the action. SYSTEM covers scheduled jobs and
+/// webhook-driven changes with no human actor.
+enum AuditActorType {
+  BUYER
+  BRAND_EMPLOYEE
+  ARTIST
+  HITBOX_EMPLOYEE
+  HITBOX_ADMIN
+  SYSTEM
+}
+
+/// Outcome. DENIED (authorisation refused) is kept distinct from FAILURE
+/// (attempted but errored) — they mean very different things in a review.
+enum AuditActionResult {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+/// Event importance; drives retention via AuditRetentionPolicy.
+enum AuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
+}

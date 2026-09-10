@@ -1,0 +1,91 @@
+// ============================================================================
+// FINANCE MODULE SCHEMA  (packages/finance/prisma/finance.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: RoyaltyRule, RoyaltyLedgerEntry, FinanceLedgerEntry
+//
+// Accounting. Both ledgers are append-only: a mistake is corrected by posting
+// an ADJUSTMENT entry that references the original, never by editing a row.
+// ============================================================================
+
+/// A royalty split, resolved most-specific-first: product → collection →
+/// artist → organization (all four scope columns nullable). `basis` decides
+/// whether the split applies to gross revenue or net profit; `percentage` is
+/// the simple case and `splitConfig` carries multi-party breakdowns.
+/// `effectiveFrom`/`effectiveTo` make rules versioned rather than mutable, so
+/// re-running an old order's royalties reproduces the original numbers.
+model RoyaltyRule {
+  id             String            @id @db.Uuid
+  organizationId String?           @db.Uuid
+  organization   Organization?     @relation(fields: [organizationId], references: [id])
+  artistId       String?           @db.Uuid
+  artist         Artist?           @relation(fields: [artistId], references: [id])
+  collectionId   String?           @db.Uuid
+  collection     ArtistCollection? @relation(fields: [collectionId], references: [id])
+  productId      String?           @db.Uuid
+  product        Product?          @relation(fields: [productId], references: [id])
+  basis          RoyaltyBasis
+  splitType      String
+  splitConfig    Json
+  percentage     Decimal?          @db.Decimal(6, 3)
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime
+
+  royaltyLedgerEntrys RoyaltyLedgerEntry[]
+}
+
+/// What one order owes under one royalty rule. `entryType = ADJUSTMENT` with
+/// `adjustsEntryId` set is how a correction is posted; `adjustsEntryId` is a
+/// self-reference kept as a plain id (no FK) so the append-only chain never
+/// blocks on referential checks. A payee's balance is the sum of its rows.
+model RoyaltyLedgerEntry {
+  id             String          @id @db.Uuid
+  orderId        String          @db.Uuid
+  order          Order           @relation(fields: [orderId], references: [id])
+  ruleId         String          @db.Uuid
+  rule           RoyaltyRule     @relation(fields: [ruleId], references: [id])
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       Currency
+  entryType      LedgerEntryType
+  adjustsEntryId String?         @db.Uuid
+  createdAt      DateTime
+}
+
+/// Platform-side double-entry line. `direction` (CREDIT/DEBIT) plus `amount`
+/// is the posting; `costOfGoods` and `gatewayFee` are carried alongside so
+/// margin is reportable without re-reading the catalog or the gateway.
+/// `orderId` is nullable for entries with no order behind them (platform fees,
+/// manual adjustments, payouts).
+model FinanceLedgerEntry {
+  id          String           @id @db.Uuid
+  orderId     String?          @db.Uuid
+  order       Order?           @relation(fields: [orderId], references: [id])
+  entryType   LedgerEntryType
+  direction   FinanceDirection
+  amount      Decimal          @db.Decimal(12, 2)
+  currency    Currency
+  costOfGoods Decimal?         @db.Decimal(12, 2)
+  gatewayFee  Decimal?         @db.Decimal(12, 2)
+  description String?
+  createdAt   DateTime
+}
+
+/// What a royalty percentage is taken from.
+enum RoyaltyBasis {
+  NET_PROFIT
+  GROSS_REVENUE
+}
+
+/// Whether a ledger row is the first posting for its event (ORIGINAL) or a
+/// correction to an earlier one (ADJUSTMENT).
+enum LedgerEntryType {
+  ORIGINAL
+  ADJUSTMENT
+}
+
+/// Direction of a finance posting from the platform's point of view.
+enum FinanceDirection {
+  CREDIT
+  DEBIT
+}

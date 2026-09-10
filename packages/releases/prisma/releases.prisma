@@ -1,0 +1,40 @@
+// ============================================================================
+// RELEASES MODULE SCHEMA  (packages/releases/prisma/releases.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ReleaseApproval
+//
+// The review workflow that gates Product.status. Separated from products
+// because it is a different actor's surface (HitBox reviewer / compliance)
+// with its own audit expectations.
+// ============================================================================
+
+/// One approval decision on one version of a drop. `version` increments each
+/// time the drop is resubmitted, so the full review history is preserved rather
+/// than overwritten. The compliance fields are the reviewer's sign-off and are
+/// mirrored onto Product.complianceStatus once decided.
+model ReleaseApproval {
+  id                String           @id @db.Uuid
+  productId         String           @db.Uuid
+  product           Product          @relation(fields: [productId], references: [id])
+  approverId        String           @db.Uuid
+  approver          User             @relation("User_approver", fields: [approverId], references: [id])
+  status            ApprovalStatus
+  comment           String?
+  version           Int
+  decidedAt         DateTime?
+  complianceStatus  ComplianceStatus
+  oddsDisclosureRef String?
+  checkedById       String?          @db.Uuid
+  checkedBy         User?            @relation("User_checkedBy", fields: [checkedById], references: [id])
+  checkedAt         DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+}
+
+/// Outcome of a release review.
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}

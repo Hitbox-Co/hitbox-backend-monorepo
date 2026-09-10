@@ -1,0 +1,147 @@
+// ============================================================================
+// ACCESS-CONTROL MODULE SCHEMA  (packages/access-control/prisma/access-control.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Role, Permission, RolePermission, RoleAssignment
+//
+// This is authorisation (what an actor may do), distinct from the auth module
+// which is authentication (who the actor is). A user's UserRole says only that
+// they hold an account; every real privilege is a RoleAssignment here, scoped
+// to GLOBAL, one ORG, or the actor's OWN records.
+// ============================================================================
+
+/// A named bundle of permissions, e.g. `brand_release_manager`.
+/// `entityGroup` records which persona family the role belongs to (buyer,
+/// brand, artist, HitBox staff) for grouping in admin UIs.
+model Role {
+  id          String   @id @db.Uuid
+  name        String   @unique
+  displayName String
+  entityGroup String
+  isActive    Boolean
+  createdAt   DateTime
+
+  rolePermissions RolePermission[]
+  roleAssignments RoleAssignment[]
+}
+
+/// One atomic capability: an action on a resource at a scope. The
+/// `key` column is the flat form used in code checks (e.g. `drop:publish:org`);
+/// the (resource, action, scope) triple is the canonical identity.
+model Permission {
+  id          String           @id @db.Uuid
+  resource    ResourceType
+  action      PermissionAction
+  scope       PermissionScope
+  key         String           @unique
+  description String?
+  isActive    Boolean
+  createdAt   DateTime
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action, scope])
+}
+
+/// Grants a permission to a role. `fieldAllowlist` narrows the grant to
+/// specific columns (field-level authorisation for partial-update endpoints).
+/// `isInferred` + `sourceCitation` mark rows derived from the requirements
+/// matrix rather than hand-authored, so they can be re-derived safely.
+model RolePermission {
+  id             String     @id @db.Uuid
+  roleId         String     @db.Uuid
+  role           Role       @relation(fields: [roleId], references: [id])
+  permissionId   String     @db.Uuid
+  permission     Permission @relation(fields: [permissionId], references: [id])
+  fieldAllowlist String[]
+  isInferred     Boolean
+  sourceCitation String?
+  createdAt      DateTime
+
+  @@unique([roleId, permissionId])
+}
+
+/// Binds a user to a role within a scope. For `scopeType = ORG`, `scopeId`
+/// points at an Organization (the relation below); for OWN/GLOBAL it is null.
+/// `revokedAt` is set instead of deleting the row, so the audit trail keeps
+/// the full grant history.
+model RoleAssignment {
+  id           String        @id @db.Uuid
+  userId       String        @db.Uuid
+  user         User          @relation("User_user", fields: [userId], references: [id])
+  roleId       String        @db.Uuid
+  role         Role          @relation(fields: [roleId], references: [id])
+  scopeType    RoleScopeType
+  scopeId      String?       @db.Uuid
+  organization Organization? @relation(fields: [scopeId], references: [id])
+  grantedById  String        @db.Uuid
+  grantedBy    User          @relation("User_grantedBy", fields: [grantedById], references: [id])
+  grantedAt    DateTime
+  revokedAt    DateTime?
+
+  @@unique([userId, roleId, scopeType, scopeId])
+}
+
+/// The verbs a permission can grant.
+enum PermissionAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  MANAGE // superset of CREATE+READ+UPDATE+DELETE for the resource
+  APPROVE
+  REJECT
+  PUBLISH
+  REFUND
+  CLAIM // NFC tag / product claim
+  TRANSFER // ownership transfer
+  ASSIGN // assign roles / ownership
+  EXPORT // reports & dashboards
+  CONFIGURE // platform / gateway config
+  OVERRIDE // admin override
+}
+
+/// The protected surfaces a permission can apply to. Deliberately coarser than
+/// the table list: one ResourceType may cover several tables owned by the same
+/// module (e.g. ORDER covers Order + OrderAddress + InventoryReservation).
+enum ResourceType {
+  SELF_PROFILE
+  BUYER_PROFILE
+  DROP
+  RELEASE_APPROVAL
+  COLLECTIBLE_INSTANCE
+  REPORTS_DASHBOARDS
+  MY_COLLECTIONS
+  ORDER
+  PAYMENT_ROYALTY
+  CONTENT_UNLOCK
+  NFC_TAG_CLAIM
+  BRAND_ARTIST_RECORD
+  EMPLOYEE_ROLE_MGMT
+  AUDIT_LOG
+  NOTIFICATION_CONFIG
+  SEARCH_DISCOVER
+  OPS_DASHBOARD_INFRA
+  PLATFORM_CONFIG
+  ASSETS_DOCUMENTS_UPLOAD
+  GENERAL_LOCATION
+  AGE_SPECIFIC_FLAG
+  ADDRESS
+}
+
+/// How wide a permission reaches. Mirrors RoleScopeType — a grant's breadth is
+/// declared on the Permission, an assignment's breadth on the RoleAssignment,
+/// and an access check requires both to line up.
+enum PermissionScope {
+  GLOBAL
+  ORG
+  OWN
+}
+
+/// How wide a role assignment reaches: everything (GLOBAL), one organization
+/// (ORG, with scopeId set), or only the actor's own records (OWN).
+enum RoleScopeType {
+  ORG
+  OWN
+  GLOBAL
+}

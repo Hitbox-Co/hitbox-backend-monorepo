@@ -1,72 +1,97 @@
 // ============================================================================
 // CLAIMS MODULE SCHEMA  (packages/claims/prisma/claims.prisma)
-// NFC claims + provenance ledger (ledger lives here: authenticity domain).
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ProductClaim, BlockchainLedger, ProductHistory
+//
+// Provenance. Three append-only views of the same truth:
+//   ProductClaim     — the act of claiming (who tapped, when, which drop)
+//   ProductHistory   — the ownership timeline (queryable "who held it when")
+//   BlockchainLedger — the tamper-evident hash chain (verifiable, not queried)
+// Nothing here is ever updated in place except the two revocation columns and
+// ProductHistory.isCurrent/endedAt when a period closes.
 // ============================================================================
 
-/// NFC claim events: which user claimed which product, when.
+/// A successful claim of one SKU by one user. `claimedNo` counts claims on that
+/// SKU (1 = first owner, 2 = second, …), so the composite unique makes a
+/// duplicate claim at the same position impossible. artistId/collectionId are
+/// denormalised snapshots so the claim reads correctly even if the product is
+/// later re-filed.
 model ProductClaim {
-    id        String   @id @default(cuid())
-    claimCode String   @unique @db.VarChar(10) // old hb_pc_claimid (CHAR(10))
-    claimedNo Int      @default(1) @map("claimed_no")
-    claimedAt DateTime @default(now()) @map("claimed_at")
+  id            String            @id @db.Uuid
+  claimCode     String            @unique
+  claimedNo     Int
+  claimedAt     DateTime
+  userId        String            @db.Uuid
+  user          User              @relation(fields: [userId], references: [id])
+  skuId         String            @db.Uuid
+  sku           Sku               @relation(fields: [skuId], references: [id])
+  productId     String            @db.Uuid
+  product       Product           @relation(fields: [productId], references: [id])
+  artistId      String?           @db.Uuid
+  artist        Artist?           @relation(fields: [artistId], references: [id])
+  collectionId  String?           @db.Uuid
+  collection    ArtistCollection? @relation(fields: [collectionId], references: [id])
+  revokedAt     DateTime?
+  revokedReason String?
 
-    userId String @map("user_id")
-    user   User   @relation(fields: [userId], references: [id])
-
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id])
-
-    artistId String? @map("artist_id")
-    artist   Artist? @relation(fields: [artistId], references: [id])
-
-    collectionId String?           @map("collection_id")
-    collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
-
-    ledgerEntries BlockchainLedger[]
-
-    @@index([userId])
-    @@index([productId])
-    @@map("product_claims")
+  @@unique([skuId, claimedNo])
 }
 
-/// Provenance ledger: origin data + cryptographic signatures + hash per
-/// transaction. Append-only per product — rows form a chain ordered by
-/// `sequenceNo`, each linking to the prior row's hash via `previousHash`.
-/// The seq-0 MINT row's seller signature is HitBox.
+/// Append-only hash chain per SKU. Each row commits to the previous one
+/// (`previousHash` → `currentHash`), so any retroactive edit breaks the chain
+/// and is detectable. `sequenceNo` is unique per SKU, which prevents forks.
+/// Signatures are captured on transfers to prove both parties consented.
 model BlockchainLedger {
-    id                     String       @id @default(cuid())
-    txType                 LedgerTxType @default(MINT) @map("tx_type")
-    // 0-based position in this product's chain. seq 0 = MINT (origin).
-    sequenceNo             Int          @map("sequence_no")
-    originDateTime         DateTime     @map("origin_date_time")
-    originOwner            String       @map("origin_owner") @db.VarChar(255)
-    sellerDigitalSignature String       @map("seller_digital_signature")
-    buyerDigitalSignature  String?      @map("buyer_digital_signature")
-    receiverPublicKey      String?      @map("receiver_public_key")
-    productBuyerHash       String       @map("product_buyer_hash")
-    // Hash of the immediately preceding chain row (null for seq 0). Tampering
-    // with any earlier row breaks every subsequent link.
-    previousHash           String?      @map("previous_hash")
-    transactionDateTime    DateTime     @default(now()) @map("transaction_date_time")
-    transactionAmount      Decimal      @default(0) @map("transaction_amount") @db.Decimal(12, 2)
+  id                     String       @id @db.Uuid
+  skuId                  String       @db.Uuid
+  sku                    Sku          @relation(fields: [skuId], references: [id])
+  sequenceNo             Int
+  previousHash           String?
+  currentHash            String
+  txType                 LedgerTxType
+  sellerDigitalSignature String?
+  buyerDigitalSignature  String?
+  receiverPublicKey      String?
+  payload                Json?
+  createdAt              DateTime
 
-    originProductId String  @map("origin_product_id")
-    originProduct   Product @relation(fields: [originProductId], references: [id])
+  @@unique([skuId, sequenceNo])
+}
 
-    claimId String?       @map("claim_id")
-    claim   ProductClaim? @relation(fields: [claimId], references: [id])
+/// One ownership period for a SKU. Exactly one row per SKU should carry
+/// `isCurrent = true`, with `endedAt` null; closing a period sets both. `price`
+/// + `currency` record what the holder paid, which is what makes resale and
+/// royalty analytics possible.
+model ProductHistory {
+  id          String            @id @db.Uuid
+  skuId       String            @db.Uuid
+  sku         Sku               @relation(fields: [skuId], references: [id])
+  ownerId     String?           @db.Uuid
+  owner       User?             @relation(fields: [ownerId], references: [id])
+  acquiredVia AcquisitionMethod
+  price       Decimal?          @db.Decimal(12, 2)
+  currency    Currency?
+  startedAt   DateTime
+  endedAt     DateTime?
+  isCurrent   Boolean
+}
 
-    // Ownership delta captured by this row. `fromUser` is null on MINT/CLAIM
-    // (origin is HitBox, not a local user); `toUser` is null only on MINT.
-    fromUserId String? @map("from_user_id")
-    fromUser   User?   @relation("LedgerFromUser", fields: [fromUserId], references: [id])
+/// Kind of ownership event on the provenance chain. Each SKU's ledger runs
+/// MINT (origin) → CLAIM (first buyer) → TRANSFER (0..n owner changes), with
+/// FLAG / UNFLAG recording fraud holds without rewriting history.
+enum LedgerTxType {
+  MINT
+  CLAIM
+  TRANSFER
+  FLAG
+  UNFLAG
+}
 
-    toUserId String? @map("to_user_id")
-    toUser   User?   @relation("LedgerToUser", fields: [toUserId], references: [id])
-
-    @@unique([originProductId, sequenceNo])
-    @@index([originProductId])
-    @@index([claimId])
-    @@map("blockchain_ledger")
+/// How a holder came to own the item: a first-party CLAIM, a peer TRANSFER, or
+/// an ADMIN correction (support resolution, mis-ship recovery).
+enum AcquisitionMethod {
+  CLAIM
+  TRANSFER
+  ADMIN
 }

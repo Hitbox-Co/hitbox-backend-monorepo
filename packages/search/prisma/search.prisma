@@ -1,0 +1,40 @@
+// ============================================================================
+// SEARCH MODULE SCHEMA  (packages/search/prisma/search.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: SearchIndexJob
+// ============================================================================
+
+/// Outbox row for the search indexer. Writers enqueue a job in the same
+/// transaction as the data change, so an index update can never be lost even
+/// if the indexer is down. `entityType` + `entityId` are a deliberately
+/// FK-free polymorphic pointer — the indexer covers products, artists,
+/// collections and organizations, and must not couple to any of their tables.
+/// `entityId` is null for a FULL_REINDEX. `attempts` + `lastError` drive
+/// bounded retry with a dead-letter threshold.
+model SearchIndexJob {
+  id          String         @id @db.Uuid
+  entityType  String
+  entityId    String?        @db.Uuid
+  operation   IndexOperation
+  status      IndexJobStatus
+  attempts    Int
+  lastError   String?
+  createdAt   DateTime
+  completedAt DateTime?
+}
+
+/// What the indexer should do with the entity.
+enum IndexOperation {
+  UPSERT
+  DELETE
+  FULL_REINDEX
+}
+
+/// Job state. RUNNING rows left behind by a crashed worker are requeued by age.
+enum IndexJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}

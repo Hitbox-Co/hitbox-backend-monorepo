@@ -1,0 +1,46 @@
+// ============================================================================
+// SOCIAL MODULE SCHEMA  (packages/social/prisma/social.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Follow, WishlistItem
+//
+// Buyer intent signals. Both tables feed the discover/marketplace read-side
+// feeds and the notification triggers ("a drop you wishlisted is live").
+// ============================================================================
+
+/// A follow edge. Polymorphic by nullable target: exactly one of `artistId` or
+/// `followedOrganizationId` is set. The two partial uniques prevent duplicate
+/// follows of the same target while still allowing many rows per follower —
+/// Postgres treats NULLs as distinct, so a row with a null target column never
+/// collides on that key. `followedOrganizationId` is kept FK-free so the
+/// organizations module can be extracted without touching this table.
+model Follow {
+  id                     String   @id @db.Uuid
+  followerId             String   @db.Uuid
+  follower               User     @relation(fields: [followerId], references: [id])
+  artistId               String?  @db.Uuid
+  artist                 Artist?  @relation(fields: [artistId], references: [id])
+  followedOrganizationId String?  @db.Uuid
+  createdAt              DateTime
+
+  @@unique([followerId, artistId])
+  @@unique([followerId, followedOrganizationId])
+}
+
+/// A saved product, optionally narrowed to a variant. Unique per
+/// (user, product, variant). `notifyOnAvailable` is the hook the notifications
+/// module reads when a drop opens or restocks.
+model WishlistItem {
+  id                String          @id @db.Uuid
+  userId            String          @db.Uuid
+  user              User            @relation(fields: [userId], references: [id])
+  productId         String          @db.Uuid
+  product           Product         @relation(fields: [productId], references: [id])
+  variantId         String?         @db.Uuid
+  variant           ProductVariant? @relation(fields: [variantId], references: [id])
+  notifyOnAvailable Boolean
+  note              String?
+  createdAt         DateTime
+
+  @@unique([userId, productId, variantId])
+}

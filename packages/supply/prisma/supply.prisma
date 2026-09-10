@@ -1,0 +1,60 @@
+// ============================================================================
+// SUPPLY MODULE SCHEMA  (packages/supply/prisma/supply.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Vendor, SupplyBatch
+//
+// The physical side: who manufactures tags and merchandise, and what arrived.
+// This is the upstream of the skus module — a Sku's `vendorId` and
+// `provisioningBatchId` trace an item back to the shipment it came from.
+// ============================================================================
+
+/// A manufacturer or supplier.
+model Vendor {
+  id           String     @id @db.Uuid
+  name         String
+  vendorType   VendorType
+  contactEmail String?
+  isActive     Boolean
+  archivedAt   DateTime?
+  createdAt    DateTime
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  supplyBatchs SupplyBatch[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skus Sku[]
+}
+
+/// A received shipment of tags or merchandise. `sourceFileRef` points at the
+/// uploaded manifest (a media asset) that the batch was entered from, and
+/// `enteredBy` records who keyed it in — together they make a physical
+/// reconciliation auditable. `batchRef` is the vendor's own batch label, which
+/// is what Sku.provisioningBatchId matches against.
+model SupplyBatch {
+  id            String         @id @db.Uuid
+  vendorId      String         @db.Uuid
+  vendor        Vendor         @relation(fields: [vendorId], references: [id])
+  itemType      SupplyItemType
+  quantity      Int
+  batchRef      String?
+  receivedAt    DateTime
+  sourceFileRef String?
+  enteredById   String         @db.Uuid
+  enteredBy     User           @relation(fields: [enteredById], references: [id])
+  notes         String?
+  createdAt     DateTime
+}
+
+/// What kind of supplier this is.
+enum VendorType {
+  NFC_TAG_MANUFACTURER
+  MERCHANDISE_MANUFACTURER
+  OTHER
+}
+
+/// What a supply batch contains.
+enum SupplyItemType {
+  NFC_TAG
+  MERCHANDISE
+}
