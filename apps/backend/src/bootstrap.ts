@@ -1,8 +1,11 @@
-import type { Router } from 'express';
+import { Router } from 'express';
+import type { Request } from 'express';
 import { prisma } from '@hitbox/database';
-import { eventBus } from '@hitbox/shared';
+import { eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
 import { createAccessControlModule } from '@hitbox/access-control';
+import { createDashboardModule } from '@hitbox/dashboard';
+import { createMediaModule, S3ObjectStorage } from '@hitbox/media';
 import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
@@ -57,6 +60,46 @@ export function bootstrap(): Bootstrapped {
         resolvePrincipalId: (req) => req.auth?.accountId,
     });
 
+    // The dashboard reads the caller's grants through the guard's own
+    // per-request memo — one permission load serves a dozen section checks.
+    const dashboardModule = createDashboardModule({
+        prisma,
+        resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
+    });
+
+    // Media needs a bucket. Without one the routes are not mounted at all
+    // rather than mounted-but-broken: an upload endpoint that 500s after
+    // creating a MediaAsset row leaves orphaned registry entries behind.
+    const mediaModule = env.MEDIA_S3_BUCKET
+        ? createMediaModule({
+            prisma,
+            guard: accessControlModule.guard,
+            storage: new S3ObjectStorage({
+                bucket: env.MEDIA_S3_BUCKET,
+                region: env.MEDIA_S3_REGION ?? 'us-east-1',
+                endpoint: env.MEDIA_S3_ENDPOINT,
+                forcePathStyle: Boolean(env.MEDIA_S3_ENDPOINT),
+            }),
+            bucket: env.MEDIA_S3_BUCKET,
+            resolveCaller: async (req: Request) => {
+                const principal = await accessControlModule.guard.describePrincipal(req);
+                const orgIds = [
+                    ...new Set(
+                        principal.roles
+                            .map((role) => role.organizationId)
+                            .filter((id): id is string => id !== null),
+                    ),
+                ];
+                // A caller holding the capability globally is unrestricted;
+                // otherwise they are confined to their own organizations.
+                const global = principal.permissions.includes(
+                    'assets-documents-upload:manage:global',
+                );
+                return { userId: principal.userId, organizationIds: global ? null : orgIds };
+            },
+        })
+        : null;
+
     const productsModule = createProductsModule({ prisma, eventBus });
 
     const discoverModule = createDiscoverModule({
@@ -93,6 +136,10 @@ export function bootstrap(): Bootstrapped {
         ledger: claimsRouters.ledger,
         authz: accessControlModule.createSelfRouter(authModule.requireAuth),
         adminAuthz: accessControlModule.createAdminRouter(authModule.requireAuth),
+        adminDashboard: dashboardModule.createRouter(authModule.requireAuth),
+        adminMedia: mediaModule
+            ? mediaModule.createRouter(authModule.requireAuth)
+            : mediaUnavailableRouter(),
     });
 
     // Public website (hitboxcollectibles.com) — its own database, no
@@ -105,4 +152,23 @@ export function bootstrap(): Bootstrapped {
         startCaches: () => accessControlModule.startCache(),
         stopCaches: () => accessControlModule.stopCache(),
     };
+}
+
+/**
+ * Stands in for the media routes when no bucket is configured, so a
+ * misconfigured deploy returns a clear 503 rather than a confusing 404 that
+ * looks like the feature was never built.
+ */
+function mediaUnavailableRouter(): Router {
+    const router = Router();
+    router.use((_req, res) => {
+        res.status(503).json({
+            error: {
+                code: 'STORAGE_UNAVAILABLE',
+                message: 'Media storage is not configured on this deployment.',
+                details: null,
+            },
+        });
+    });
+    return router;
 }

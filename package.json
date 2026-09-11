@@ -18,7 +18,9 @@
     "db:deploy": "pnpm --filter @hitbox/database db:deploy",
     "db:studio": "pnpm --filter @hitbox/database db:studio",
     "db:seed": "pnpm --filter @hitbox/database db:seed",
-    "db:seed:authz": "pnpm --filter @hitbox/database db:seed:authz"
+    "db:seed:authz": "pnpm --filter @hitbox/database db:seed:authz",
+    "db:seed:demo": "pnpm --filter @hitbox/database db:seed:demo",
+    "db:link-admin": "pnpm --filter @hitbox/database db:link-admin"
   },
   "keywords": [],
   "author": "",

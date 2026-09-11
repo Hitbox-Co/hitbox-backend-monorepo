@@ -2,8 +2,8 @@
 
 > What gets recorded, which events count as sensitive, and how long any of it is kept.
 >
-> Companion reading: [database-architecture.md](database-architecture.md) §3.5 (why the trail has no
-> foreign keys), [authorization/](authorization/authorization-architecture.md) (the capabilities that
+> Companion reading: [database-architecture.md](../database-architecture.md) §3.5 (why the trail has no
+> foreign keys), [authorization/](../authorization/authorization-architecture.md) (the capabilities that
 > guard the read API).
 
 **This replaces the `AuditLog` model in the old `08-audit-logging.md`.** That single table never
@@ -153,7 +153,7 @@ pruning without losing uniqueness.
 | `insertedAt` | Always the write time. The gap from `occurredAt` shows clock skew and late writes |
 
 No foreign keys, deliberately: the trail must outlive the records it describes, and must never be the
-reason a delete fails. See [database-architecture.md](database-architecture.md) §3.5.
+reason a delete fails. See [database-architecture.md](../database-architecture.md) §3.5.
 
 Mount `correlationId()` **before** authentication — a DENIED result is one of the most useful things
 in the trail, and it happens before the request has an identity.

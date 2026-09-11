@@ -19,7 +19,9 @@
     "db:studio": "dotenv -e ../../../.env -- prisma studio --schema prisma/schema.prisma",
     "db:seed": "dotenv -e ../../../.env -- tsx prisma/seed.ts",
     "typecheck": "tsc --noEmit",
-    "db:seed:authz": "dotenv -e ../../../.env -- tsx prisma/seed-access-control.ts"
+    "db:seed:authz": "dotenv -e ../../../.env -- tsx prisma/seed-access-control.ts",
+    "db:seed:demo": "dotenv -e ../../../.env -- tsx prisma/seed-demo.ts",
+    "db:link-admin": "dotenv -e ../../../.env -- tsx prisma/link-admin.ts"
   },
   "dependencies": {
     "@hitbox/access-control": "workspace:*",

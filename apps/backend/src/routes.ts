@@ -20,6 +20,14 @@ export interface ApiRouters {
      * route group, because roles are not API namespaces.
      */
     adminAuthz: Router;
+    /**
+     * The admin dashboard — ONE permission-driven reporting API. There is no
+     * per-role namespace here either: an Order Manager and a Finance Admin
+     * call the same routes and get different sections back.
+     */
+    adminDashboard: Router;
+    /** Media registry: presigned upload, list, signed serve, soft archive. */
+    adminMedia: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -41,6 +49,8 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/ledger', routers.ledger);
     api.use('/authz', routers.authz);
     api.use('/admin/authz', routers.adminAuthz);
+    api.use('/admin/dashboard', routers.adminDashboard);
+    api.use('/admin/media', routers.adminMedia);
 
     return api;
 }
