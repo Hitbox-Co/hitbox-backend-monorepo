@@ -23,5 +23,10 @@ export type {
 } from './dto/product.dto';
 
 // Service type (for other modules that receive it via DI)
-export type { ProductService } from './service/product.service';
+export type { ProductService, ProductResponse } from './service/product.service';
 export type { ProductWithRelations } from './repository/product.repository';
+export { PRODUCT_SORTS, PUBLIC_PRODUCT_WHERE } from './repository/product.repository';
+
+// Port: bootstrap injects an adapter that turns a MediaAsset storageRef into
+// a renderable URL. Products owns no object-storage knowledge itself.
+export type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';

@@ -5,7 +5,7 @@ import { eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
 import { createAccessControlModule } from '@hitbox/access-control';
 import { createDashboardModule } from '@hitbox/dashboard';
-import { createMediaModule, S3ObjectStorage } from '@hitbox/media';
+import { createMediaModule, isPublicKey, S3ObjectStorage } from '@hitbox/media';
 import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
@@ -75,20 +75,37 @@ export function bootstrap(): Bootstrapped {
     // scanner and no SQS queue, so assets are created SKIPPED and are
     // servable immediately, and POST /scan-result is not mounted. See
     // docs/media/s3-configuration.md §8.
-    const mediaModule = env.MEDIA_S3_BUCKET
+    const objectStorage = env.MEDIA_S3_BUCKET
+        ? new S3ObjectStorage({
+            bucket: env.MEDIA_S3_BUCKET,
+            // ap-south-1 in production. The fallback only keeps a
+            // half-configured local deploy from crashing at boot — a
+            // wrong region makes presigned URLs fail at S3, not here.
+            region: env.MEDIA_S3_REGION ?? 'us-east-1',
+            endpoint: env.MEDIA_S3_ENDPOINT,
+            forcePathStyle: Boolean(env.MEDIA_S3_ENDPOINT),
+            publicBaseUrl: env.MEDIA_S3_PUBLIC_BASE_URL,
+        })
+        : null;
+
+    /**
+     * Products' IMediaUrlResolver port. The catalog stores image *keys*
+     * (`ProductImage → MediaAsset.storageRef`) and needs URLs to render; only
+     * this adapter knows the bucket and which prefixes are public.
+     *
+     * `isPublicKey` is the gate: a private key returns null rather than a URL
+     * that would 403, because a public catalog feed cannot sign a GET. Product
+     * images live under `drop-images/`, so in practice this always resolves.
+     */
+    const mediaUrls = objectStorage
+        ? { publicUrl: (ref: string) => (isPublicKey(ref) ? objectStorage.publicUrl(ref) : null) }
+        : undefined;
+
+    const mediaModule = env.MEDIA_S3_BUCKET && objectStorage
         ? createMediaModule({
             prisma,
             guard: accessControlModule.guard,
-            storage: new S3ObjectStorage({
-                bucket: env.MEDIA_S3_BUCKET,
-                // ap-south-1 in production. The fallback only keeps a
-                // half-configured local deploy from crashing at boot — a
-                // wrong region makes presigned URLs fail at S3, not here.
-                region: env.MEDIA_S3_REGION ?? 'us-east-1',
-                endpoint: env.MEDIA_S3_ENDPOINT,
-                forcePathStyle: Boolean(env.MEDIA_S3_ENDPOINT),
-                publicBaseUrl: env.MEDIA_S3_PUBLIC_BASE_URL,
-            }),
+            storage: objectStorage,
             bucket: env.MEDIA_S3_BUCKET,
             resolveCaller: async (req: Request) => {
                 const principal = await accessControlModule.guard.describePrincipal(req);
@@ -109,7 +126,7 @@ export function bootstrap(): Bootstrapped {
         })
         : null;
 
-    const productsModule = createProductsModule({ prisma, eventBus });
+    const productsModule = createProductsModule({ prisma, eventBus, mediaUrls });
 
     const discoverModule = createDiscoverModule({
         catalog: productsModule.discovery,

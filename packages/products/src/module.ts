@@ -10,12 +10,21 @@ import { ProductCache } from './cache/product-cache';
 import { ProductController } from './controller/product.controller';
 import { MarketplaceListingAdapter } from './domain/marketplace-listing.adapter';
 import { ProductDiscoveryAdapter } from './domain/product-discovery.adapter';
+import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
 import { ProductRepository } from './repository/product.repository';
 import { ProductService } from './service/product.service';
 
 export interface ProductsModuleDeps {
     prisma: PrismaClient;
     eventBus: IEventBus;
+    /**
+     * Resolves a `MediaAsset.storageRef` to a renderable URL.
+     *
+     * Optional: omit it and every `imageUrl` comes back null rather than the
+     * catalog failing — which is the right behaviour on a deploy with no
+     * bucket configured, where the media routes are not mounted either.
+     */
+    mediaUrls?: IMediaUrlResolver | undefined;
 }
 
 export interface ProductsModule {
@@ -33,21 +42,26 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
 
     const cache = new ProductCache();
     const products = new ProductRepository(deps.prisma, cache);
-    const service = new ProductService({ products, eventBus: deps.eventBus, logger });
+    const service = new ProductService({
+        products,
+        eventBus: deps.eventBus,
+        logger,
+        mediaUrls: deps.mediaUrls,
+    });
 
     return {
         service,
-        discovery: new ProductDiscoveryAdapter(products),
-        listings: new MarketplaceListingAdapter(products),
+        discovery: new ProductDiscoveryAdapter(products, deps.mediaUrls),
+        listings: new MarketplaceListingAdapter(products, deps.mediaUrls),
         createRouter(requireAuth) {
             const controller = new ProductController(service);
             const router = Router();
 
-            // Public catalog
+            // Public catalog. The NFC tag routes that used to live here moved
+            // out with the schema restructure — tags belong to Sku now, and
+            // provenance to the claims module's /verify and /ledger.
             router.get('/', controller.list);
-            router.get('/code/:productCode', controller.getByCode);
-            router.get('/tag/:tagId/history', controller.history);
-            router.get('/tag/:tagId', controller.getByTag);
+            router.get('/code/:groupCode', controller.getByCode);
             router.get('/:id', controller.getById);
 
             // Catalog management — requireAuth for now; role-based

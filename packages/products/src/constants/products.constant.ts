@@ -12,19 +12,24 @@ export const PRODUCT_EVENTS = {
     PRODUCT_ARCHIVED: 'products.product.archived',
 } as const;
 
-/** productCode format: 8 unique digits + 4 group digits = 12 chars. */
+/**
+ * `Product.groupCode` format: 8 unique digits + 4 group digits = 12 chars.
+ *
+ * The column was called `productCode` before the catalog restructure; the
+ * format and its role as the public identifier are unchanged.
+ */
 export const PRODUCT_CODE_UNIQUE_LENGTH = 8;
 export const PRODUCT_CODE_GROUP_LENGTH = 4;
 export const DEFAULT_PRODUCT_GROUP_CODE = '0000';
 
-/** Retries when a randomly generated productCode collides. */
+/** Retries when a randomly generated groupCode collides. */
 export const PRODUCT_CODE_MAX_ATTEMPTS = 5;
 
 // ── Redis cache (cache-aside; see cache/product-cache.ts) ──────────────────
 // Reads check Redis first and populate it on miss; any mutation (create,
 // update, archive) invalidates. No-ops entirely when REDIS_URL is unset.
 
-/** Single-product lookups (findById / findByProductCode). */
+/** Single-product lookups (findById / findByGroupCode). */
 export const PRODUCT_CACHE_ENTITY_TTL_SECONDS = 300; // 5 minutes
 
 /** Paginated/listing queries (catalog list, discover feed, marketplace feed). */

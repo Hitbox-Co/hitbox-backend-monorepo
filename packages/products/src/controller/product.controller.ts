@@ -17,19 +17,16 @@ export class ProductController {
         res.json({ data: result.items, meta: result.meta });
     });
 
-    /** GET /products/code/:productCode */
+    /**
+     * GET /products/code/:groupCode
+     *
+     * The NFC routes that used to sit here (`/tag/:tagId` and
+     * `/tag/:tagId/history`) are gone: tags moved to `Sku.tagId` and the
+     * `ProductHistory` model was removed. The claims module's
+     * `/api/v1/verify` and `/api/v1/ledger` own that surface now.
+     */
     getByCode: RequestHandler = asyncHandler(async (req, res) => {
-        res.json({ data: await this.service.getByProductCode(req.params.productCode as string) });
-    });
-
-    /** GET /products/tag/:tagId — lookup by NFC tag */
-    getByTag: RequestHandler = asyncHandler(async (req, res) => {
-        res.json({ data: await this.service.getByTagId(req.params.tagId as string) });
-    });
-
-    /** GET /products/tag/:tagId/history — ownership/price history */
-    history: RequestHandler = asyncHandler(async (req, res) => {
-        res.json({ data: await this.service.getHistoryByTagId(req.params.tagId as string) });
+        res.json({ data: await this.service.getByGroupCode(req.params.groupCode as string) });
     });
 
     /** GET /products/:id */
