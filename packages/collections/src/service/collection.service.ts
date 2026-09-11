@@ -1,6 +1,6 @@
 import type { Logger } from 'pino';
 import { AppError } from '@hitbox/shared';
-import type { CollectionVisibility } from '@hitbox/database';
+import type { Visibility } from '@hitbox/database';
 import { COLLECTIONS_ERROR_CODES } from '../constants/collections.constant';
 import { toCollectionItem } from '../dto/collection.dto';
 import type {
@@ -9,6 +9,7 @@ import type {
     ListCollectionQueryDto,
 } from '../dto/collection.dto';
 import type { IArtistCollectionStats } from '../domain/interfaces/artist-collection-stats.interface';
+import type { IMediaUrlResolver } from '../domain/interfaces/media-url-resolver.interface';
 import type { BuyerCollectionRepository } from '../repository/buyer-collection.repository';
 
 interface CollectionServiceDeps {
@@ -16,6 +17,8 @@ interface CollectionServiceDeps {
     /** artist module's adapter, injected at bootstrap. */
     artistStats: IArtistCollectionStats;
     logger: Logger;
+    /** Optional: without it, product image URLs come back null. */
+    mediaUrls?: IMediaUrlResolver | undefined;
 }
 
 export interface PaginatedItems {
@@ -29,7 +32,7 @@ export class CollectionService {
     /** The owner's own shelf — private items included. */
     async listMine(userId: string, query: ListCollectionQueryDto): Promise<PaginatedItems> {
         const { items, total } = await this.deps.collections.findManyByUser(userId, query);
-        return { items: items.map(toCollectionItem), total };
+        return { items: items.map((row) => toCollectionItem(row, this.deps.mediaUrls)), total };
     }
 
     /** Someone else's showcase — PUBLIC items only. */
@@ -37,7 +40,7 @@ export class CollectionService {
         const { items, total } = await this.deps.collections.findManyByUser(userId, query, {
             publicOnly: true,
         });
-        return { items: items.map(toCollectionItem), total };
+        return { items: items.map((row) => toCollectionItem(row, this.deps.mediaUrls)), total };
     }
 
     /**
@@ -62,13 +65,20 @@ export class CollectionService {
         };
     }
 
-    /** Toggle an owned item between PUBLIC and PRIVATE. */
+    /**
+     * Toggle an owned item between PUBLIC and PRIVATE.
+     *
+     * Addressed by **SKU** id, not product id: the shelf is keyed by
+     * `@@unique([userId, skuId])` since the restructure, and a buyer can hold
+     * several serialized SKUs of the same product — a product id would no
+     * longer identify one shelf row.
+     */
     async setVisibility(
         userId: string,
-        productId: string,
-        visibility: CollectionVisibility,
+        skuId: string,
+        visibility: Visibility,
     ): Promise<CollectionItemDto> {
-        const item = await this.deps.collections.findItem(userId, productId);
+        const item = await this.deps.collections.findItem(userId, skuId);
         if (!item) {
             throw AppError.notFound(
                 'Item not found in your collection',
@@ -76,6 +86,6 @@ export class CollectionService {
             );
         }
         const updated = await this.deps.collections.updateVisibility(item.id, visibility);
-        return toCollectionItem(updated);
+        return toCollectionItem(updated, this.deps.mediaUrls);
     }
 }
