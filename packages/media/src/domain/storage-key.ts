@@ -76,6 +76,38 @@ export function isOwnerAllowed(assetType: AssetType, ownerType: OwnerType): bool
     return ALLOWED_OWNERS[assetType].includes(ownerType);
 }
 
+/**
+ * The two prefixes the bucket policy grants anonymous `s3:GetObject` on.
+ *
+ * These are the only keys whose object URL is stable and permanent. Everything
+ * else is private at the bucket and must be reached through a presigned GET
+ * issued by `GET /admin/media/:assetId/url` after a permission check.
+ *
+ * This list and the `Resource` array of the bucket policy in
+ * docs/media/s3-configuration.md §4 are the same fact written twice. Changing
+ * one without the other either breaks image loading (policy narrower than this
+ * list) or publishes something silently (policy wider). The test suite asserts
+ * every asset type lands on the side it is meant to.
+ */
+export const PUBLIC_PREFIXES = ['drop-images/', 'profile-images/'] as const;
+
+/** Asset types whose keys fall under a publicly readable prefix. */
+export const PUBLIC_ASSET_TYPES: AssetType[] = [
+    AssetType.DROP_IMAGE,
+    AssetType.PROFILE_IMAGE,
+];
+
+/**
+ * Whether this key is anonymously readable.
+ *
+ * Derived from the **key**, not from `assetType`, so it stays true for a row
+ * whose type was changed after upload — the object's location is what the
+ * bucket policy actually evaluates.
+ */
+export function isPublicKey(storageRef: string): boolean {
+    return PUBLIC_PREFIXES.some((prefix) => storageRef.startsWith(prefix));
+}
+
 /** `hero.JPG` -> `jpg`. Extension only, lowercased, alphanumerics only. */
 export function extensionOf(fileName: string): string {
     const dot = fileName.lastIndexOf('.');

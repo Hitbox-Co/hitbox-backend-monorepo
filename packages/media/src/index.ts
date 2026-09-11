@@ -7,8 +7,13 @@
  * files goes through here rather than growing a second storage path.
  *
  * File bytes never pass through the API: clients get a presigned PUT and
- * upload straight to the bucket, and only virus-scanned CLEAN assets are ever
- * served back.
+ * upload straight to the bucket.
+ *
+ * Reading back splits on the key's prefix. `drop-images/` and
+ * `profile-images/` are anonymously readable at the bucket, so the API hands
+ * out a permanent object URL for them. Every other prefix is private and
+ * reachable only through a short-lived presigned GET issued after a
+ * permission check. See docs/media/s3-configuration.md.
  */
 
 export { createMediaModule } from './module';
@@ -24,15 +29,19 @@ export {
     UPLOAD_URL_TTL_SECONDS,
 } from './constants/media.constant';
 
-// The S3 key convention — exported so the scan/thumbnail worker derives the
-// same keys instead of re-deriving them from a second copy of the rules.
+// The S3 key convention, plus which prefixes the bucket policy makes public —
+// exported so anything deriving a URL uses these rules rather than a second
+// copy of them.
 export {
     ALLOWED_OWNERS,
     OwnerType,
+    PUBLIC_ASSET_TYPES,
+    PUBLIC_PREFIXES,
     buildStorageKey,
     derivedKeys,
     extensionOf,
     isOwnerAllowed,
+    isPublicKey,
     ownerColumn,
 } from './domain/storage-key';
 
@@ -45,7 +54,7 @@ export { S3ObjectStorage } from './infrastructure/s3-object-storage';
 export type { S3ObjectStorageConfig } from './infrastructure/s3-object-storage';
 
 export type { MediaCallerResolver } from './controller/media.controller';
-export type { MediaScopeCheck } from './service/media.service';
+export type { MediaScopeCheck, ScanPipelineMode } from './service/media.service';
 
 export {
     createUploadUrlSchema,

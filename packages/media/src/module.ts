@@ -8,6 +8,7 @@ import type { MediaCallerResolver } from './controller/media.controller';
 import type { IObjectStorage } from './domain/interfaces/object-storage.interface';
 import { MediaRepository } from './repository/media.repository';
 import { MediaService } from './service/media.service';
+import type { ScanPipelineMode } from './service/media.service';
 
 /**
  * Structural guard — the shape of `requirePermission`, not an import of the
@@ -34,8 +35,23 @@ export interface MediaModuleDeps {
     storage: IObjectStorage;
     bucket: string;
     /**
+     * Whether a malware scanner gates serving. Defaults to `'disabled'`,
+     * which matches the deployed architecture: no SQS, no scan worker, no
+     * callback. Assets are created `SKIPPED` and are servable straight away.
+     *
+     * Set `'enabled'` **only** alongside `scanCallback` — enabling it without
+     * a callback creates assets as `PENDING` that nothing will ever clear,
+     * and every one of them 404s forever.
+     */
+    scanPipeline?: ScanPipelineMode;
+    /**
      * Authenticates the scan pipeline's callback. Omit and the scan-result
      * route is not mounted at all.
+     *
+     * Not supplied in this deployment, so `POST /scan-result` does not exist.
+     * The handler behind it is kept rather than deleted: it is the only thing
+     * that would need to be re-wired if scanning is ever introduced, and it
+     * is unreachable in the meantime.
      *
      * Same reasoning as the audit module's export gate: a route that flips an
      * asset to CLEAN is a route that makes files servable, so it must not be
@@ -57,6 +73,7 @@ export function createMediaModule(deps: MediaModuleDeps): MediaModule {
         storage: deps.storage,
         logger,
         bucket: deps.bucket,
+        scanPipeline: deps.scanPipeline ?? 'disabled',
     });
     const controller = new MediaController(service, deps.resolveCaller);
 

@@ -5,10 +5,12 @@ import {
     derivedKeys,
     extensionOf,
     isOwnerAllowed,
+    isPublicKey,
     ownerColumn,
 } from '../src/domain/storage-key';
+import { S3ObjectStorage } from '../src/infrastructure/s3-object-storage';
 import { MediaService } from '../src/service/media.service';
-import type { MediaScopeCheck } from '../src/service/media.service';
+import type { MediaScopeCheck, ScanPipelineMode } from '../src/service/media.service';
 import { AppError } from '@hitbox/shared';
 
 const ORG_A = '11111111-1111-4111-8111-111111111111';
@@ -24,6 +26,7 @@ const logger = {
 const storage = {
     presignUpload: jest.fn().mockResolvedValue({ url: 'https://s3/put', expiresIn: 300 }),
     presignDownload: jest.fn().mockResolvedValue({ url: 'https://s3/get', expiresIn: 60 }),
+    publicUrl: jest.fn((key: string) => `https://cdn.test/${key}`),
 };
 
 function scope(organizationIds: string[] | null): MediaScopeCheck {
@@ -47,7 +50,7 @@ function asset(overrides: Record<string, unknown> = {}) {
         mimeType: 'image/jpeg',
         sizeBytes: 1000,
         checksum: null,
-        virusScanStatus: VirusScanStatus.CLEAN,
+        virusScanStatus: VirusScanStatus.SKIPPED,
         uploadedById: 'u-1',
         organizationId: ORG_A,
         artistId: null,
@@ -59,7 +62,12 @@ function asset(overrides: Record<string, unknown> = {}) {
     };
 }
 
-function makeService(overrides: { asset?: ReturnType<typeof asset> | null } = {}) {
+function makeService(
+    overrides: {
+        asset?: ReturnType<typeof asset> | null;
+        scanPipeline?: ScanPipelineMode;
+    } = {},
+) {
     const repository = {
         create: jest.fn().mockImplementation(async (input) => asset({ id: input.id })),
         findById: jest.fn().mockResolvedValue('asset' in overrides ? overrides.asset : asset()),
@@ -77,8 +85,22 @@ function makeService(overrides: { asset?: ReturnType<typeof asset> | null } = {}
         storage,
         logger,
         bucket: 'hitbox-media-test',
+        scanPipeline: overrides.scanPipeline ?? 'disabled',
     });
     return { service, repository };
+}
+
+/** A valid upload request; individual tests override the field under test. */
+function uploadDto(overrides: Record<string, unknown> = {}) {
+    return {
+        assetType: AssetType.DROP_IMAGE,
+        fileName: 'hero.jpg',
+        mimeType: 'image/jpeg',
+        ownerType: 'product' as const,
+        ownerId: PRODUCT,
+        sizeBytes: 1000,
+        ...overrides,
+    };
 }
 
 beforeEach(() => jest.clearAllMocks());
@@ -145,14 +167,87 @@ describe('S3 key convention', () => {
     });
 });
 
+describe('public vs private prefixes', () => {
+    // This block and the bucket policy's Resource list in
+    // docs/media/s3-configuration.md §4 are the same fact written twice.
+    // If they drift, either images stop loading or a legal document is
+    // published — so every asset type is pinned to a side here.
+
+    it('treats exactly drop-images and profile-images as public', () => {
+        expect(isPublicKey('drop-images/products/p-1/a-1.jpg')).toBe(true);
+        expect(isPublicKey('profile-images/users/u-1/a-1.png')).toBe(true);
+        expect(isPublicKey('profile-images/artists/ar-1/a-1.png')).toBe(true);
+    });
+
+    it('keeps every sensitive prefix private', () => {
+        expect(isPublicKey('exclusive-content/products/p-1/a-1.mp4')).toBe(false);
+        expect(isPublicKey('legal-documents/organizations/o-1/a-1.pdf')).toBe(false);
+        expect(isPublicKey('supply-spreadsheets/vendors/v-1/a-1.csv')).toBe(false);
+        expect(isPublicKey('other/users/u-1/a-1.bin')).toBe(false);
+    });
+
+    it('is not fooled by a public prefix appearing mid-key', () => {
+        // A prefix match, not a substring match — the bucket policy matches
+        // on prefix too, so anything else would disagree with it.
+        expect(isPublicKey('legal-documents/organizations/drop-images/a.pdf')).toBe(false);
+        expect(isPublicKey('other/drop-images/x/a-1.jpg')).toBe(false);
+    });
+
+    it('every asset type lands on the intended side', () => {
+        const publicTypes = [AssetType.DROP_IMAGE, AssetType.PROFILE_IMAGE];
+        for (const assetType of Object.values(AssetType)) {
+            const ownerType = ALLOWED_OWNERS[assetType][0] as 'product';
+            const key = buildStorageKey({
+                assetType, ownerType, ownerId: 'o-1', assetId: ASSET, fileName: 'f.bin',
+            });
+            expect(isPublicKey(key)).toBe(publicTypes.includes(assetType));
+        }
+    });
+});
+
+describe('public URL construction', () => {
+    it('uses the virtual-hosted regional S3 endpoint by default', () => {
+        const s3 = new S3ObjectStorage({ bucket: 'hitbox-media-prod', region: 'ap-south-1' });
+        expect(s3.publicUrl('drop-images/products/p-1/a-1.jpg')).toBe(
+            'https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/drop-images/products/p-1/a-1.jpg',
+        );
+    });
+
+    it('honours an explicit public base (a CDN in front of the images)', () => {
+        const s3 = new S3ObjectStorage({
+            bucket: 'hitbox-media-prod',
+            region: 'ap-south-1',
+            publicBaseUrl: 'https://cdn.hitbox.example/',
+        });
+        expect(s3.publicUrl('drop-images/p.jpg')).toBe('https://cdn.hitbox.example/drop-images/p.jpg');
+    });
+
+    it('uses path style against an S3-compatible endpoint (MinIO)', () => {
+        const s3 = new S3ObjectStorage({
+            bucket: 'hitbox-media-dev',
+            region: 'us-east-1',
+            endpoint: 'http://localhost:9000',
+        });
+        expect(s3.publicUrl('drop-images/p.jpg')).toBe(
+            'http://localhost:9000/hitbox-media-dev/drop-images/p.jpg',
+        );
+    });
+
+    it('encodes each segment without destroying the separators', () => {
+        // encodeURIComponent over the whole key would turn / into %2F and
+        // address a different, nonexistent object.
+        const s3 = new S3ObjectStorage({ bucket: 'b', region: 'ap-south-1' });
+        expect(s3.publicUrl('drop-images/products/p 1/a.jpg')).toBe(
+            'https://b.s3.ap-south-1.amazonaws.com/drop-images/products/p%201/a.jpg',
+        );
+    });
+});
+
 describe('upload URL', () => {
-    it('creates the row PENDING and returns a presigned PUT', async () => {
+    it('returns a presigned PUT and binds the declared length into it', async () => {
         const { service, repository } = makeService();
         const result = await service.createUploadUrl({
-            dto: {
-                assetType: AssetType.DROP_IMAGE, fileName: 'hero.jpg',
-                mimeType: 'image/jpeg', ownerType: 'product', ownerId: PRODUCT,
-            },
+            dto: uploadDto({ sizeBytes: 482113 }),
             uploadedById: 'u-1',
             scope: scope(null),
         });
@@ -160,20 +255,77 @@ describe('upload URL', () => {
         expect(result.uploadUrl).toBe('https://s3/put');
         expect(result.storageRef).toContain('drop-images/products/');
         expect(repository.create).toHaveBeenCalled();
+        // declaredBytes is what makes S3 reject a body of any other size —
+        // with no ingest worker it is the only size enforcement there is.
         expect(storage.presignUpload).toHaveBeenCalledWith(
-            expect.objectContaining({ mimeType: 'image/jpeg', expiresInSeconds: 300 }),
+            expect.objectContaining({
+                mimeType: 'image/jpeg',
+                declaredBytes: 482113,
+                expiresInSeconds: 300,
+            }),
         );
+    });
+
+    it('creates the row SKIPPED when no scanner is deployed', async () => {
+        // PENDING here would be a permanent 404: nothing would ever clear it.
+        const { service, repository } = makeService();
+        await service.createUploadUrl({
+            dto: uploadDto(),
+            uploadedById: 'u-1',
+            scope: scope(null),
+        });
+        expect(repository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ virusScanStatus: VirusScanStatus.SKIPPED }),
+        );
+    });
+
+    it('creates the row PENDING when a scan pipeline is enabled', async () => {
+        const { service, repository } = makeService({ scanPipeline: 'enabled' });
+        await service.createUploadUrl({
+            dto: uploadDto(),
+            uploadedById: 'u-1',
+            scope: scope(null),
+        });
+        expect(repository.create).toHaveBeenCalledWith(
+            expect.objectContaining({ virusScanStatus: VirusScanStatus.PENDING }),
+        );
+    });
+
+    it('returns a permanent public URL for a public prefix', async () => {
+        const { service } = makeService();
+        const result = await service.createUploadUrl({
+            dto: uploadDto(),
+            uploadedById: 'u-1',
+            scope: scope(null),
+        });
+        expect(result.publicUrl).toContain('drop-images/products/');
+    });
+
+    it('returns no public URL for a private prefix', async () => {
+        const { service } = makeService();
+        const result = await service.createUploadUrl({
+            dto: uploadDto({
+                assetType: AssetType.LEGAL_DOCUMENT,
+                fileName: 'terms.pdf',
+                mimeType: 'application/pdf',
+                ownerType: 'organization',
+                ownerId: ORG_A,
+            }),
+            uploadedById: 'u-1',
+            scope: scope(null),
+        });
+        expect(result.storageRef).toContain('legal-documents/');
+        expect(result.publicUrl).toBeNull();
     });
 
     it('rejects a MIME type the asset type does not allow', async () => {
         const { service, repository } = makeService();
         await expect(
             service.createUploadUrl({
-                dto: {
-                    assetType: AssetType.DROP_IMAGE, fileName: 'x.exe',
+                dto: uploadDto({
+                    fileName: 'x.exe',
                     mimeType: 'application/x-msdownload',
-                    ownerType: 'product', ownerId: PRODUCT,
-                },
+                }),
                 uploadedById: 'u-1',
                 scope: scope(null),
             }),
@@ -187,11 +339,7 @@ describe('upload URL', () => {
         const { service } = makeService();
         await expect(
             service.createUploadUrl({
-                dto: {
-                    assetType: AssetType.DROP_IMAGE, fileName: 'huge.jpg',
-                    mimeType: 'image/jpeg', ownerType: 'product',
-                    ownerId: PRODUCT, sizeBytes: 50 * 1024 * 1024,
-                },
+                dto: uploadDto({ fileName: 'huge.jpg', sizeBytes: 50 * 1024 * 1024 }),
                 uploadedById: 'u-1',
                 scope: scope(null),
             }),
@@ -202,10 +350,11 @@ describe('upload URL', () => {
         const { service } = makeService();
         await expect(
             service.createUploadUrl({
-                dto: {
-                    assetType: AssetType.LEGAL_DOCUMENT, fileName: 'terms.pdf',
-                    mimeType: 'application/pdf', ownerType: 'product', ownerId: PRODUCT,
-                },
+                dto: uploadDto({
+                    assetType: AssetType.LEGAL_DOCUMENT,
+                    fileName: 'terms.pdf',
+                    mimeType: 'application/pdf',
+                }),
                 uploadedById: 'u-1',
                 scope: scope(null),
             }),
@@ -218,10 +367,7 @@ describe('upload URL', () => {
         const { service, repository } = makeService();
         await expect(
             service.createUploadUrl({
-                dto: {
-                    assetType: AssetType.DROP_IMAGE, fileName: 'hero.jpg',
-                    mimeType: 'image/jpeg', ownerType: 'product', ownerId: PRODUCT,
-                },
+                dto: uploadDto(),
                 uploadedById: 'u-1',
                 scope: scope([ORG_B]),
             }),
@@ -232,10 +378,7 @@ describe('upload URL', () => {
     it('allows an owner inside the caller’s organization', async () => {
         const { service, repository } = makeService();
         await service.createUploadUrl({
-            dto: {
-                assetType: AssetType.DROP_IMAGE, fileName: 'hero.jpg',
-                mimeType: 'image/jpeg', ownerType: 'product', ownerId: PRODUCT,
-            },
+            dto: uploadDto(),
             uploadedById: 'u-1',
             scope: scope([ORG_A]),
         });
@@ -244,21 +387,51 @@ describe('upload URL', () => {
 });
 
 describe('serving', () => {
-    it('returns a short-lived signed GET for a clean asset', async () => {
+    it('returns the permanent object URL for a public prefix', async () => {
+        // drop-images/ is anonymously readable at the bucket, so signing it
+        // would be theatre — the same bytes are reachable at that address.
         const { service } = makeService();
         const result = await service.signedUrl(ASSET, scope(null));
-        expect(result).toEqual({ url: 'https://s3/get', expiresIn: 60 });
+        expect(result).toEqual({
+            url: `https://cdn.test/drop-images/products/${PRODUCT}/${ASSET}.jpg`,
+            expiresIn: null,
+            public: true,
+        });
+        expect(storage.presignDownload).not.toHaveBeenCalled();
     });
+
+    it('returns a short-lived signed GET for a private prefix', async () => {
+        const { service } = makeService({
+            asset: asset({
+                assetType: AssetType.LEGAL_DOCUMENT,
+                storageRef: `legal-documents/organizations/${ORG_A}/${ASSET}.pdf`,
+            }),
+        });
+        const result = await service.signedUrl(ASSET, scope(null));
+        expect(result).toEqual({ url: 'https://s3/get', expiresIn: 60, public: false });
+        expect(storage.publicUrl).not.toHaveBeenCalled();
+    });
+
+    for (const status of [VirusScanStatus.CLEAN, VirusScanStatus.SKIPPED]) {
+        it(`serves a ${status} asset`, async () => {
+            const { service } = makeService({ asset: asset({ virusScanStatus: status }) });
+            await expect(service.signedUrl(ASSET, scope(null))).resolves.toMatchObject({
+                public: true,
+            });
+        });
+    }
 
     for (const status of [VirusScanStatus.PENDING, VirusScanStatus.INFECTED]) {
         it(`404s a ${status} asset regardless of permission`, async () => {
-            // "You may read this" and "this is safe to hand you" are
-            // different questions; the scanner answers the second.
+            // Only reachable on a deploy that once ran a scanner, or on rows
+            // predating this one — but the gate stays, because INFECTED must
+            // never be servable and PENDING means nothing has vouched for it.
             const { service } = makeService({ asset: asset({ virusScanStatus: status }) });
             await expect(service.signedUrl(ASSET, scope(null))).rejects.toMatchObject({
                 statusCode: 404,
             });
             expect(storage.presignDownload).not.toHaveBeenCalled();
+            expect(storage.publicUrl).not.toHaveBeenCalled();
         });
     }
 

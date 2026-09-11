@@ -70,15 +70,24 @@ export function bootstrap(): Bootstrapped {
     // Media needs a bucket. Without one the routes are not mounted at all
     // rather than mounted-but-broken: an upload endpoint that 500s after
     // creating a MediaAsset row leaves orphaned registry entries behind.
+    //
+    // No `scanPipeline` and no `scanCallback` — this deployment runs no
+    // scanner and no SQS queue, so assets are created SKIPPED and are
+    // servable immediately, and POST /scan-result is not mounted. See
+    // docs/media/s3-configuration.md §8.
     const mediaModule = env.MEDIA_S3_BUCKET
         ? createMediaModule({
             prisma,
             guard: accessControlModule.guard,
             storage: new S3ObjectStorage({
                 bucket: env.MEDIA_S3_BUCKET,
+                // ap-south-1 in production. The fallback only keeps a
+                // half-configured local deploy from crashing at boot — a
+                // wrong region makes presigned URLs fail at S3, not here.
                 region: env.MEDIA_S3_REGION ?? 'us-east-1',
                 endpoint: env.MEDIA_S3_ENDPOINT,
                 forcePathStyle: Boolean(env.MEDIA_S3_ENDPOINT),
+                publicBaseUrl: env.MEDIA_S3_PUBLIC_BASE_URL,
             }),
             bucket: env.MEDIA_S3_BUCKET,
             resolveCaller: async (req: Request) => {

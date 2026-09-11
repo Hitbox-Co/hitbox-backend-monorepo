@@ -53,10 +53,27 @@ const envSchema = z.object({
     // ── Media storage (optional) ────────────────────────────────────────────
     // Absent on a deploy that does not serve uploads; the media routes are
     // then not mounted at all rather than mounted and failing at runtime.
+    //
+    // AWS credentials are deliberately NOT declared here. The SDK resolves
+    // AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from the process environment
+    // itself (Railway service variables in production). Naming them in this
+    // schema would invite passing them around as values and logging them in
+    // the validation error report.
     MEDIA_S3_BUCKET: z.string().optional(),
     MEDIA_S3_REGION: z.string().optional(),
-    /** Set for MinIO or another S3-compatible endpoint. */
+    /**
+     * Set for MinIO or another S3-compatible endpoint. **Local development
+     * only** — setting it in production also switches on path-style
+     * addressing and redirects every public URL away from S3.
+     */
     MEDIA_S3_ENDPOINT: z.string().url().optional(),
+    /**
+     * Origin serving the publicly readable prefixes (`drop-images/`,
+     * `profile-images/`), no trailing slash. Defaults to the bucket's
+     * regional S3 endpoint; set it to a CloudFront domain to move public
+     * image traffic onto a CDN without touching code.
+     */
+    MEDIA_S3_PUBLIC_BASE_URL: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

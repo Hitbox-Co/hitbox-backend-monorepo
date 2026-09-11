@@ -9,8 +9,16 @@ export const createUploadUrlSchema = z.object({
     mimeType: z.string().min(1).max(255),
     ownerType: z.nativeEnum(OwnerType),
     ownerId: z.string().uuid(),
-    /** Declared up front so the cap is enforced before a URL is issued. */
-    sizeBytes: z.coerce.number().int().positive().optional(),
+    /**
+     * Required, not optional.
+     *
+     * It is checked against the cap before a URL is issued *and* welded into
+     * the signature as `Content-Length`. With no ingest worker behind the
+     * upload, those are the only two size checks that exist — an upload with
+     * no declared size would be genuinely unbounded, so the request is
+     * refused instead. Browsers send `file.size`.
+     */
+    sizeBytes: z.coerce.number().int().positive(),
 });
 export type CreateUploadUrlDto = z.infer<typeof createUploadUrlSchema>;
 

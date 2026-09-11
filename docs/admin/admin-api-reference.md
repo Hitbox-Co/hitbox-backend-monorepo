@@ -470,21 +470,21 @@ scope covering the asset's owner.
 
 > Returns **503 `STORAGE_UNAVAILABLE`** on a deployment with no bucket
 > configured (`MEDIA_S3_BUCKET` unset). Handle that before building against it.
+> Bucket setup, CORS and policies: [media/s3-configuration.md](../media/s3-configuration.md).
 
-### Upload is a three-step flow
+### Upload is a two-step flow
 
 File bytes never pass through the API.
 
 ```
-1. POST /admin/media/upload-url   → { assetId, uploadUrl, storageRef }
+1. POST /admin/media/upload-url   → { assetId, uploadUrl, storageRef, publicUrl }
 2. PUT  <uploadUrl>               → the raw file, straight to S3 (5-min expiry)
-3. the scanner flips the asset to CLEAN asynchronously
 ```
 
-**Between steps 2 and 3 the asset is not servable.** `GET /:assetId/url`
-returns 404 until the scan completes. The UI should show a "processing" state
-after upload and poll `GET /admin/media?ownerId=...` for
-`virusScanStatus: "CLEAN"`.
+**The asset is servable as soon as the PUT returns 200.** There is no scanner
+and no processing delay in this deployment — do not build a "processing" state
+or poll for `virusScanStatus: "CLEAN"`. New assets are created `SKIPPED`, which
+is servable. See [media/s3-configuration.md §8](../media/s3-configuration.md).
 
 #### `POST /admin/media/upload-url`
 
@@ -502,15 +502,28 @@ after upload and poll `GET /admin/media?ownerId=...` for
 ```json
 {
   "assetId": "a-771f...",
-  "uploadUrl": "https://hitbox-media-prod.s3.amazonaws.com/drop-images/products/p-991.../a-771....jpg?X-Amz-...",
+  "uploadUrl": "https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/drop-images/products/p-991.../a-771....jpg?X-Amz-...",
   "expiresIn": 300,
   "storageRef": "drop-images/products/p-991.../a-771....jpg",
-  "bucket": "hitbox-media-prod"
+  "bucket": "hitbox-media-prod",
+  "publicUrl": "https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/drop-images/products/p-991.../a-771....jpg"
 }
 ```
 
 Then `PUT` the bytes to `uploadUrl` with the **same** `Content-Type` you
 declared — the signature is bound to it.
+
+`publicUrl` is the permanent address of the object, and is non-null **only**
+for `DROP_IMAGE` and `PROFILE_IMAGE` (the two anonymously readable prefixes).
+Persist it after a successful PUT and render it directly — no per-render API
+call. It is `null` for every other asset type; those need
+`GET /:assetId/url` each time.
+
+> ⚠ **`sizeBytes` is required** (`file.size` in a browser). It is checked
+> against the cap *and* bound into the signature as `Content-Length`, and with
+> no ingest worker behind the upload those are the only two size checks that
+> exist — so a request without it is a `422`. The body you PUT must be exactly
+> that many bytes or S3 returns `403 SignatureDoesNotMatch`.
 
 | `assetType` | Valid `ownerType` | MIME types | Max size |
 |---|---|---|---|
@@ -537,7 +550,8 @@ Params: `assetType`, `ownerType`, `ownerId`, `virusScanStatus`, `page`, `limit`.
   "items": [
     { "assetId": "a-771f...", "assetType": "DROP_IMAGE", "fileName": "hero.jpg",
       "storageRef": "drop-images/products/p-991.../a-771....jpg",
-      "mimeType": "image/jpeg", "sizeBytes": 482113, "virusScanStatus": "CLEAN",
+      "publicUrl": "https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/drop-images/products/p-991.../a-771....jpg",
+      "mimeType": "image/jpeg", "sizeBytes": 482113, "virusScanStatus": "SKIPPED",
       "productId": "p-991...", "collectionId": null, "organizationId": "org-1...",
       "artistId": null, "uploadedById": "u-220...",
       "archivedAt": null, "createdAt": "2026-09-05T12:00:00.000Z" }
@@ -545,17 +559,42 @@ Params: `assetType`, `ownerType`, `ownerId`, `virusScanStatus`, `page`, `limit`.
 }
 ```
 
-`storageRef` is an S3 **key**, not a URL. Do not build a URL from it.
+`storageRef` is an S3 **key**, not a URL. Do not build a URL from it — use
+`publicUrl`, which is `null` for private prefixes precisely so that a
+hand-built URL can't accidentally publish one.
+
+`virusScanStatus` is `SKIPPED` on everything uploaded under the current
+deployment. `CLEAN` appears on older rows; both are servable. Treat the field
+as historical, not as something to gate on.
 
 #### `GET /admin/media/:assetId/url`
 
+Works for both public and private assets. Public:
+
 ```json
-{ "url": "https://hitbox-media-prod.s3.amazonaws.com/...", "expiresIn": 60 }
+{ "url": "https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/drop-images/...",
+  "expiresIn": null, "public": true }
 ```
 
-60 seconds. Fetch it when you render, do not cache it. **404 covers four
-cases identically** — not found, not `CLEAN`, archived, or out of scope — so
-that asset ids from other organizations cannot be probed.
+Private:
+
+```json
+{ "url": "https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/legal-documents/...?X-Amz-Signature=...",
+  "expiresIn": 60, "public": false }
+```
+
+A client that just renders `url` needs no branching. When `expiresIn` is a
+number, fetch it at render time and do not cache it; when it is `null` the URL
+is permanent and can be stored.
+
+**404 covers four cases identically** — not found, archived, out of scope, or
+`PENDING`/`INFECTED` — so that asset ids from other organizations cannot be
+probed.
+
+For public assets the permission check governs who may *learn* the URL. The
+object itself is anonymously readable by anyone holding it — keys are UUIDs
+and the bucket grants no anonymous listing, but do not treat a
+`drop-images/` object as confidential.
 
 #### `DELETE /admin/media/:assetId`
 
@@ -604,8 +643,11 @@ royalties, never platform margin.
 - [ ] Render the permission tree from `/admin/authz/permissions`; never free-text a permission
 - [ ] Filter the permission tree by the role's `domain` when editing a role
 - [ ] Show `isSystem: true` roles as read-only
-- [ ] Show a "processing" state for media between upload and `CLEAN`
-- [ ] Re-fetch media signed URLs on render (60s expiry)
+- [ ] Always send `sizeBytes: file.size` when requesting an upload URL — it is required
+- [ ] PUT with the exact `Content-Type` you declared, or S3 rejects the signature
+- [ ] Store `publicUrl` for `DROP_IMAGE`/`PROFILE_IMAGE` and render it directly
+- [ ] Re-fetch media URLs on render only when `expiresIn` is non-null (60s)
+- [ ] Do **not** build a "processing" state — assets are servable on upload
 - [ ] Use `actorRoleSnapshot` in the activity feed, not the actor's current roles
 
 ---
@@ -627,11 +669,13 @@ Worth knowing before you build against them:
    projection. Create the account in Clerk, then
    `pnpm db:link-admin -- <clerkUserId>` to attach it.
 2. **Media S3 is unverified.** The registry logic, permission checks, key
-   convention and scan gating are tested; the two presign calls have never run
-   against a live bucket. Expect to smoke-test step 2 of the upload flow first.
-3. **The scan-result callback is not mounted** until an authentication
-   mechanism for the scanner is configured, so assets stay `PENDING` on a fresh
-   deploy. Flip them manually while testing.
+   convention and public/private routing are tested; the presign calls have
+   never run against a live bucket. Expect to smoke-test step 2 of the upload
+   flow first — see [media/s3-configuration.md §11](../media/s3-configuration.md).
+3. **There is no virus scanning.** No SQS, no scan worker, no scan callback.
+   Assets are created `SKIPPED` and are servable immediately. The
+   `virusScanStatus` field and its filter survive for existing rows and for a
+   future scanner; do not gate the UI on them.
 4. **`notifications` and `platformConfig` sections are not implemented.**
    `PLATFORM_CONFIG` is a TECHNICAL-domain resource in this system, and the
    dashboard is BUSINESS-domain — mixing them in one payload would break the

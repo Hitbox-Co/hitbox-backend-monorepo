@@ -1,5 +1,5 @@
-import { Prisma, VirusScanStatus } from '@hitbox/database';
-import type { AssetType, MediaAsset, PrismaClient } from '@hitbox/database';
+import { Prisma } from '@hitbox/database';
+import type { AssetType, MediaAsset, PrismaClient, VirusScanStatus } from '@hitbox/database';
 import { ownerColumn } from '../domain/storage-key';
 import type { OwnerType } from '../domain/storage-key';
 import type { ListMediaQuery, ScanResultDto } from '../dto/media.dto';
@@ -23,6 +23,13 @@ export class MediaRepository {
         ownerColumn: 'productId' | 'collectionId' | 'organizationId' | 'artistId' | null;
         ownerId: string;
         organizationId: string | null;
+        /**
+         * Decided by the service from its `scanPipeline` mode: `PENDING` when
+         * a scanner will make the verdict, `SKIPPED` when none is deployed.
+         * Passed in rather than defaulted here so there is no scan policy
+         * buried in the repository.
+         */
+        virusScanStatus: VirusScanStatus;
     }): Promise<MediaAsset> {
         return this.prisma.mediaAsset.create({
             data: {
@@ -32,9 +39,7 @@ export class MediaRepository {
                 fileName: input.fileName,
                 mimeType: input.mimeType,
                 sizeBytes: input.sizeBytes,
-                // Always PENDING on creation — nothing is servable until the
-                // scanner says otherwise.
-                virusScanStatus: VirusScanStatus.PENDING,
+                virusScanStatus: input.virusScanStatus,
                 uploadedById: input.uploadedById,
                 createdAt: new Date(),
                 ...(input.ownerColumn ? { [input.ownerColumn]: input.ownerId } : {}),

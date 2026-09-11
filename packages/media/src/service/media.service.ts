@@ -11,7 +11,7 @@ import {
     UPLOAD_URL_TTL_SECONDS,
 } from '../constants/media.constant';
 import type { IObjectStorage } from '../domain/interfaces/object-storage.interface';
-import { buildStorageKey, isOwnerAllowed, ownerColumn } from '../domain/storage-key';
+import { buildStorageKey, isOwnerAllowed, isPublicKey, ownerColumn } from '../domain/storage-key';
 import type { OwnerType } from '../domain/storage-key';
 import type { CreateUploadUrlDto, ListMediaQuery, ScanResultDto } from '../dto/media.dto';
 import type { MediaRepository } from '../repository/media.repository';
@@ -26,14 +26,31 @@ import type { MediaRepository } from '../repository/media.repository';
  *
  *   1. client asks for an upload URL
  *   2. server checks permission at the owner's scope, validates MIME and
- *      size, creates the row as PENDING, returns a 5-minute presigned PUT
- *   3. client PUTs the bytes to S3
- *   4. the scan pipeline calls back; status becomes CLEAN or INFECTED
- *   5. only CLEAN assets are ever served
+ *      size, creates the row, returns a 5-minute presigned PUT
+ *   3. client PUTs the bytes straight to S3
+ *   4. the asset is servable
  *
- * Step 5 is absolute: PENDING and INFECTED return 404 regardless of the
- * caller's permission, because "you may read this file" and "this file is
- * safe to hand you" are different questions.
+ * ── Reading it back depends on the prefix ────────────────────────────────
+ *
+ * `drop-images/` and `profile-images/` are anonymously readable at the
+ * bucket, so their URL is permanent and the client uses it directly — no
+ * round trip per render. Everything else (`exclusive-content/`,
+ * `legal-documents/`, `supply-spreadsheets/`, `other/`) is private, and
+ * `signedUrl` mints a 60-second GET after the same scope check that governs
+ * the rest of the module.
+ *
+ * ── On virus scanning ────────────────────────────────────────────────────
+ *
+ * This deployment runs no scanner and no ingest worker. `virusScanStatus`
+ * survives as a column because the dashboard counts it and existing rows
+ * carry it, but with `scanPipeline: 'disabled'` new assets are created
+ * `SKIPPED` — the value the schema already reserves for "trusted internal
+ * upload that bypassed the scanner" — and `SKIPPED` is servable.
+ *
+ * Were this left at the original `PENDING`, nothing would ever become
+ * servable: `PENDING` returns 404 and only a scan callback clears it. Setting
+ * `scanPipeline: 'enabled'` restores the original behaviour exactly, for
+ * whenever a scanner is actually wired up.
  */
 
 /** Resolves whether the caller may act on an asset owned by this scope. */
@@ -47,13 +64,29 @@ export interface MediaScopeCheck {
     organizationIds: string[] | null;
 }
 
+/**
+ * Whether a malware scanner gates serving.
+ *
+ * `disabled` (this deployment): assets are created `SKIPPED` and are servable
+ * immediately. `enabled`: assets are created `PENDING` and stay unservable
+ * until a scan callback flips them to `CLEAN`.
+ */
+export type ScanPipelineMode = 'enabled' | 'disabled';
+
 export interface MediaServiceDeps {
     repository: MediaRepository;
     storage: IObjectStorage;
     logger: Logger;
     /** Bucket name, for the response's absolute-path context only. */
     bucket: string;
+    scanPipeline: ScanPipelineMode;
 }
+
+/** Statuses that may be served. `SKIPPED` means "no scanner ran, by design". */
+const SERVABLE_STATUSES: VirusScanStatus[] = [
+    VirusScanStatus.CLEAN,
+    VirusScanStatus.SKIPPED,
+];
 
 export class MediaService {
     constructor(private readonly deps: MediaServiceDeps) { }
@@ -68,6 +101,8 @@ export class MediaService {
         expiresIn: number;
         storageRef: string;
         bucket: string;
+        /** Permanent object URL — non-null only for a publicly readable prefix. */
+        publicUrl: string | null;
     }> {
         const { dto } = input;
 
@@ -88,7 +123,7 @@ export class MediaService {
         }
 
         const maxBytes = MAX_SIZE_BYTES[dto.assetType];
-        if (dto.sizeBytes !== undefined && dto.sizeBytes > maxBytes) {
+        if (dto.sizeBytes > maxBytes) {
             throw AppError.badRequest(
                 `Max ${Math.round(maxBytes / (1024 * 1024))}MB for ${dto.assetType}.`,
                 MEDIA_ERROR_CODES.FILE_TOO_LARGE,
@@ -116,17 +151,19 @@ export class MediaService {
             storageRef,
             fileName: dto.fileName,
             mimeType: dto.mimeType,
-            sizeBytes: dto.sizeBytes ?? null,
+            sizeBytes: dto.sizeBytes,
             uploadedById: input.uploadedById,
             ownerColumn: ownerColumn(dto.ownerType),
             ownerId: dto.ownerId,
             organizationId,
+            virusScanStatus: this.initialScanStatus(),
         });
 
         const presigned = await this.deps.storage.presignUpload({
             key: storageRef,
             mimeType: dto.mimeType,
             maxBytes,
+            declaredBytes: dto.sizeBytes,
             expiresInSeconds: UPLOAD_URL_TTL_SECONDS,
         });
 
@@ -141,6 +178,9 @@ export class MediaService {
             expiresIn: presigned.expiresIn,
             storageRef,
             bucket: this.deps.bucket,
+            // Handed back at upload time so the caller can persist the image
+            // URL immediately rather than round-tripping for it after the PUT.
+            publicUrl: this.publicUrlFor(storageRef),
         };
     }
 
@@ -159,38 +199,56 @@ export class MediaService {
             total,
             byType,
             byScanStatus,
-            items: items.map(toResponse),
+            items: items.map((item) => toResponse(item, this.publicUrlFor(item.storageRef))),
         };
     }
 
     /**
-     * A short-lived GET URL.
+     * A URL for reading the asset.
      *
-     * Out-of-scope and not-yet-clean both return the **same** 404. A distinct
-     * 403 would confirm the asset exists, which is enough to enumerate other
-     * organizations' uploads by id.
+     * Public prefixes return their permanent object URL with
+     * `expiresIn: null` — signing one would be theatre, since the same bytes
+     * are readable anonymously at that address anyway. Private prefixes get a
+     * 60-second presigned GET.
+     *
+     * The scope check runs either way. It governs who may *learn the address*
+     * of a public object (an unpublished drop's artwork is anonymously
+     * readable only by someone who already has the URL), and who may read a
+     * private one at all.
+     *
+     * Out-of-scope, archived, missing and not-yet-servable all return the
+     * **same** 404. A distinct 403 would confirm the asset exists, which is
+     * enough to enumerate other organizations' uploads by id.
      */
     async signedUrl(
         assetId: string,
         scope: MediaScopeCheck,
-    ): Promise<{ url: string; expiresIn: number }> {
+    ): Promise<{ url: string; expiresIn: number | null; public: boolean }> {
         const asset = await this.deps.repository.findById(assetId);
 
         const unavailable =
             !asset ||
             asset.archivedAt !== null ||
-            asset.virusScanStatus !== VirusScanStatus.CLEAN ||
+            !SERVABLE_STATUSES.includes(asset.virusScanStatus) ||
             !this.inScope(asset, scope);
 
         if (unavailable) {
             throw AppError.notFound('Asset not found.', MEDIA_ERROR_CODES.NOT_FOUND);
         }
 
+        if (isPublicKey(asset.storageRef)) {
+            return {
+                url: this.deps.storage.publicUrl(asset.storageRef),
+                expiresIn: null,
+                public: true,
+            };
+        }
+
         const presigned = await this.deps.storage.presignDownload({
             key: asset.storageRef,
             expiresInSeconds: DOWNLOAD_URL_TTL_SECONDS,
         });
-        return { url: presigned.url, expiresIn: presigned.expiresIn };
+        return { url: presigned.url, expiresIn: presigned.expiresIn, public: false };
     }
 
     /**
@@ -224,6 +282,22 @@ export class MediaService {
         return updated;
     }
 
+    /**
+     * `SKIPPED` when nothing will ever scan this file, `PENDING` when
+     * something will. Creating rows `PENDING` with no scanner attached is the
+     * failure mode this guards against — they would never become servable.
+     */
+    private initialScanStatus(): VirusScanStatus {
+        return this.deps.scanPipeline === 'enabled'
+            ? VirusScanStatus.PENDING
+            : VirusScanStatus.SKIPPED;
+    }
+
+    /** The permanent URL, or null when the key is not anonymously readable. */
+    private publicUrlFor(storageRef: string): string | null {
+        return isPublicKey(storageRef) ? this.deps.storage.publicUrl(storageRef) : null;
+    }
+
     private inScope(asset: MediaAsset, scope: MediaScopeCheck): boolean {
         if (scope.organizationIds === null) return true;
         if (asset.organizationId === null) return false;
@@ -254,12 +328,15 @@ export class MediaService {
     }
 }
 
-function toResponse(asset: MediaAsset) {
+function toResponse(asset: MediaAsset, publicUrl: string | null) {
     return {
         assetId: asset.id,
         assetType: asset.assetType,
         fileName: asset.fileName,
         storageRef: asset.storageRef,
+        // Present for drop-images/profile-images, null for every private
+        // prefix — those need GET /:assetId/url per read.
+        publicUrl,
         mimeType: asset.mimeType,
         sizeBytes: asset.sizeBytes,
         virusScanStatus: asset.virusScanStatus,
