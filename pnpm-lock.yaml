@@ -1154,12 +1154,24 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@jest/globals':
+        specifier: ^29.7.0
+        version: 29.7.0
       '@types/express':
         specifier: ^4.17.25
         version: 4.17.25
+      '@types/jest':
+        specifier: ^29.5.14
+        version: 29.5.14
+      jest:
+        specifier: ^29.7.0
+        version: 29.7.0(@types/node@26.1.1)
       pino:
         specifier: ^9.5.0
         version: 9.14.0
+      ts-jest:
+        specifier: ^29.2.5
+        version: 29.4.11(@babel/core@7.29.7)(@jest/transform@29.7.0)(@jest/types@29.6.3)(babel-jest@29.7.0(@babel/core@7.29.7))(jest-util@29.7.0)(jest@29.7.0(@types/node@26.1.1))(typescript@5.9.3)
       typescript:
         specifier: ^5.6.3
         version: 5.9.3
