@@ -49,6 +49,14 @@ const envSchema = z.object({
     // precomputed-table attack pointless, not gate access — so a missing
     // value gets a startup warning and a dev-only fallback, not a hard exit.
     IP_HASH_SALT: z.string().min(1).optional(),
+
+    // ── Media storage (optional) ────────────────────────────────────────────
+    // Absent on a deploy that does not serve uploads; the media routes are
+    // then not mounted at all rather than mounted and failing at runtime.
+    MEDIA_S3_BUCKET: z.string().optional(),
+    MEDIA_S3_REGION: z.string().optional(),
+    /** Set for MinIO or another S3-compatible endpoint. */
+    MEDIA_S3_ENDPOINT: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;
