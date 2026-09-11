@@ -1,16 +1,24 @@
 # NFC Claim API (demo)
 
-The authenticity flow behind HitBox collectibles. Every physical product ships
-with an NFC tag (`Product.tagId`). A user taps the tag to **claim** first
-ownership. Re-tapping a claimed product just tells you **who owns it**.
+The authenticity flow behind HitBox collectibles. Every physical item ships
+with an NFC tag (`Sku.tagId`). A user taps the tag to **claim** first
+ownership. Re-tapping a claimed item just tells you **who owns it**.
+
+> **A tag identifies a SKU, not a product.** The tag moved from `Product.tagId`
+> to `Sku.tagId` in the catalog restructure, and claim state, ownership and the
+> provenance chain all moved with it. This is the correct shape: a tag is glued
+> to one serialized item, so copies #7 and #8 of the same drop now have their
+> own claim records and their own ledgers instead of sharing one. Every
+> response below therefore carries **both** the `sku` (the thing you hold) and
+> the `product` (the catalog entry behind it).
 
 - **Base URL:** `/api/v1`
   - Local: `http://localhost:8000/api/v1`
   - Public (what the app + Clerk webhooks use): `https://ultra-coveting-payroll.ngrok-free.dev/api/v1` — ngrok tunnels to local `:8000`.
   - **ngrok-free clients must send** `ngrok-skip-browser-warning: true`, or the first request returns the ngrok HTML interstitial instead of JSON.
-- **Owning module:** [`packages/claims`](../packages/claims) (owns `ProductClaim`
-  + `BlockchainLedger`). Tag lookup / ownership history live in
-  [`packages/products`](../packages/products).
+- **Owning module:** [`packages/claims`](../packages/claims) (owns
+  `ProductClaim`, `BlockchainLedger` and `ProductHistory` — all keyed by
+  `skuId`).
 - **Auth:** Clerk bearer token or `__session` cookie → the auth middleware sets
   `req.auth`. The claimer is always `req.auth.accountId`, never the request body.
 
@@ -24,13 +32,13 @@ ownership. Re-tapping a claimed product just tells you **who owns it**.
 
 This single endpoint *is* the tap flow:
 
-- **Unclaimed** → it claims the product for the caller, who becomes the owner.
+- **Unclaimed** → it claims the item for the caller, who becomes the owner.
   `outcome: "CLAIMED"`.
 - **Already claimed** → it does **not** error. It returns the current owner so
   the app can show *"already claimed by &lt;name&gt;"*. `outcome: "ALREADY_CLAIMED"`.
 
 Both cases return **HTTP 200**; branch on `outcome` (and `claimedByYou`), not on
-the status code. Only a tag that matches no product returns `404`.
+the status code. Only a tag that matches no SKU returns `404`.
 
 ### Request
 
@@ -58,8 +66,9 @@ Content-Type: application/json
     "outcome": "CLAIMED",
     "claimedByYou": true,
     "message": "You claimed \"Aurora Genesis Card #001\". You now own it.",
-    "owner": { "id": "clx9user0007", "username": "jameela", "displayName": "jameela" },
-    "product": { "id": "clx9prod0001", "productCode": "482910370000", "name": "Aurora Genesis Card #001", "tagId": "E2ETAG0000001", "claimedStatus": "CLAIMED" },
+    "owner": { "id": "clx9user0007", "handle": "jameela", "displayName": "jameela" },
+    "sku": { "id": "clx9sku0001", "skuCode": "SKU-0001", "serialNumber": 1, "tagId": "E2ETAG0000001", "claimedStatus": "CLAIMED" },
+    "product": { "id": "clx9prod0001", "groupCode": "482910370000", "name": "Aurora Genesis Card #001" },
     "claimedAt": "2026-07-23T12:00:00.000Z",
     "claim": { "id": "clx9claim01", "claimCode": "HBPC482910", "claimedNo": 1 }
   }
@@ -74,8 +83,9 @@ Content-Type: application/json
     "outcome": "ALREADY_CLAIMED",
     "claimedByYou": false,
     "message": "\"Aurora Genesis Card #001\" is already claimed by jameela.",
-    "owner": { "id": "clx9user0007", "username": "jameela", "displayName": "jameela" },
-    "product": { "id": "clx9prod0001", "productCode": "482910370000", "name": "Aurora Genesis Card #001", "tagId": "E2ETAG0000001", "claimedStatus": "CLAIMED" },
+    "owner": { "id": "clx9user0007", "handle": "jameela", "displayName": "jameela" },
+    "sku": { "id": "clx9sku0001", "skuCode": "SKU-0001", "serialNumber": 1, "tagId": "E2ETAG0000001", "claimedStatus": "CLAIMED" },
+    "product": { "id": "clx9prod0001", "groupCode": "482910370000", "name": "Aurora Genesis Card #001" },
     "claimedAt": "2026-07-23T12:00:00.000Z",
     "claim": null
   }
@@ -87,17 +97,22 @@ message reads *"You already own …"*.)
 
 ### What a successful claim writes (one transaction)
 
-1. `Product` → `claimedStatus = CLAIMED`, `claimedAt = now`, `ownerId = caller`
+1. `Sku` → `claimedStatus = CLAIMED`, `ownerId = caller`, `claimTokenUsedAt = now`
    (guarded so two simultaneous taps can't double-claim).
 2. `ProductClaim` with a generated unique `claimCode` (`HBPC` + 6 digits).
-3. Ledger: a **MINT** row (seq 0, origin = HitBox) if this is the product's
-   first ledger activity, then the **CLAIM** row (seq 1).
-4. `ProductHistory` ownership period opened.
-5. `BuyerCollection` entry created (the only way items enter a collection).
-6. `claims.product.claimed` event published.
+   `claimedNo` counts claims on **that SKU** — unique `[skuId, claimedNo]`.
+3. Ledger: a **MINT** row (seq 0, origin = HitBox) if this is the SKU's first
+   ledger activity, then the **CLAIM** row (seq 1).
+4. `ProductHistory` — any open period is closed (`isCurrent = false`,
+   `endedAt = now`), then a new one opens with `acquiredVia = CLAIM` and
+   `isCurrent = true`. Exactly one row per SKU is ever current.
+5. `BuyerCollection` entry created (the only way items enter a shelf), keyed
+   `[userId, skuId]`.
+6. `claims.product.claimed` event published, carrying `skuId` **and**
+   `productId`.
 
 **Errors:** `401 UNAUTHENTICATED` (no session), `404 CLAIMS_TAG_NOT_FOUND` (tag
-matches no product), `422 VALIDATION_ERROR` (bad body).
+matches no SKU), `422 VALIDATION_ERROR` (bad body).
 
 ---
 
@@ -107,22 +122,31 @@ matches no product), `422 VALIDATION_ERROR` (bad body).
 |--------|------|------|---------|
 | `GET` | `/verify/:tagId` | public | Status + current owner without claiming |
 | `GET` | `/ledger/:tagId` | public | Provenance chain (raw ledger rows) |
-| `GET` | `/products/tag/:tagId` | public | Full product details by tag |
-| `GET` | `/products/tag/:tagId/history` | public | Ownership/price periods |
+
+> `GET /products/tag/:tagId` and `/products/tag/:tagId/history` **were removed.**
+> Tags are no longer a product concept, and `ProductHistory` moved into this
+> module keyed by `skuId`. `/verify/:tagId` returns the item and catalog detail
+> those routes used to serve; `/ledger/:tagId` covers provenance.
 
 ### `GET /verify/:tagId`
 
 ```json
 { "data": {
-  "valid": true, "productId": "clx9prod0001", "productCode": "482910370000",
+  "valid": true,
+  "skuId": "clx9sku0001", "skuCode": "SKU-0001", "serialNumber": 1,
+  "productId": "clx9prod0001", "groupCode": "482910370000",
   "name": "Aurora Genesis Card #001", "claimed": true, "claimedStatus": "CLAIMED",
-  "state": "ACTIVE",
-  "owner": { "id": "clx9user0007", "username": "jameela", "displayName": "jameela" },
+  "status": "ACTIVE",
+  "owner": { "id": "clx9user0007", "handle": "jameela", "displayName": "jameela" },
   "ledgerLength": 2, "verifiedAt": "2026-07-23T12:00:00.000Z"
 } }
 ```
 
 `owner` is `null` while unclaimed. `404 CLAIMS_TAG_NOT_FOUND` for an unknown tag.
+
+`productCode` became `groupCode` and `state` became `status`, now carrying
+`DropStatus` (the drop lifecycle) rather than the removed `ProductState`.
+`serialNumber` is the item position in its edition — "#1 of 500".
 
 ### `GET /ledger/:tagId`
 
@@ -140,9 +164,10 @@ Claim History, PeerToPeer Trading.**
 
 ## Blockchain ledger model
 
-One product's ledger is an append-only set of records. A **"First Time" origin
-record** is written when the tagged product is created; a **claim adds a new
-record** with the buyer as owner:
+One **SKU** ledger is an append-only set of records — each serialized item has
+its own chain, unique on `[skuId, sequenceNo]`. A **"First Time" origin
+record** marks the item origin; a **claim adds a new record** with the buyer as
+owner:
 
 | `sequenceNo` | `txType` | Product Id | Tag # | Owner Id | Claim History | PeerToPeer Trading |
 |:---:|:---|:---|:---|:---|:---:|:---:|
@@ -159,15 +184,35 @@ record** with the buyer as owner:
   buyer claims). **PeerToPeer Trading** = whether this owner is P2P-eligible
   (the P2P *feature* is out of scope for the demo).
 
+### Where the per-transaction detail lives
+
+`BlockchainLedger` has no user foreign keys and no amount columns. The owner
+label, `claimId`, buyer id and transaction amount are written to the row
+`payload` JSON column, which is what that column exists for: detail that varies
+by `txType` and must not change the table shape. The API reads it back and
+flattens it into the responses above, so clients never see `payload` directly.
+
+### When the origin row is written
+
+Previously a `products.product.created` subscriber wrote it. That no longer
+works: a product carries no tag, and its SKUs do not exist when it is created,
+so the handler could only ever no-op. It was removed rather than left as
+scaffolding.
+
+The **MINT** row is now written lazily inside the claim transaction, so a chain
+is never missing its origin. The one visible consequence: `GET /ledger/:tagId`
+returns an empty array for a never-claimed item, where it used to return a
+single MINT row. `ClaimsService.ensureOriginForSku(skuId)` is the hook for the
+skus module to call when it binds a tag, once that module grows a service.
+
 ---
 
 ## Error code reference
 
 | Code | HTTP | Raised when |
 |------|:----:|-------------|
-| `CLAIMS_TAG_NOT_FOUND` | 404 | No product is registered to the tag |
+| `CLAIMS_TAG_NOT_FOUND` | 404 | No SKU is registered to the tag |
 | `CLAIMS_CODE_TAKEN`    | 409 | Couldn't allocate a unique claim code (retries exhausted) |
-| `PRODUCTS_NOT_FOUND`   | 404 | Product-by-tag / history lookup missed |
 | `UNAUTHENTICATED`      | 401 | Missing/invalid session on `POST /claim` |
 | `VALIDATION_ERROR`     | 422 | Path param or body failed schema validation |
 

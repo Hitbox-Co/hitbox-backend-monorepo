@@ -5,13 +5,18 @@ import { createModuleLogger } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import { CLAIMS_MODULE } from './constants/claims.constant';
 import { ClaimsController } from './controller/claims.controller';
-import { registerProductEventSubscriptions } from './events/product-event.subscriber';
+import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
 import { ClaimsRepository } from './repository/claims.repository';
 import { ClaimsService } from './service/claims.service';
 
 export interface ClaimsModuleDeps {
     prisma: PrismaClient;
     eventBus: IEventBus;
+    /**
+     * Resolves a `MediaAsset.storageRef` to a renderable URL. Optional: omit
+     * it and the validate screen's `imageUrl` is null rather than failing.
+     */
+    mediaUrls?: IMediaUrlResolver | undefined;
 }
 
 /** The routers this module owns, mounted at distinct API prefixes. */
@@ -34,10 +39,19 @@ export function createClaimsModule(deps: ClaimsModuleDeps): ClaimsModule {
     const logger = createModuleLogger(CLAIMS_MODULE);
 
     const claims = new ClaimsRepository(deps.prisma);
-    const service = new ClaimsService({ claims, eventBus: deps.eventBus, logger });
+    const service = new ClaimsService({
+        claims,
+        eventBus: deps.eventBus,
+        logger,
+        mediaUrls: deps.mediaUrls,
+    });
 
-    // Write the "First Time" origin ledger record whenever a tagged product is created.
-    registerProductEventSubscriptions({ eventBus: deps.eventBus, service, logger });
+    // No product-created subscription any more. It wrote the "First Time"
+    // origin ledger row for a tagged product, but tags moved to Sku: a product
+    // carries none, and its SKUs do not exist when it is created, so the
+    // handler could only ever no-op. The MINT row is written lazily inside the
+    // claim transaction instead, and `service.ensureOriginForSku(skuId)` is
+    // the hook for the skus module to call when it binds a tag.
 
     return {
         service,

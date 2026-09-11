@@ -34,7 +34,7 @@
 ```
 
 **There is no SQS queue, no scan worker and no scan callback in this
-deployment.** See for what that means and what was left in place.
+deployment.** See §8 for what that means and what was left in place.
 
 The backend never proxies file bytes. A 500 MB `EXCLUSIVE_CONTENT` upload
 never touches a Railway dyno — only the ~1 KB presign request does.

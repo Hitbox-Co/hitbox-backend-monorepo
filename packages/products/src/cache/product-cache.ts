@@ -21,7 +21,7 @@ function hashInput(input: unknown): string {
 /**
  * Cache-aside layer for the products repository.
  *
- * - Entity reads (`getEntity`/`setEntity`) are keyed by id or productCode and
+ * - Entity reads (`getEntity`/`setEntity`) are keyed by id or groupCode and
  *   invalidated directly (`invalidateEntity`) after a write to that row.
  * - List/section reads (`getList`/`setList` — catalog, discover, marketplace)
  *   are keyed by a hash of their query params PLUS a shared version counter.
@@ -63,12 +63,12 @@ export class ProductCache {
     }
 
     /** Drops both lookup keys for one product — call after any mutation to it. */
-    async invalidateEntity(id: string, productCode?: string | null): Promise<void> {
+    async invalidateEntity(id: string, groupCode?: string | null): Promise<void> {
         const redis = getRedis();
         if (!redis) return;
         try {
             const keys = [this.entityKey('id', id)];
-            if (productCode) keys.push(this.entityKey('code', productCode));
+            if (groupCode) keys.push(this.entityKey('code', groupCode));
             await redis.del(...keys);
         } catch (error) {
             logger.warn({ err: error }, 'cache invalidation failed');

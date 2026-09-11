@@ -164,18 +164,26 @@ Full own profile.
 {
   "data": {
     "id": "cmd0…",
-    "username": "ayan",
-    "firstName": "Ayan",
-    "lastName": "Saha",
+    "handle": "ayan",
+    "fullName": "Ayan Saha",
     "avatarUrl": "https://img.clerk.com/…",
+    "bio": null,
     "createdAt": "2026-07-16T04:41:00.000Z",
     "email": "ayan@example.com",
+    "phone": null,
     "role": "USER",
-    "state": "ACTIVE",
-    "rewardPoints": 0
+    "profileVisibility": "PUBLIC",
+    "generalLocation": null,
+    "preferredMarketId": null,
+    "isActive": true,
+    "updatedAt": "2026-07-16T04:41:00.000Z"
   }
 }
 ```
+
+> **Renamed with the schema:** `username` → `handle`, `firstName` + `lastName`
+> → a single `fullName`, `state` → `isActive`. `rewardPoints` was removed with
+> no replacement column.
 
 ### `PATCH /api/v1/users/me` 🔒
 
@@ -184,10 +192,13 @@ Update own profile. All fields optional; unknown fields rejected.
 ```jsonc
 // body
 {
-  "username": "ayan_2",        // 3–50 chars, letters/numbers/_/.
-  "firstName": "Ayan",         // ≤100 chars
-  "lastName": "Saha",          // ≤100 chars
-  "avatarUrl": "https://…"     // valid URL
+  "handle": "ayan_2",              // 3–50 chars, letters/numbers/_/.
+  "fullName": "Ayan Saha",         // 1–200 chars
+  "avatarUrl": "https://…",        // valid URL
+  "bio": "…",                      // ≤500 chars
+  "phone": "+91…",                 // 5–32 chars
+  "generalLocation": "Kolkata",    // ≤120 chars — coarse, never an address
+  "profileVisibility": "PUBLIC"    // "PUBLIC" | "PRIVATE"
 }
 ```
 
@@ -195,14 +206,14 @@ Update own profile. All fields optional; unknown fields rejected.
 
 | Status | Code | When |
 |---|---|---|
-| 409 | `USERS_USERNAME_TAKEN` | username already in use |
+| 409 | `USERS_HANDLE_TAKEN` | handle already in use (was `USERS_USERNAME_TAKEN`) |
 
 ### `GET /api/v1/users/:id`
 
-Public profile (no email/role/points; soft-deleted users are 404).
+Public profile (no email/role/contact; soft-deleted users are 404).
 
 ```json
-{ "data": { "id": "…", "username": "…", "firstName": "…", "lastName": "…", "avatarUrl": "…", "createdAt": "…" } }
+{ "data": { "id": "…", "handle": "…", "fullName": "…", "avatarUrl": "…", "bio": null, "createdAt": "…" } }
 ```
 
 | Status | Code |
@@ -213,25 +224,35 @@ Public profile (no email/role/points; soft-deleted users are 404).
 
 ## Discover Module — `/api/v1/discover`
 
-Read-side feed for the mobile **Discover** screen. Public (no auth). Items are deliberately **lightweight cards** — id, title, one image, reward points — not full product details; the client fetches `GET /products/:id` when a card is opened.
+Read-side feed for the mobile **Discover** screen. Public (no auth). Items are deliberately **lightweight cards** — id, title, one image — not full product details; the client fetches `GET /products/:id` when a card is opened.
 
 ```jsonc
 // DiscoverProductItem — the only shape this module returns
 {
   "id": "cmro…",
   "name": "Pierce The Veil — Signature Series",
-  "imageUrl": "https://…",        // first product image, null if none
-  "rewardPoints": 12500
+  "imageUrl": "https://…"         // first product image, null if none
 }
 ```
 
-Sections map to the marketplace status a product carries:
+> **`rewardPoints` was removed.** `Product.rewardPoints` no longer exists in
+> the schema and nothing replaced it, so the card was trimmed rather than
+> padded with a constant `0`.
 
-| `section` value | Backing status | Ordering |
-|---|---|---|
-| `trending` | `TRENDING_NOW` | `unitsSold` desc |
-| `new_releases` | `NEW_RELEASE` | `createdAt` desc |
-| `top_creators` | `TOP_CREATORS` | `unitsSold` desc |
+Sections used to map onto `Product.marketplaceStatus`, a curation column the
+restructure removed. With nothing editorial left in the schema, each section is
+now just an ordering over data that exists:
+
+| `section` value | Ordering |
+|---|---|
+| `trending` | minted SKU count desc |
+| `new_releases` | `createdAt` desc |
+| `top_creators` | minted SKU count desc |
+
+> `trending` and `top_creators` therefore return the **same order** today. That
+> is deliberate rather than clever: separating them again needs a real signal —
+> a curation column, or sales/view counters — not a different arbitrary sort.
+> `unitsSold`, which drove the old ordering, no longer exists.
 
 ### `GET /api/v1/discover`
 
@@ -280,16 +301,25 @@ Read-side feed for the mobile **Marketplace** screen. Browse routes are public. 
   "id": "cmro…",
   "name": "Warped Tour 2026 Commemorative Box",
   "imageUrl": "https://…",          // first product image, null if none
-  "artistName": "Blink-182",        // via the product's collection, null if none
-  "priceInDollars": "89.99",        // decimal serialized as string
-  "rewardPoints": 4500,
-  "badge": "HOT"                    // "HOT" | "NEW" | null (see below)
+  "artistName": "Blink-182",        // via the product's artist/collection, null if none
+  "priceInDollars": "89.99",        // decimal string, or null when no price is set
+  "currency": "USD"                 // market the price is quoted in, null with no price
 }
 ```
 
-Badges derive from the product's curation status: `TRENDING_NOW` → `HOT`, `NEW_RELEASE` → `NEW`, anything else → `null`.
+> **`rewardPoints` and `badge` were removed.** `Product.rewardPoints` and
+> `Product.marketplaceStatus` no longer exist in the schema and nothing
+> replaced them, so the card advertises only fields the database can answer
+> for. `priceInDollars` now comes from `ProductPrice` — the base price
+> (no variant) in the **default market** — and is `null` when none is set,
+> which is why `currency` travels with it.
 
 Category tabs are screen-level values that map to one or more product categories:
+
+`Product.category` is a free-form `String?` since the restructure (the
+`ProductCategory` enum was removed), so these are the string values the tab
+mapping expects. A product whose category is outside every list is reachable
+only from "All Items".
 
 | `category` value | Backing product categories |
 |---|---|
@@ -314,7 +344,8 @@ The whole Marketplace screen in **one round-trip**, sections queried in parallel
 }
 ```
 
-- `featured` — curated products (any marketplace status), most-sold first.
+- `featured` — active drops inside a declared release window, most-minted
+  first. (Was "any marketplace status"; that curation column is gone.)
 - `newListings` — newest active products.
 
 > Bids, countdowns and **live auctions** belong to the P2P trading feature — they need their own models (listings, bids, escrow) and will extend this feed when that lands. Until then the client renders cards without the bid row.
@@ -327,9 +358,15 @@ Paginated listings behind the **category tabs**, **search bar** and **"See All"*
 |---|---|---|
 | `category` | `cards` `figures` `apparel` `posters` `digital` `other` | — ("All Items") |
 | `search` | 1–100 chars, case-insensitive name match | — |
-| `sort` | `newest` `price_asc` `price_desc` `popular` | `newest` |
+| `sort` | `newest` `popular` | `newest` |
 | `page` | int ≥ 1 | `1` |
 | `limit` | int 1–50 | `20` |
+
+> **`price_asc` / `price_desc` were removed.** Price moved to the
+> market-scoped `ProductPrice` table and a query cannot be ordered by a field
+> on a to-many relation. Restoring them needs a denormalized base-price column
+> on `Product` or a raw-SQL join. `popular` was `Product.unitsSold` (gone) and
+> is now minted-SKU count — a proxy for edition size, not sales.
 
 ```json
 {
@@ -346,7 +383,7 @@ The marketplace card intentionally carries no detail data. On tap:
 MarketplaceListingItem.id ──▶ GET /api/v1/products/:id
 ```
 
-which returns the full product (description, all images, `collection.artist`, rarity, claim status) — see the Products module below.
+which returns the full product (description, all images, `artistName`, rarity, price, variants) — see the Products module below.
 
 ---
 
@@ -356,28 +393,40 @@ Backs the mobile **Collections** tab — a user's shelf of owned/claimed collect
 
 Items enter a collection through the **claims flow** (NFC claim → collection entry) — there is deliberately no "add to collection" endpoint.
 
+> **A shelf row points at a SKU, not a product.** `BuyerCollection.productId`
+> became `skuId`, so an item is one serialized copy — #14 of 500 — and a buyer
+> can hold several SKUs of the same drop. The product card is reached one hop
+> further, as `sku.product`.
+
 ```jsonc
-// CollectionItemDto — collection row + embedded product card
+// CollectionItemDto — shelf row + the SKU + the product card
 {
   "id": "cmro…",                    // collection-item id
   "visibility": "PUBLIC",           // "PUBLIC" | "PRIVATE"
-  "totalClaimedNo": 1,
-  "genre": "MUSIC",                 // nullable
-  "addedAt": "2026-07-17T06:33:06.201Z",
+  "acquiredAt": "2026-07-17T06:33:06.201Z",
+  "sku": {
+    "id": "cmro…",
+    "skuCode": "SKU-0014",
+    "serialNumber": 14,             // position in the edition
+    "claimedStatus": "CLAIMED"
+  },
   "product": {
     "id": "cmro…",                  // → GET /products/:id for full details
     "name": "Pierce The Veil — Signature Series Poster",
     "imageUrl": "https://…",        // first product image, null if none
-    "rarity": "LEGENDARY",
-    "rewardPoints": 12500,
-    "claimedStatus": "CLAIMED"
+    "rarity": "LEGENDARY"           // free-form string, nullable
   }
 }
 ```
 
+Changed with the schema: `totalClaimedNo` → `sku.serialNumber` (the real
+edition position, not a counter that could drift), `addedAt` → `acquiredAt`,
+`claimedStatus` moved from the product to the SKU, and `genre` / `rewardPoints`
+are gone with no replacement column.
+
 ### `GET /api/v1/collections/me/stats` 🔒
 
-Aggregated **stats section** for the authenticated user's Collections screen. All numbers are computed by aggregation over the live rows — the stored `BuyerCollection.totalClaimedNo` counter is intentionally **not** used.
+Aggregated **stats section** for the authenticated user's Collections screen. All numbers are computed by aggregation over the live shelf rows.
 
 ```json
 {
@@ -391,7 +440,7 @@ Aggregated **stats section** for the authenticated user's Collections screen. Al
 
 | Field | Meaning |
 |---|---|
-| `totalClaimedItems` | Count of the user's collection items (rows), via aggregation. |
+| `totalClaimedItems` | Count of the user's shelf rows (archived excluded), via aggregation. |
 | `totalArtistCollections` | Distinct `ArtistCollection`s the user has **≥ 1** product from. |
 | `collectionProgress.owned` | The user's items that belong to an `ArtistCollection`. |
 | `collectionProgress.total` | Σ `maximumLimit` of those collections (see below). |
@@ -403,14 +452,15 @@ Aggregated **stats section** for the authenticated user's Collections screen. Al
 
 ### `GET /api/v1/collections/me` 🔒
 
-The authenticated user's own shelf — private items included. Newest first.
+The authenticated user's own shelf — private items included. Most recently acquired first. Archived rows are excluded.
 
 | Param | Type / values | Default |
 |---|---|---|
-| `genre` | `MUSIC` `SPORTS` `FILM` `GAMING` `PUBLICATION` `ART` `ANIME` `OTHER` | — |
 | `visibility` | `PUBLIC` `PRIVATE` | — (both) |
 | `page` | int ≥ 1 | `1` |
 | `limit` | int 1–50 | `20` |
+
+> The `genre` filter was removed — `ProductGenre` no longer exists in the schema.
 
 ```json
 {
@@ -419,9 +469,13 @@ The authenticated user's own shelf — private items included. Newest first.
 }
 ```
 
-### `PATCH /api/v1/collections/me/:productId` 🔒
+### `PATCH /api/v1/collections/me/:skuId` 🔒
 
-Toggle one owned item between showcase and private. `:productId` is the **product's** id (not the collection-item id).
+Toggle one owned item between showcase and private. `:skuId` is the **SKU's** id (not the collection-item id).
+
+> **Was `:productId`.** Forced by the schema, not cosmetic: the shelf is keyed
+> `[userId, skuId]`, and a buyer can hold several SKUs of one product, so a
+> product id no longer identifies a single shelf row.
 
 ```jsonc
 // body
@@ -432,7 +486,7 @@ Toggle one owned item between showcase and private. `:productId` is the **produc
 
 | Status | Code | When |
 |---|---|---|
-| 404 | `COLLECTIONS_ITEM_NOT_FOUND` | the product is not in *your* collection |
+| 404 | `COLLECTIONS_ITEM_NOT_FOUND` | that SKU is not in *your* collection |
 
 ### `GET /api/v1/collections/user/:userId`
 
@@ -455,7 +509,15 @@ Like discover and marketplace cards: `item.product.id ──▶ GET /api/v1/prod
 
 ### `GET /api/v1/products`
 
-Public catalog listing — filtered, sorted, paginated. Only `ACTIVE` products.
+Public catalog listing — filtered, sorted, paginated. Public visibility means
+`status = ACTIVE` **and** `isActive = true` **and** `archivedAt = null`; the
+old single `ProductState` column was split into all three, and a row can carry
+any combination.
+
+`category`, `vertical` and `rarity` are free-form `String?` columns now — the
+`ProductCategory` / `ProductType` / `ProductGenre` / `ProductRarity` enums were
+removed, so these accept any 1–64 char value rather than a fixed set. `genre`
+is gone entirely.
 
 Query parameters (all optional):
 
@@ -463,66 +525,101 @@ Query parameters (all optional):
 |---|---|---|
 | `page` | int ≥ 1 | `1` |
 | `limit` | int 1–100 | `20` |
-| `category` | `TRADING_CARD` `FIGURE` `POSTER` `BOOK` `AUTOGRAPH` `JERSEY` `DIGITAL_ASSET` `ACCESSORY` `GAME_BOX` `CARD_PACK` `OTHER` | — |
-| `genre` | `MUSIC` `SPORTS` `FILM` `GAMING` `PUBLICATION` `ART` `ANIME` `OTHER` | — |
-| `type` | `GROUP` `INDIVIDUAL` | — |
-| `rarity` | `COMMON` `UNCOMMON` `RARE` `EPIC` `LEGENDARY` `EXCLUSIVE` | — |
-| `marketplaceStatus` | `TRENDING_NOW` `NEW_RELEASE` `TOP_CREATORS` | — |
-| `collectionId` | string | — |
+| `category` | free-form string, 1–64 chars | — |
+| `vertical` | free-form string, 1–64 chars (was `type`) | — |
+| `rarity` | free-form string, 1–64 chars | — |
+| `status` | `DRAFT` `SUBMITTED` `IN_REVIEW` `APPROVED` `REJECTED` `PUBLISHED` `ACTIVE` `ENDED` `ARCHIVED` | — (public default) |
+| `collectionId` | uuid | — |
+| `artistId` | uuid | — |
 | `search` | 1–100 chars, case-insensitive name match | — |
-| `sort` | `newest` `price_asc` `price_desc` `popular` | `newest` |
+| `sort` | `newest` `popular` | `newest` |
 
-```json
+Passing an explicit `status` overrides the public default, so admin tooling can
+list `DRAFT` / `IN_REVIEW` drops through the same endpoint. `price_asc` /
+`price_desc` were removed for the reason given under Marketplace above.
+
+```jsonc
 {
-  "data": [ { "id": "…", "productCode": "123456780000", "name": "…", "images": [ … ], "collection": { "artist": { … } }, … } ],
+  "data": [ {
+    "id": "…",
+    "groupCode": "123456780000",     // was productCode
+    "name": "…",
+    "status": "ACTIVE",
+    "totalSupply": 500,
+    "images": [ "https://…" ],        // resolved public URLs, primary first
+    "price": { "amount": "149.99", "currency": "USD", "isFree": false },
+    "artistName": "…",
+    "variants": [ { "id": "…", "label": "…", "optionName": "size", "optionValue": "L" } ]
+  } ],
   "meta": { "page": 1, "limit": 20, "total": 57, "totalPages": 3 }
 }
 ```
 
-### `GET /api/v1/products/:id`
-### `GET /api/v1/products/code/:productCode`
+`images` are fully-resolved public URLs. Product artwork lives under the
+publicly readable `drop-images/` prefix, so these are permanent and render
+directly — see [media/s3-configuration.md §7](media/s3-configuration.md).
+`price` is the base price (no variant) in the **default market**, or `null`.
 
-Single product (includes `images` and `collection.artist`). → 404 `PRODUCTS_NOT_FOUND`.
+### `GET /api/v1/products/:id`
+### `GET /api/v1/products/code/:groupCode`
+
+Single product. → 404 `PRODUCTS_NOT_FOUND`.
+
+> `GET /products/tag/:tagId` and `/products/tag/:tagId/history` **were
+> removed**: NFC tags moved to `Sku.tagId` and the `ProductHistory` model moved
+> into the claims module keyed by `skuId`. Use `GET /api/v1/verify/:tagId` and
+> `GET /api/v1/ledger/:tagId` — see
+> [nfc-claim-verify-api.md](nfc-claim-verify-api.md).
 
 ### `POST /api/v1/products` 🔒
 
-Create a product. The 12-digit `productCode` is **generated server-side**: 8 random digits + the 4-digit `groupCode`.
+Create a product. The 12-digit `groupCode` is **generated server-side**: 8 random digits + the 4-digit group suffix you supply.
 
 ```jsonc
 // body
 {
   "name": "Signed Tour Poster",           // required, 1–255
-  "type": "INDIVIDUAL",                   // required
-  "category": "POSTER",                   // required
-  "genre": "MUSIC",                       // required
   "description": "…",
-  "rewardPoints": 100,                    // int ≥ 0, default 0
-  "rarity": "RARE",                       // default COMMON
-  "priceInDollars": 149.99,               // ≥ 0, default 0
-  "inventoryUnit": 25,                    // int ≥ 0, default 0
-  "marketplaceStatus": "NEW_RELEASE",
-  "collectionId": "cmd0…",                // links to an ArtistCollection
-  "tagId": "nfc-abc-123",                 // NFC tag, unique, ≤64
-  "releaseDate": "2026-08-01",
-  "groupCode": "0042",                    // exactly 4 digits, default "0000"
-  "images": [ { "url": "https://…", "title": "front", "description": "…" } ]   // ≤10
+  "vertical": "MUSIC",                    // free-form, ≤64 (was `type`)
+  "category": "POSTER",                   // free-form, ≤64
+  "rarity": "RARE",                       // free-form, ≤64
+  "totalSupply": 500,                     // int ≥ 0, default 0 (was inventoryUnit)
+  "purchaseLimit": 2,                     // int > 0, omit for unlimited
+  "collectionId": "cmd0…",                // uuid — links to an ArtistCollection
+  "artistId": "cmd0…",                    // uuid
+  "organizationId": "cmd0…",              // uuid
+  "releaseStart": "2026-08-01",           // was releaseDate
+  "releaseEnd": "2026-09-01",
+  "status": "DRAFT",                      // default DRAFT
+  "isAgeSpecific": false,                 // default false
+  "minimumAge": 18,
+  "oddsDisclosureRef": "…",               // required for randomised drops
+  "groupCode": "0042"                     // exactly 4 digits, default "0000"
 }
 ```
 
 → `201` with the created product.
 
+**Removed from the body:** `genre`, `rewardPoints`, `priceInDollars`,
+`marketplaceStatus`, `tagId` and `images` — none has a backing column any more.
+Prices are rows in `ProductPrice` (per market/variant), images are created
+through the media upload flow and joined via `ProductImage`, and tags belong to
+`Sku`. `complianceStatus` is set to `PENDING` on create and is written by the
+releases reviewer, not by a catalog edit.
+
 | Status | Code | When |
 |---|---|---|
-| 409 | `PRODUCTS_TAG_TAKEN` | `tagId` already assigned |
 | 409 | `PRODUCTS_CODE_TAKEN` | could not allocate a unique code (after retries) |
+
+`PRODUCTS_TAG_TAKEN` can no longer be raised here — products carry no tag.
 
 ### `PATCH /api/v1/products/:id` 🔒
 
-Partial update — same fields as create **except** `groupCode` and `images`; unknown fields rejected. Set `collectionId: null` to detach from a collection. → `200` with the updated product.
+Partial update — same fields as create **except** `groupCode`; unknown fields rejected. Set `collectionId`, `artistId` or `organizationId` to `null` to detach. → `200` with the updated product.
 
 ### `DELETE /api/v1/products/:id` 🔒
 
-**Soft archive** (sets `state = INACTIVE`) — products are never hard-deleted, provenance depends on them. → `204` (no body).
+**Soft archive** — products are never hard-deleted, provenance depends on them. Sets `archivedAt`, `isActive = false` **and** `status = ARCHIVED`: the old single `state` column expressed this in one value, and leaving any of the three unset would keep the row visible to a query checking a different one. → `204` (no body).
 
 > 🔒 Write routes currently require any authenticated user; role-based permissions (ADMIN) plug into these routes when roles expand beyond `USER`.
 

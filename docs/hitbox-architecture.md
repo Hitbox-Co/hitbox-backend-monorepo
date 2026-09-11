@@ -71,7 +71,7 @@ hitbox-backend/
 ├── packages/
 │   ├── auth/                     # Clerk auth, webhooks, requireAuth middleware
 │   ├── users/                    # User profiles (local projection of Clerk users)
-│   ├── products/                 # Catalog: Product, ProductImage, ProductHistory
+│   ├── products/                 # Catalog: Product, ProductVariant, ProductImage, ProductPrice
 │   ├── artist/                   # Owns Artist + ArtistCollection
 │   │   └── src/{profile,collection}/   # profile = reserved; collection = capacity port
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
@@ -278,16 +278,29 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 |---|---|---|
 | `IAccountLookup` (auth) | `UserAccountLookup` (users) | resolve Clerk user → local account on every authenticated request |
 | `IProductDiscovery` (discover) | `ProductDiscoveryAdapter` (products) | lightweight product cards for the Discover feed |
-| `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist, badge) for the Marketplace feed |
+| `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist) for the Marketplace feed |
 | `IArtistCollectionStats` (collections) | `ArtistCollectionStatsAdapter` (artist) | `ArtistCollection` capacity (`Σ maximumLimit`) for the collection-progress stat |
+| `IMediaUrlResolver` (products, collections, claims) | closure over `S3ObjectStorage` (bootstrap) | a renderable URL for a `MediaAsset.storageRef` |
+
+`IMediaUrlResolver` is declared **three times**, once per consumer, rather than
+shared. That is the same call discover and marketplace already make: each
+consumer owns its port, so none of the three grows a dependency on another
+feature package for a one-method interface. Bootstrap injects the same adapter
+into all three — a closure that returns a public URL for a key under a publicly
+readable prefix and `null` otherwise. It exists because `ProductImage` stores an
+object-storage **key**, not a URL, and only the media module knows the bucket,
+region and which prefixes are public (see
+[media/s3-configuration.md](media/s3-configuration.md)).
 
 Note what this buys discover and marketplace: those modules have **zero database knowledge** — no `@hitbox/database` dependency at all. Each defines its own screen-level vocabulary (`DiscoverSection`: `trending` / `new_releases` / `top_creators`; `MarketplaceCategory`: `cards` / `figures` / `apparel` / …) and the products adapters map that to storage concerns (`MarketplaceStatus`, `ProductCategory` sets, ordering). Extracting either into a service later means swapping one adapter for an HTTP client.
 
-**Collections is the third flavor of module:** it *owns a table* (`BuyerCollection`) like products/users, *and* consumes a port. Its rows embed a product card, read by traversing the `product` relation **declared in its own partial** (`collections.prisma`) — a documented, deliberate shortcut at the database layer. On extraction, that include becomes a products-port call.
+**Collections is the third flavor of module:** it *owns a table* (`BuyerCollection`) like products/users, *and* consumes ports. Its rows embed a product card, read by traversing the `sku` relation **declared in its own partial** (`collections.prisma`) and then `sku.product` — a documented, deliberate shortcut at the database layer. On extraction, both hops become port calls.
+
+A shelf row points at a **SKU**, not a product (`@@unique([userId, skuId])`): a buyer owns serialized item #14 of an edition, and may hold several SKUs of the same drop.
 
 For the **collection-progress stat** the work is split cleanly across the boundary:
 
-- **collections** (owns `BuyerCollection`) aggregates the user's own rows: how many items total, which distinct `ArtistCollection`s they have products from, and how many of their items belong to a collection. This is pure own-table work.
+- **collections** (owns `BuyerCollection`) aggregates the user's own rows: how many items total, which distinct `ArtistCollection`s they have products from, and how many of their items belong to a collection. It reaches `product.collectionId` through `sku.product`.
 - **artist** (owns `ArtistCollection`) answers one question through the `IArtistCollectionStats` port: given those collection ids, what is each one's `maximumLimit`? Collections sums them for the denominator.
 
 Neither module reaches into the other's table. `progress = ownedInCollections / Σ maximumLimit`, computed in the collections service from the two halves. This is why `artist` exists as its own package rather than a folder under products: the artist domain (profile + collections) is a distinct future service, and the progress feature already treats it as one across a port.
@@ -309,7 +322,7 @@ Current event catalog:
 | `auth.user.registered` | auth (webhook) | users (upsert) | `UserRegisteredPayload` |
 | `auth.user.updated` | auth (webhook) | users (upsert) | `UserUpdatedPayload` |
 | `auth.user.deleted` | auth (webhook) | users (soft delete) | `UserDeletedPayload` |
-| `products.product.created` | products | — (future: notifications, search index) | `{ productId, productCode }` |
+| `products.product.created` | products | — (future: notifications, search index) | `{ productId, groupCode }` |
 | `products.product.updated` | products | — | `{ productId }` |
 | `products.product.archived` | products | — | `{ productId }` |
 
@@ -326,10 +339,12 @@ packages/shared/database/prisma/base.prisma    ← generator + datasource (poole
 packages/shared/database/prisma/enums.prisma   ← shared enums (used across modules)
 packages/auth/prisma/auth.prisma               ← AuthWebhookEvent
 packages/users/prisma/users.prisma             ← User
-packages/products/prisma/products.prisma       ← Product, ProductHistory, ProductImage
+packages/products/prisma/products.prisma       ← Product, ProductVariant, ProductImage, ProductPrice
 packages/artist/prisma/artist.prisma           ← Artist, ArtistCollection (has maximumLimit)
-packages/claims/prisma/claims.prisma           ← ProductClaim, BlockchainLedger
+packages/skus/prisma/skus.prisma               ← Sku (owns the NFC tag + claim state)
+packages/claims/prisma/claims.prisma           ← ProductClaim, BlockchainLedger, ProductHistory
 packages/collections/prisma/collections.prisma ← BuyerCollection
+packages/media/prisma/media.prisma             ← MediaAsset (the upload registry)
 ```
 
 ### The merge pipeline
@@ -402,6 +417,36 @@ Using `orders` as the example:
 6. Wire it in `apps/backend/src/bootstrap.ts` and mount its router in `routes.ts`.
 7. Needs data from another module? Subscribe to its **events** or define a **port** and have bootstrap inject the adapter. Never import another module's service/repository classes directly.
 8. `pnpm install` (add `@hitbox/orders: workspace:*` to the backend's dependencies).
+
+---
+
+## 10a. The SKU-centric restructure
+
+The catalog and provenance schema was reshaped after the first draft of this
+document. The short version, because it changes how three modules read:
+
+| Concept | Before | Now |
+|---|---|---|
+| Product identity | `Product.productCode` | `Product.groupCode` |
+| Catalog facets | `ProductType` / `ProductCategory` / `ProductGenre` / `ProductRarity` enums | `vertical` / `category` / `rarity` free-form `String?`; genre removed |
+| Lifecycle | `Product.state` (`ProductState`) | `Product.status` (`DropStatus`) + `isActive` + `archivedAt` |
+| Price | `Product.priceInDollars` | `ProductPrice` rows, per (product, variant, market) |
+| Images | `ProductImage.url` | `ProductImage.assetId` → `MediaAsset.storageRef` |
+| NFC tag, claim state, owner | `Product.tagId` / `claimedStatus` / `ownerId` | `Sku.tagId` / `claimedStatus` / `ownerId` |
+| Provenance | `ProductHistory.productId`, one ledger per product | `ProductHistory.skuId`, one ledger chain per **SKU** |
+| Buyer shelf | `BuyerCollection.productId` | `BuyerCollection.skuId` |
+| Ledger participants | `fromUser` / `toUser` FKs, `originProductId` | `skuId` + a `payload` JSON column |
+
+**The through-line is serialization.** A physical tag is glued to one item, so
+claim state, ownership and the hash chain all moved from the catalog entry to
+the `Sku`. Two buyers holding copies #7 and #8 of the same drop previously
+shared one claim record and one ledger; now each has its own.
+
+Three fields had no replacement and were **removed from the API** rather than
+stubbed: `rewardPoints`, the marketplace `badge` (`Product.marketplaceStatus`),
+and price sorting (not expressible against a market-scoped price table without
+a denormalized column or raw SQL). `popular` now orders by minted SKU count, a
+proxy for edition size rather than sales.
 
 ---
 

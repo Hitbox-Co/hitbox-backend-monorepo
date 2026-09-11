@@ -148,7 +148,7 @@ export function bootstrap(): Bootstrapped {
 
     // NFC authenticity domain: single-tap claim, verify a tag, and read the
     // provenance ledger. Owns ProductClaim + BlockchainLedger.
-    const claimsModule = createClaimsModule({ prisma, eventBus });
+    const claimsModule = createClaimsModule({ prisma, eventBus, mediaUrls });
     const claimsRouters = claimsModule.createRouters(authModule.requireAuth);
 
     const apiRouter = buildRoutes({
