@@ -167,6 +167,14 @@ export function createAccessControlModule(
                 controller.deleteRole,
             );
 
+            // The Team screen. Declared before /users/:userId/roles only for
+            // readability — the paths do not collide.
+            router.get(
+                '/team',
+                requirePermission('employee-role-mgmt:read'),
+                controller.listTeam,
+            );
+
             router.get(
                 '/users/:userId/roles',
                 requirePermission('employee-role-mgmt:read'),

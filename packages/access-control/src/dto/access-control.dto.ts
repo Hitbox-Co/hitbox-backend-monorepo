@@ -63,6 +63,19 @@ export const listRolesQuerySchema = z.object({
 });
 export type ListRolesQuery = z.infer<typeof listRolesQuerySchema>;
 
+/**
+ * The Team screen: everyone holding at least one live role.
+ *
+ * `search` matches full name, email or handle, case-insensitively — the three
+ * things an administrator actually types when looking for a colleague.
+ */
+export const listTeamQuerySchema = z.object({
+    search: z.string().trim().min(1).max(100).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type ListTeamQuery = z.infer<typeof listTeamQuerySchema>;
+
 export const listPermissionsQuerySchema = z.object({
     domain: z.nativeEnum(AuthorizationDomain).optional(),
     /** `grouped` returns the §12 resource-grouped shape for the admin UI. */

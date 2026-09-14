@@ -14,6 +14,24 @@ export type AssignmentWithRole = Prisma.RoleAssignmentGetPayload<{
     include: typeof assignmentInclude;
 }>;
 
+/** One person on the Team screen: the user plus their live role assignments. */
+export interface TeamMemberRow {
+    id: string;
+    fullName: string | null;
+    handle: string | null;
+    email: string;
+    avatarUrl: string | null;
+    isActive: boolean;
+    createdAt: Date;
+    roleAssignment_user: {
+        id: string;
+        scopeType: RoleScopeType;
+        scopeId: string | null;
+        grantedAt: Date;
+        role: { id: string; name: string; displayName: string | null; domain: string };
+    }[];
+}
+
 /**
  * Owns `role_assignments` and implements the grants lookup the engine reads
  * through. This is the only place that flattens
@@ -79,6 +97,83 @@ export class RoleAssignmentRepository implements IPrincipalGrantsLookup {
             where: { id },
             include: assignmentInclude,
         });
+    }
+
+    /**
+     * People who hold at least one live role, for the Team screen.
+     *
+     * Driven from `User` rather than from `RoleAssignment` so one row comes
+     * back per person with their roles nested — querying assignments instead
+     * would return one row per (person × role) and force the client to
+     * regroup, which is exactly the kind of shape that produces a duplicated
+     * person in a list.
+     *
+     * `organizationIds` narrows to assignments scoped to those organizations,
+     * so a Brand Admin sees their own people rather than the whole platform.
+     * Null means unrestricted.
+     */
+    async findTeam(input: {
+        search?: string | undefined;
+        organizationIds: string[] | null;
+        skip: number;
+        take: number;
+    }): Promise<{ total: number; items: TeamMemberRow[] }> {
+        const liveAssignment: Prisma.RoleAssignmentWhereInput = {
+            revokedAt: null,
+            role: { isActive: true },
+            ...(input.organizationIds === null
+                ? {}
+                : { scopeId: { in: input.organizationIds } }),
+        };
+
+        const where: Prisma.UserWhereInput = {
+            // "Team" means anyone carrying a live role — the admin population
+            // is defined by grants, not by a flag on the user row.
+            roleAssignment_user: { some: liveAssignment },
+            ...(input.search
+                ? {
+                    OR: [
+                        { fullName: { contains: input.search, mode: Prisma.QueryMode.insensitive } },
+                        { email: { contains: input.search, mode: Prisma.QueryMode.insensitive } },
+                        { handle: { contains: input.search, mode: Prisma.QueryMode.insensitive } },
+                    ],
+                }
+                : {}),
+        };
+
+        const [total, items] = await Promise.all([
+            this.prisma.user.count({ where }),
+            this.prisma.user.findMany({
+                where,
+                select: {
+                    id: true,
+                    fullName: true,
+                    handle: true,
+                    email: true,
+                    avatarUrl: true,
+                    isActive: true,
+                    createdAt: true,
+                    roleAssignment_user: {
+                        where: liveAssignment,
+                        select: {
+                            id: true,
+                            scopeType: true,
+                            scopeId: true,
+                            grantedAt: true,
+                            role: {
+                                select: { id: true, name: true, displayName: true, domain: true },
+                            },
+                        },
+                        orderBy: { grantedAt: 'asc' },
+                    },
+                },
+                orderBy: { createdAt: 'desc' },
+                skip: input.skip,
+                take: input.take,
+            }),
+        ]);
+
+        return { total, items };
     }
 
     findLive(input: {

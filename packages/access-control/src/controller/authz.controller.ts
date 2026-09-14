@@ -5,6 +5,7 @@ import {
     createRoleSchema,
     listPermissionsQuerySchema,
     listRolesQuerySchema,
+    listTeamQuerySchema,
     revokeRoleQuerySchema,
     updateRoleSchema,
 } from '../dto/access-control.dto';
@@ -73,6 +74,30 @@ export class AuthzController {
         res.json({
             data: await this.assignments.listForUser(req.params.userId as string, includeRevoked),
         });
+    });
+
+    /**
+     * GET /admin/authz/team — everyone holding at least one live role.
+     *
+     * The caller's organization reach is derived from their own grants, never
+     * from the request: a globally-scoped administrator sees the whole team,
+     * an org-scoped one (Brand Admin) sees only people assigned within their
+     * organizations.
+     */
+    listTeam: RequestHandler = asyncHandler(async (req, res) => {
+        const query = listTeamQuerySchema.parse(req.query);
+        const principal = await this.guard.describePrincipal(req);
+        const global = principal.permissions.includes('employee-role-mgmt:manage:global');
+        const organizationIds = global
+            ? null
+            : [
+                ...new Set(
+                    principal.roles
+                        .map((role) => role.organizationId)
+                        .filter((id): id is string => id !== null),
+                ),
+            ];
+        res.json(await this.assignments.listTeam({ query, organizationIds }));
     });
 
     /** POST /admin/authz/users/:userId/roles */

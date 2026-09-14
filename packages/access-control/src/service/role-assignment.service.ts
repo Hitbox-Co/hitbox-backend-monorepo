@@ -8,7 +8,7 @@ import {
     ACCESS_CONTROL_EVENTS,
 } from '../constants/access-control.constant';
 import type { IGrantsInvalidator } from '../domain/interfaces/grants-invalidator.interface';
-import type { AssignRoleDto } from '../dto/access-control.dto';
+import type { AssignRoleDto, ListTeamQuery } from '../dto/access-control.dto';
 import type { RoleRepository } from '../repository/role.repository';
 import type {
     AssignmentWithRole,
@@ -27,6 +27,27 @@ export interface AssignmentResponse {
     grantedById: string;
     grantedAt: Date;
     revokedAt: Date | null;
+}
+
+/** One person on the Team screen. */
+export interface TeamMemberResponse {
+    userId: string;
+    fullName: string | null;
+    handle: string | null;
+    email: string;
+    avatarUrl: string | null;
+    isActive: boolean;
+    joinedAt: string;
+    roles: {
+        assignmentId: string;
+        roleId: string;
+        name: string;
+        displayName: string | null;
+        domain: string;
+        scopeType: RoleScopeType;
+        organizationId: string | null;
+        grantedAt: string;
+    }[];
 }
 
 export interface RoleAssignmentServiceDeps {
@@ -50,6 +71,56 @@ export class RoleAssignmentService {
     async listForUser(userId: string, includeRevoked = false): Promise<AssignmentResponse[]> {
         const rows = await this.deps.assignments.findByUserId(userId, includeRevoked);
         return rows.map(toResponse);
+    }
+
+    /**
+     * The Team screen: one row per person, with the roles they hold now.
+     *
+     * `organizationIds` is the caller's own reach, resolved from their grants
+     * by the controller — never from the request — so an org-scoped
+     * administrator lists their own people and nothing else.
+     */
+    async listTeam(input: {
+        query: ListTeamQuery;
+        organizationIds: string[] | null;
+    }): Promise<{
+        page: number;
+        limit: number;
+        total: number;
+        items: TeamMemberResponse[];
+    }> {
+        const { page, limit, search } = input.query;
+        const { total, items } = await this.deps.assignments.findTeam({
+            ...(search !== undefined ? { search } : {}),
+            organizationIds: input.organizationIds,
+            skip: (page - 1) * limit,
+            take: limit,
+        });
+
+        return {
+            page,
+            limit,
+            total,
+            items: items.map((user) => ({
+                userId: user.id,
+                fullName: user.fullName,
+                handle: user.handle,
+                email: user.email,
+                avatarUrl: user.avatarUrl,
+                isActive: user.isActive,
+                joinedAt: user.createdAt.toISOString(),
+                roles: user.roleAssignment_user.map((assignment) => ({
+                    assignmentId: assignment.id,
+                    roleId: assignment.role.id,
+                    name: assignment.role.name,
+                    displayName: assignment.role.displayName,
+                    domain: assignment.role.domain,
+                    scopeType: assignment.scopeType,
+                    organizationId: assignment.scopeId,
+                    grantedAt: assignment.grantedAt.toISOString(),
+                })),
+            })),
+        };
     }
 
     async assign(input: {

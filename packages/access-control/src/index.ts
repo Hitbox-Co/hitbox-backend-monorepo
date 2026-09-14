@@ -111,7 +111,7 @@ export type {
 
 // Service response contracts
 export type { RoleResponse } from './service/role.service';
-export type { AssignmentResponse } from './service/role-assignment.service';
+export type { AssignmentResponse, TeamMemberResponse } from './service/role-assignment.service';
 
 // DTOs
 export {
@@ -119,6 +119,7 @@ export {
     createRoleSchema,
     listPermissionsQuerySchema,
     listRolesQuerySchema,
+    listTeamQuerySchema,
     revokeRoleQuerySchema,
     updateRoleSchema,
 } from './dto/access-control.dto';
@@ -127,6 +128,7 @@ export type {
     CreateRoleDto,
     ListPermissionsQuery,
     ListRolesQuery,
+    ListTeamQuery,
     UpdateRoleDto,
 } from './dto/access-control.dto';
 

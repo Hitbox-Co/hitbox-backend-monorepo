@@ -6,6 +6,12 @@
 > Written to be handed to a frontend engineer directly. Response examples are
 > the **real** shapes this backend emits, not illustrations.
 >
+> **Building against the admin console designs?** Start with
+> [admin-console-api.md](admin-console-api.md) — the same endpoints organised
+> one section per screen, with the design-to-field mapping and the known gaps.
+> Session handling and the Clerk flow are in
+> [authentication.md](authentication.md).
+>
 > Related: [authorization architecture](../authorization/authorization-architecture.md)
 > (how permissions work), [database architecture](../database-architecture.md).
 
@@ -397,6 +403,7 @@ One generic set of endpoints. There is no per-role admin screen — you build
 | `POST` | `/api/v1/admin/authz/roles` | `employee-role-mgmt:manage` |
 | `PATCH` | `/api/v1/admin/authz/roles/:roleId` | `employee-role-mgmt:manage` |
 | `DELETE` | `/api/v1/admin/authz/roles/:roleId` | `employee-role-mgmt:manage` |
+| `GET` | `/api/v1/admin/authz/team` | `employee-role-mgmt:read` |
 | `GET` | `/api/v1/admin/authz/users/:userId/roles` | `employee-role-mgmt:read` |
 | `POST` | `/api/v1/admin/authz/users/:userId/roles` | `employee-role-mgmt:assign` |
 | `DELETE` | `/api/v1/admin/authz/users/:userId/roles/:roleId` | `employee-role-mgmt:delete` |
@@ -447,6 +454,43 @@ Roles returned with `"isSystem": true` are the 12 seeded platform roles: their
 permissions cannot be edited and they cannot be deleted (403
 `AUTHZ_ROLE_IMMUTABLE`). Deactivating one via `PATCH { "isActive": false }` is
 allowed. Render them read-only.
+
+### `GET /admin/authz/team`
+
+Everyone holding at least one live role — the Team screen. One row per person,
+with their roles nested; a person holding two roles appears **once**, not twice.
+
+| Param | Type | Notes |
+|---|---|---|
+| `search` | 1–100 chars | Matches full name, email or handle, case-insensitively |
+| `page` | int ≥ 1 | Default `1` |
+| `limit` | int 1–100 | Default `20` |
+
+```json
+{
+  "page": 1, "limit": 20, "total": 142,
+  "items": [
+    { "userId": "3f2a9b18-1c4d…", "fullName": "Ana Duarte", "handle": "ana",
+      "email": "ana.duarte@hitbox.demo", "avatarUrl": null,
+      "isActive": true, "joinedAt": "2026-02-15T00:00:00.000Z",
+      "roles": [
+        { "assignmentId": "ra-1…", "roleId": "r-1…", "name": "HITBOX_SYSTEM_ADMIN",
+          "displayName": "System Admin", "domain": "BUSINESS",
+          "scopeType": "GLOBAL", "organizationId": null,
+          "grantedAt": "2026-02-15T00:00:00.000Z" }
+      ] }
+  ]
+}
+```
+
+"Team" means anyone carrying a live role — the admin population is defined by
+grants, not by a flag on the user row. Revoked assignments and deactivated
+roles are excluded.
+
+The caller's organization reach is derived from **their own grants**, never
+from the request: a globally-scoped administrator lists the whole team, while
+an org-scoped one (Brand Admin) sees only people assigned within their
+organizations. There is no `organizationId` parameter, deliberately.
 
 ### `POST /admin/authz/users/:userId/roles`
 
