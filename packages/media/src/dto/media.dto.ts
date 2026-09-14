@@ -27,6 +27,12 @@ export const listMediaQuerySchema = z.object({
     ownerType: z.nativeEnum(OwnerType).optional(),
     ownerId: z.string().uuid().optional(),
     virusScanStatus: z.nativeEnum(VirusScanStatus).optional(),
+    /**
+     * Which archive state to list. Defaults to `live` — the media browser
+     * shows what is in use, and an archived asset reappearing in it reads as
+     * "the delete did not work".
+     */
+    archived: z.enum(['live', 'archived', 'all']).default('live'),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(MEDIA_MAX_LIMIT).default(MEDIA_DEFAULT_LIMIT),
 });

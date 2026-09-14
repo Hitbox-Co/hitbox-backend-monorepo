@@ -13,6 +13,9 @@ import { createMarketplaceModule } from '@hitbox/marketplace';
 import { createCollectionsModule } from '@hitbox/collections';
 import { createArtistModule } from '@hitbox/artist';
 import { createClaimsModule } from '@hitbox/claims';
+import { createMarketsModule } from '@hitbox/markets';
+import { createOrdersModule } from '@hitbox/orders';
+import { createReleasesModule } from '@hitbox/releases';
 import { createLeadsModule } from '@hitbox/leads';
 import { buildRoutes } from './routes';
 
@@ -126,7 +129,60 @@ export function bootstrap(): Bootstrapped {
         })
         : null;
 
-    const productsModule = createProductsModule({ prisma, eventBus, mediaUrls });
+    const productsModule = createProductsModule({
+        prisma,
+        eventBus,
+        mediaUrls,
+        guard: accessControlModule.guard,
+    });
+
+    /**
+     * What an admin caller may see, derived from their own grants.
+     *
+     * Shared by orders and releases because both answer the same three
+     * questions: which organizations do you reach, may you see money, may you
+     * see buyers. Resolved here — never from the request — so a client cannot
+     * widen its own view by sending an organizationId.
+     */
+    const adminView = async (req: Request) => {
+        const principal = await accessControlModule.guard.describePrincipal(req);
+        const has = (prefix: string) =>
+            principal.permissions.some((key) => key.startsWith(prefix));
+        const global = principal.permissions.some((key) => key.endsWith(':global'));
+        const orgIds = [
+            ...new Set(
+                principal.roles
+                    .map((role) => role.organizationId)
+                    .filter((id): id is string => id !== null),
+            ),
+        ];
+        return {
+            userId: principal.userId,
+            organizationIds: global ? null : orgIds,
+            canSeeMoney: has('payment-royalty:'),
+            canSeeBuyer: has('buyer-profile:'),
+            canOverride: principal.permissions.includes('release-approval:override:global'),
+        };
+    };
+
+    const marketsModule = createMarketsModule({
+        prisma,
+        guard: accessControlModule.guard,
+    });
+
+    const ordersModule = createOrdersModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        resolveCaller: adminView,
+    });
+
+    const releasesModule = createReleasesModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        resolveCaller: adminView,
+    });
 
     const discoverModule = createDiscoverModule({
         catalog: productsModule.discovery,
@@ -167,6 +223,10 @@ export function bootstrap(): Bootstrapped {
         adminMedia: mediaModule
             ? mediaModule.createRouter(authModule.requireAuth)
             : mediaUnavailableRouter(),
+        adminMarkets: marketsModule.createRouter(authModule.requireAuth),
+        adminOrders: ordersModule.createRouter(authModule.requireAuth),
+        adminReleases: releasesModule.createRouter(authModule.requireAuth),
+        adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
     });
 
     // Public website (hitboxcollectibles.com) — its own database, no

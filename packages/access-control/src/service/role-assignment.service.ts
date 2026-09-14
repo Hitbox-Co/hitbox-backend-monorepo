@@ -44,6 +44,8 @@ export interface TeamMemberResponse {
         name: string;
         displayName: string | null;
         domain: string;
+        entityGroup: string;
+        isSystem: boolean;
         scopeType: RoleScopeType;
         organizationId: string | null;
         grantedAt: string;
@@ -92,6 +94,7 @@ export class RoleAssignmentService {
         const { page, limit, search } = input.query;
         const { total, items } = await this.deps.assignments.findTeam({
             ...(search !== undefined ? { search } : {}),
+            internalOnly: input.query.internalOnly,
             organizationIds: input.organizationIds,
             skip: (page - 1) * limit,
             take: limit,
@@ -115,6 +118,8 @@ export class RoleAssignmentService {
                     name: assignment.role.name,
                     displayName: assignment.role.displayName,
                     domain: assignment.role.domain,
+                    entityGroup: assignment.role.entityGroup,
+                    isSystem: assignment.role.isSystem,
                     scopeType: assignment.scopeType,
                     organizationId: assignment.scopeId,
                     grantedAt: assignment.grantedAt.toISOString(),

@@ -8,6 +8,11 @@
 > [admin-api-reference.md](admin-api-reference.md), which documents the same
 > endpoints grouped by module. Authentication and session handling live in
 > [authentication.md](authentication.md) — read that first.
+>
+> **Everything that writes** — market CRUD, order status changes, product
+> CRUD, release approvals, role editing, role assignment — is in
+> [admin-write-apis.md](admin-write-apis.md). This document covers the
+> read/reporting surface.
 
 ---
 
@@ -44,7 +49,7 @@ const canSee = (cap: string) => permissions.includes(cap);
 | Media | `assets-documents-upload:read` |
 | Provenance | `nfc-tag-claim:read` or `collectible-instance:read` |
 | Audit log | `audit-log:read` |
-| Publish drop | `drop:create` **(not built — see §14)** |
+| Publish drop | `release-approval:manage` — see §14 for what is still missing |
 | Roles | `employee-role-mgmt:read` |
 | Team | `employee-role-mgmt:read` |
 
@@ -303,6 +308,11 @@ Currency, `users` → Buyers, `newUsers` → New buyers, `orders` → Orders,
 `newOrders` → New orders, `revenue` → Revenue. The Orders bar chart on the
 right is the same array, sorted by `orders` descending — no second call.
 
+> **Managing markets** (create / edit / archive, country mappings, the default
+> market) is `/api/v1/admin/markets` — see
+> [admin-write-apis.md §1](admin-write-apis.md). Writes require a
+> platform-wide grant; this reporting endpoint does not.
+
 > `revenue` is keyed by the market's own currency, so each row carries exactly
 > one key. Render `revenue[row.currency]`.
 
@@ -336,6 +346,13 @@ Requires `order:read`. Envelope: `{ page, limit, total, items[] }`.
   "buyerId": "3f2a9b11-1c4d-4e5f-8a9b-0c1d2e3f4a5b"  // only with buyer-profile:read
 }
 ```
+
+> **There is now a richer orders surface.** `/api/v1/admin/orders` resolves
+> the buyer's **email** and the product's **code** at the database instead of
+> returning bare ids, adds a full single-order detail with its SKU unit
+> allocation, and exposes the status-change endpoint. See
+> [admin-write-apis.md §2](admin-write-apis.md). Prefer it for this screen;
+> the dashboard sub-endpoint below stays for the aggregate view.
 
 ### The two fields that vary by permission
 
@@ -472,11 +489,19 @@ the same inventory shape the dashboard previews:
   "reserved": 12, "committed": 8, "claimed": 310, "sold": 330, "available": 170 }
 ```
 
-For catalog CRUD (create/edit a product record itself) use the public products
-module — `GET/POST/PATCH/DELETE /api/v1/products` — documented in
-[api-reference.md](../api-reference.md). Note it recently changed shape:
-`productCode` → `groupCode`, the category/rarity enums became free-form
-strings, and price moved to per-market `ProductPrice` rows.
+**The detail screen** is `GET /api/v1/admin/products/:id` — the catalog
+record plus performance aggregates plus a paginated page of serialized SKU
+units, in one call. Catalog CRUD is `POST`/`PATCH`/`DELETE` on the same base.
+Both in [admin-write-apis.md §3](admin-write-apis.md).
+
+> ⚠ **The write routes moved.** `POST`/`PATCH`/`DELETE /api/v1/products`
+> previously sat behind `requireAuth` alone — any signed-in buyer could create
+> or archive a drop. They now live at `/api/v1/admin/products` behind a
+> platform-wide capability. `GET /api/v1/products` stays public and read-only.
+
+Note the catalog recently changed shape: `productCode` → `groupCode`, the
+category/rarity enums became free-form strings, and price moved to per-market
+`ProductPrice` rows — see [api-reference.md](../api-reference.md).
 
 ---
 
@@ -635,6 +660,12 @@ immediately servable. Concretely:
 `byScanStatus` is still returned, so the cards have a data source if you keep
 them.
 
+### Archive view
+
+`?archived=live` (default) | `archived` | `all`. The recycle-bin view is
+`?archived=archived`; archived rows carry a non-null `archivedAt`. See
+[admin-write-apis.md §5](admin-write-apis.md).
+
 ### Public vs private URLs
 
 `publicUrl` is non-null **only** for `DROP_IMAGE` and `PROFILE_IMAGE` — those
@@ -762,11 +793,16 @@ The Dashboard's "Recent activity" panel (§1) is the same data capped at 20; its
 
 ## 14. Publish drop
 
-**Design: PDF page 13.** — ⛔ **Not built.**
+**Design: PDF page 13.** — ⚠️ **Partially built.**
 
-This screen has **no backend**. `packages/releases` is schema-only: it owns its
-Prisma partial and exports a module name, and nothing else. There is no
-service, no controller, no router, and it is not mounted in `routes.ts`.
+`packages/releases` **now exists**: the review queue, approval detail with full
+history, amend, and the approve/reject decision are all implemented at
+`/api/v1/admin/releases` — see
+[admin-write-apis.md §4](admin-write-apis.md). Product creation and editing
+are at `/api/v1/admin/products` (§3 there).
+
+What is still missing is the **publish step itself** and the wizard's media and
+pricing joins.
 
 What exists today, and what it does not cover:
 
@@ -774,26 +810,25 @@ What exists today, and what it does not cover:
 |---|---|
 | "Awaiting Launch 20 / Active on Market 12" stats | ✅ `products` section of §1 (`approved`, `active`) |
 | "Ready Queue" / "Live Drops" tabs | ✅ `GET /admin/dashboard/products?status=…` |
-| Compliance sign-off "100% Verified" | ⚠️ `GET /admin/dashboard/release-approvals` is **read-only** |
-| Step 1 — Drop identification & brand | ⚠️ `POST /api/v1/products` exists but takes a different body (no images, no price) |
-| Step 2 — Artwork & media upload | ✅ `POST /admin/media/upload-url` (§11) then join via `ProductImage` — **no endpoint to create the join** |
-| Live marketplace preview (price, supply, badges) | ⚠️ price lives in `ProductPrice`; **no endpoint to set it** |
-| "Deploy New Drop" / publish action | ❌ **nothing** — no state transition endpoint |
+| Compliance sign-off "100% Verified" | ✅ `GET /admin/releases?latestOnly=true` |
+| Step 1 — Drop identification & brand | ✅ `POST /api/v1/admin/products` |
+| Step 2 — Artwork & media upload | ⚠️ `POST /admin/media/upload-url` uploads the asset, but **no endpoint joins it to the product** as a `ProductImage` |
+| Live marketplace preview — price | ⚠️ price lives in `ProductPrice`; **no endpoint to set it** |
+| Submit for review | ✅ `POST /api/v1/admin/releases` |
+| Approve / reject | ✅ `POST /api/v1/admin/releases/:id/decision` |
+| "Deploy New Drop" / publish action | ❌ **nothing** — no `APPROVED → PUBLISHED/ACTIVE` transition |
 | NFC tag claims "Enabled" toggle | ❌ **nothing** — tags are provisioned on `Sku` by the supply side |
 
-**Do not build this screen yet.** The minimum backend to support it:
+**Three endpoints still missing before this screen is buildable end to end:**
 
-1. `POST /admin/releases/:productId/submit` — `DRAFT` → `SUBMITTED`
-2. `POST /admin/releases/:productId/approve` / `/reject` — compliance sign-off,
-   writing `ReleaseApproval` and `Product.complianceStatus`
-3. `POST /admin/releases/:productId/publish` — `APPROVED` → `PUBLISHED`/`ACTIVE`,
+1. `POST /admin/products/:id/images` — join an uploaded `MediaAsset` to a
+   product as a `ProductImage` (position, primary flag, alt text)
+2. `PUT /admin/products/:id/prices` — upsert a `ProductPrice` per market
+3. `POST /admin/products/:id/publish` — `APPROVED` → `PUBLISHED`/`ACTIVE`
    with `releaseStart`/`releaseEnd`
-4. `POST /api/v1/products/:id/images` — join an uploaded `MediaAsset` to a
-   product as a `ProductImage`
-5. `PUT /api/v1/products/:id/prices` — upsert a `ProductPrice` per market
 
-Items 1–3 are the `releases` module finally being written; 4–5 are additions to
-`products`. Raise it before committing to a sprint that includes this screen.
+All three are small additions to `products` now that the review workflow
+exists. Everything else on the wizard is live.
 
 ---
 
@@ -811,8 +846,13 @@ GET    /api/v1/admin/authz/permissions?shape=grouped
 ```
 
 Read routes require `employee-role-mgmt:read`; **all writes require
-`employee-role-mgmt:manage`** — defining a role is strictly stronger than
-assigning one, so `:assign` is not enough.
+`employee-role-mgmt:manage` at `:global`** — defining a role is strictly
+stronger than assigning one (so `:assign` is not enough), and a role definition
+applies platform-wide (so an organization-scoped grant is not enough either).
+Full contract in [admin-write-apis.md §6](admin-write-apis.md).
+
+`GET /admin/authz/roles` already returns each role's **full permission list**;
+no second call is needed to render its capabilities.
 
 ### List (page 14)
 
@@ -886,9 +926,15 @@ Requires `employee-role-mgmt:read`. Envelope: `{ page, limit, total, items[] }`.
 }
 ```
 
-"Team" means **anyone holding at least one live role** — the admin population
-is defined by grants, not by a flag on the user row. `search` matches full
-name, email or handle, case-insensitively.
+"Team" means anyone holding at least one live role — the admin population is
+defined by grants, not by a flag on the user row. `search` matches full name,
+email or handle, case-insensitively.
+
+**`internalOnly` defaults to `true`**, so the list shows only HitBox internal
+staff (roles whose `entityGroup` is `hitbox_seller_org`). Pass
+`internalOnly=false` to include brand and artist role-holders. Each role now
+also carries `entityGroup` and `isSystem`. Full contract, including assign and
+revoke, in [admin-write-apis.md §7](admin-write-apis.md).
 
 One row per person, with roles nested. A person can hold several roles at once
 (the design shows *Ana Duarte — System Admin, Support*); their effective
@@ -955,15 +1001,20 @@ designed.
 
 | # | Screen | Gap | Severity |
 |---|---|---|---|
-| 1 | Publish drop (§14) | Entire backend missing — `releases` is schema-only | **Blocker** |
+| 1 | Publish drop (§14) | ~~Entire backend missing~~ → **review workflow now built**; product-image join, price upsert and the publish transition remain | Major |
 | 2 | Media (§11) | Design assumes a virus scanner; none exists | **Redesign needed** |
 | 3 | Supply (§8) | No product name, status enum, or ordered/received split | **Blocker for this layout** |
 | 4 | Provenance (§12) | Read-only — no open/assign/resolve actions | Major |
 | 5 | Resale (§5) | Items carry `skuId` only, no product name or seller | Major |
-| 6 | Products (§7) | No design page supplied | Needs design |
+| 6 | Products (§7) | No design page supplied — the API now exists | Needs design |
 | 7 | View as (§17) | No backend support | Needs a decision |
 | 8 | Demand signals (§9) | `follows` counts artist follows, not product watchers | Label carefully |
 | 9 | Content (§10) | No sub-endpoint; "unlocks per bundle" target is invented | Minor |
+
+**Closed since the first draft:** Markets CRUD, order detail + status changes,
+product detail + CRUD, the release approval workflow, the media archive view,
+role editing gates and the Team screen's staff filter — all in
+[admin-write-apis.md](admin-write-apis.md).
 
 ---
 

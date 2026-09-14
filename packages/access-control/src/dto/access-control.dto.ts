@@ -71,6 +71,11 @@ export type ListRolesQuery = z.infer<typeof listRolesQuerySchema>;
  */
 export const listTeamQuerySchema = z.object({
     search: z.string().trim().min(1).max(100).optional(),
+    /**
+     * Defaults to HitBox internal staff only — the people who operate the
+     * platform. Set `false` to include brand and artist role-holders too.
+     */
+    internalOnly: z.coerce.boolean().default(true),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
 });

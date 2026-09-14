@@ -3,6 +3,7 @@ import { asyncHandler } from '@hitbox/shared';
 import {
     createProductSchema,
     listProductsQuerySchema,
+    productDetailQuerySchema,
     updateProductSchema,
 } from '../dto/product.dto';
 import type { ProductService } from '../service/product.service';
@@ -32,6 +33,25 @@ export class ProductController {
     /** GET /products/:id */
     getById: RequestHandler = asyncHandler(async (req, res) => {
         res.json({ data: await this.service.getById(req.params.id as string) });
+    });
+
+    /**
+     * GET /admin/products/:id — the detail screen.
+     *
+     * Catalog record + performance aggregates + a page of serialized units,
+     * in one call. `skuPage`/`skuLimit` paginate the units; a 10,000-unit
+     * edition is a legitimate drop.
+     */
+    getDetail: RequestHandler = asyncHandler(async (req, res) => {
+        const query = productDetailQuerySchema.parse(req.query);
+        res.json({
+            data: await this.service.getDetail({
+                id: req.params.id as string,
+                skuPage: query.skuPage,
+                skuLimit: query.skuLimit,
+                claimedStatus: query.claimedStatus,
+            }),
+        });
     });
 
     /** POST /products */

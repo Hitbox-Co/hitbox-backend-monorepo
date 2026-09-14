@@ -150,20 +150,24 @@ export function createAccessControlModule(
                 controller.getRole,
             );
             // Defining roles is strictly stronger than assigning them, so it
-            // takes MANAGE rather than ASSIGN.
+            // takes MANAGE rather than ASSIGN — and `globalOnly`, because a
+            // role definition applies platform-wide. An org-scoped
+            // `employee-role-mgmt:manage:organization` holder (Brand Admin)
+            // may grant existing roles inside their organization; they may
+            // not author the roles everyone else is granted.
             router.post(
                 '/roles',
-                requirePermission('employee-role-mgmt:manage'),
+                requirePermission('employee-role-mgmt:manage', { globalOnly: true }),
                 controller.createRole,
             );
             router.patch(
                 '/roles/:roleId',
-                requirePermission('employee-role-mgmt:manage'),
+                requirePermission('employee-role-mgmt:manage', { globalOnly: true }),
                 controller.updateRole,
             );
             router.delete(
                 '/roles/:roleId',
-                requirePermission('employee-role-mgmt:manage'),
+                requirePermission('employee-role-mgmt:manage', { globalOnly: true }),
                 controller.deleteRole,
             );
 

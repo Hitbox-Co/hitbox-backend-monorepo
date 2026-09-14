@@ -28,6 +28,14 @@ export interface ApiRouters {
     adminDashboard: Router;
     /** Media registry: presigned upload, list, signed serve, soft archive. */
     adminMedia: Router;
+    /** Market/currency regions. Reads are wide, writes are platform-wide only. */
+    adminMarkets: Router;
+    /** Order list, full detail with SKU units, and status transitions. */
+    adminOrders: Router;
+    /** Release approval queue: review, decide, compliance sign-off. */
+    adminReleases: Router;
+    /** Catalog administration: product detail with performance + SKU units, CRUD. */
+    adminProducts: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -51,6 +59,10 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/authz', routers.adminAuthz);
     api.use('/admin/dashboard', routers.adminDashboard);
     api.use('/admin/media', routers.adminMedia);
+    api.use('/admin/markets', routers.adminMarkets);
+    api.use('/admin/orders', routers.adminOrders);
+    api.use('/admin/releases', routers.adminReleases);
+    api.use('/admin/products', routers.adminProducts);
 
     return api;
 }

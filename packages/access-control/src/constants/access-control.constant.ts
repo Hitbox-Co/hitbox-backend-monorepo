@@ -68,3 +68,11 @@ export const AUTHZ_CACHE_L2_TTL_SECONDS = 60;
 
 /** How long a process trusts its cached view of the epoch counter. */
 export const AUTHZ_CACHE_EPOCH_TTL_MS = 10_000;
+
+/**
+ * The `Role.entityGroup` that marks a role as HitBox internal staff.
+ *
+ * The Team screen lists these people by default: the ones who operate the
+ * platform, as opposed to the brand and artist users who also hold roles.
+ */
+export const HITBOX_ENTITY_GROUP = 'hitbox_seller_org' as const;

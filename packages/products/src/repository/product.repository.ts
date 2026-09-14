@@ -70,6 +70,43 @@ const marketplaceSelect = {
 
 export type ProductListingRow = Prisma.ProductGetPayload<{ select: typeof marketplaceSelect }>;
 
+/** One serialized unit of a drop, for the product detail screen. */
+const skuUnitSelect = {
+    id: true,
+    skuCode: true,
+    serialNumber: true,
+    claimedStatus: true,
+    ownerId: true,
+    tagId: true,
+    tagLifecycleState: true,
+    vendorId: true,
+    resaleBlocked: true,
+    resaleBlockedReason: true,
+    tamperStatus: true,
+    lastTapCounter: true,
+    isActive: true,
+    createdAt: true,
+    variantId: true,
+    owner: { select: { email: true, handle: true } },
+} satisfies Prisma.SkuSelect;
+
+export type SkuUnitRow = Prisma.SkuGetPayload<{ select: typeof skuUnitSelect }>;
+
+/** Sales, claim and inventory aggregates for one drop. */
+export interface ProductPerformance {
+    skuTotal: number;
+    claimed: number;
+    unclaimed: number;
+    reservedHeld: number;
+    reservedCommitted: number;
+    orders: number;
+    ordersByStatus: Record<string, number>;
+    /** Decimal strings keyed by currency — never summed across them. */
+    revenue: Record<string, string>;
+    resaleActive: number;
+    wishlists: number;
+}
+
 /**
  * Sort options the schema can actually express.
  *
@@ -230,6 +267,103 @@ export class ProductRepository {
         });
         if (product) await this.cache.setEntity('code', groupCode, product);
         return product;
+    }
+
+    /**
+     * The serialized units of one drop, for the product detail screen.
+     *
+     * Paginated because a 10,000-unit edition is a legitimate drop and the
+     * detail payload must not grow with it.
+     */
+    async listSkuUnits(input: {
+        productId: string;
+        claimedStatus?: string | undefined;
+        skip: number;
+        take: number;
+    }): Promise<{ total: number; items: SkuUnitRow[] }> {
+        const where: Prisma.SkuWhereInput = {
+            productId: input.productId,
+            ...(input.claimedStatus
+                ? { claimedStatus: input.claimedStatus as Prisma.EnumClaimedStatusFilter['equals'] }
+                : {}),
+        };
+        const [total, items] = await Promise.all([
+            this.prisma.sku.count({ where }),
+            this.prisma.sku.findMany({
+                where,
+                select: skuUnitSelect,
+                orderBy: { serialNumber: 'asc' },
+                skip: input.skip,
+                take: input.take,
+            }),
+        ]);
+        return { total, items };
+    }
+
+    /**
+     * Sales, claim and inventory aggregates for one drop.
+     *
+     * Six counts in one round trip rather than six sequential queries — this
+     * backs a single screen and the numbers must agree with each other, so
+     * they are read together.
+     */
+    async performance(productId: string): Promise<ProductPerformance> {
+        const [
+            skuTotal,
+            claimed,
+            reservedHeld,
+            reservedCommitted,
+            orderAgg,
+            ordersByStatus,
+            resaleActive,
+            wishlists,
+        ] = await Promise.all([
+            this.prisma.sku.count({ where: { productId } }),
+            this.prisma.sku.count({ where: { productId, claimedStatus: 'CLAIMED' } }),
+            this.prisma.inventoryReservation.count({
+                where: { sku: { productId }, status: 'HELD' },
+            }),
+            this.prisma.inventoryReservation.count({
+                where: { sku: { productId }, status: 'COMMITTED' },
+            }),
+            this.prisma.order.groupBy({
+                by: ['currency'],
+                where: { productId, archivedAt: null, status: { notIn: ['CANCELLED'] } },
+                _sum: { amount: true },
+                _count: { _all: true },
+            }),
+            this.prisma.order.groupBy({
+                by: ['status'],
+                where: { productId, archivedAt: null },
+                _count: { _all: true },
+            }),
+            this.prisma.resaleListing.count({
+                where: { sku: { productId }, status: 'ACTIVE' },
+            }),
+            this.prisma.wishlistItem.count({ where: { productId } }),
+        ]);
+
+        const revenue: Record<string, string> = {};
+        let orders = 0;
+        for (const row of orderAgg) {
+            revenue[row.currency] = (row._sum.amount ?? new Prisma.Decimal(0)).toString();
+            orders += row._count._all;
+        }
+        const byStatus: Record<string, number> = {};
+        for (const row of ordersByStatus) byStatus[row.status] = row._count._all;
+
+        return {
+            skuTotal,
+            claimed,
+            unclaimed: skuTotal - claimed,
+            reservedHeld,
+            reservedCommitted,
+            orders,
+            ordersByStatus: byStatus,
+            revenue,
+            resaleActive,
+            wishlists,
+        };
     }
 
     create(data: Prisma.ProductCreateInput): Promise<ProductWithRelations> {

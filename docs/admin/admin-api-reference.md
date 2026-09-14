@@ -9,6 +9,8 @@
 > **Building against the admin console designs?** Start with
 > [admin-console-api.md](admin-console-api.md) — the same endpoints organised
 > one section per screen, with the design-to-field mapping and the known gaps.
+> The administrative **write** surface (markets, orders, products, releases,
+> roles, team) is in [admin-write-apis.md](admin-write-apis.md).
 > Session handling and the Clerk flow are in
 > [authentication.md](authentication.md).
 >

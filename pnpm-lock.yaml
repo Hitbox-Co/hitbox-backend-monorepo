@@ -252,12 +252,21 @@ importers:
       '@hitbox/marketplace':
         specifier: workspace:*
         version: link:../../packages/marketplace
+      '@hitbox/markets':
+        specifier: workspace:*
+        version: link:../../packages/markets
       '@hitbox/media':
         specifier: workspace:*
         version: link:../../packages/media
+      '@hitbox/orders':
+        specifier: workspace:*
+        version: link:../../packages/orders
       '@hitbox/products':
         specifier: workspace:*
         version: link:../../packages/products
+      '@hitbox/releases':
+        specifier: workspace:*
+        version: link:../../packages/releases
       '@hitbox/shared':
         specifier: workspace:*
         version: link:../../packages/shared

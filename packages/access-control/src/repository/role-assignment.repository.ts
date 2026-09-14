@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@hitbox/database';
 import type { PrismaClient, RoleScopeType } from '@hitbox/database';
+import { HITBOX_ENTITY_GROUP } from '../constants/access-control.constant';
 import type {
     IPrincipalGrantsLookup,
     PrincipalGrant,
@@ -28,7 +29,14 @@ export interface TeamMemberRow {
         scopeType: RoleScopeType;
         scopeId: string | null;
         grantedAt: Date;
-        role: { id: string; name: string; displayName: string | null; domain: string };
+        role: {
+            id: string;
+            name: string;
+            displayName: string | null;
+            domain: string;
+            entityGroup: string;
+            isSystem: boolean;
+        };
     }[];
 }
 
@@ -115,12 +123,22 @@ export class RoleAssignmentRepository implements IPrincipalGrantsLookup {
     async findTeam(input: {
         search?: string | undefined;
         organizationIds: string[] | null;
+        /**
+         * Restrict to HitBox internal staff — anyone holding a role whose
+         * `entityGroup` is `hitbox_seller_org`. This is the Team screen's
+         * default: it lists the people who operate the platform, not the
+         * thousands of brand users who also carry roles.
+         */
+        internalOnly: boolean;
         skip: number;
         take: number;
     }): Promise<{ total: number; items: TeamMemberRow[] }> {
         const liveAssignment: Prisma.RoleAssignmentWhereInput = {
             revokedAt: null,
-            role: { isActive: true },
+            role: {
+                isActive: true,
+                ...(input.internalOnly ? { entityGroup: HITBOX_ENTITY_GROUP } : {}),
+            },
             ...(input.organizationIds === null
                 ? {}
                 : { scopeId: { in: input.organizationIds } }),
@@ -161,7 +179,10 @@ export class RoleAssignmentRepository implements IPrincipalGrantsLookup {
                             scopeId: true,
                             grantedAt: true,
                             role: {
-                                select: { id: true, name: true, displayName: true, domain: true },
+                                select: {
+                                    id: true, name: true, displayName: true,
+                                    domain: true, entityGroup: true, isSystem: true,
+                                },
                             },
                         },
                         orderBy: { grantedAt: 'asc' },

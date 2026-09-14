@@ -1,4 +1,5 @@
 import type { Request, RequestHandler } from 'express';
+import { PermissionScope } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import { ACCESS_CONTROL_ERROR_CODES } from '../constants/access-control.constant';
 import { parseCapability } from '../domain/permission-key';
@@ -25,6 +26,23 @@ export type AccessContextResolver = (
 export interface RequirePermissionOptions {
     /** How to find the target record's org/owner. Omit for unscoped routes. */
     context?: AccessContextResolver;
+    /**
+     * Require the matching grant to be **platform-wide** (`GLOBAL` scope).
+     *
+     * For administration of shared, cross-organization configuration — market
+     * definitions, the catalog itself, role definitions — where an
+     * organization-scoped holder of the same capability must not qualify. A
+     * Brand Admin holding `drop:manage:organization` may edit their own
+     * drops; they may not edit the market table every organization prices
+     * against.
+     *
+     * This is how "system administrator only" is expressed without inventing
+     * a new resource: HITBOX_SYSTEM_ADMIN is the role that holds these
+     * capabilities at `:global`. It stays a capability check, never a role
+     * name, so an operator who defines a second platform-wide role through
+     * the Roles screen gets the same access without a code change.
+     */
+    globalOnly?: boolean;
 }
 
 /** Attached to `req.authz` once a permission check has passed. */
@@ -140,6 +158,18 @@ export function createRequirePermission(deps: PermissionGuardDeps) {
                 }
 
                 const { allowed: _allowed, reason: _reason, ...detail } = decision;
+
+                // Checked after the decision, not before it: the engine picks
+                // the widest grant the caller holds, so this asks "was the
+                // grant that let you through a platform-wide one?" rather
+                // than re-deriving scope from the permission string.
+                if (options.globalOnly && detail.scope !== PermissionScope.GLOBAL) {
+                    throw AppError.forbidden(
+                        'This action requires platform-wide administration rights',
+                        ACCESS_CONTROL_ERROR_CODES.FORBIDDEN,
+                    );
+                }
+
                 req.authz = { userId: principal.userId, capability, ...detail };
                 next();
             } catch (error) {

@@ -40,6 +40,14 @@ export const listProductsQuerySchema = z.object({
 
 export type ListProductsQuery = z.infer<typeof listProductsQuerySchema>;
 
+/** Paginates the serialized units embedded in the product detail response. */
+export const productDetailQuerySchema = z.object({
+    skuPage: z.coerce.number().int().min(1).default(1),
+    skuLimit: z.coerce.number().int().min(1).max(200).default(50),
+    claimedStatus: z.enum(['UNCLAIMED', 'CLAIMED', 'IN_TRANSFER', 'FLAGGED']).optional(),
+});
+export type ProductDetailQuery = z.infer<typeof productDetailQuerySchema>;
+
 // ── Mutations ───────────────────────────────────────────────────────────
 
 export const createProductSchema = z.object({

@@ -18,8 +18,10 @@ import type {
 } from '../dto/product.dto';
 import type {
     ProductListingRow,
+    ProductPerformance,
     ProductRepository,
     ProductWithRelations,
+    SkuUnitRow,
 } from '../repository/product.repository';
 
 interface ProductServiceDeps {
@@ -97,6 +99,53 @@ export class ProductService {
 
     async getById(id: string): Promise<ProductResponse> {
         return this.toResponse(await this.requireById(id));
+    }
+
+    /**
+     * The product detail screen: the catalog record, how the drop is actually
+     * performing, and its serialized units.
+     *
+     * One call rather than three, because the three numbers must agree — a
+     * page that fetches inventory and sales separately can render "500 minted,
+     * 620 sold" while both halves are individually correct.
+     */
+    async getDetail(input: {
+        id: string;
+        skuPage: number;
+        skuLimit: number;
+        claimedStatus?: string | undefined;
+    }): Promise<
+        ProductResponse & {
+            performance: ProductPerformance;
+            skuUnits: {
+                page: number;
+                limit: number;
+                total: number;
+                items: ReturnType<typeof toSkuUnit>[];
+            };
+        }
+    > {
+        const product = await this.requireById(input.id);
+        const [performance, units] = await Promise.all([
+            this.deps.products.performance(input.id),
+            this.deps.products.listSkuUnits({
+                productId: input.id,
+                claimedStatus: input.claimedStatus,
+                skip: (input.skuPage - 1) * input.skuLimit,
+                take: input.skuLimit,
+            }),
+        ]);
+
+        return {
+            ...this.toResponse(product),
+            performance,
+            skuUnits: {
+                page: input.skuPage,
+                limit: input.skuLimit,
+                total: units.total,
+                items: units.items.map(toSkuUnit),
+            },
+        };
     }
 
     /**
@@ -259,6 +308,35 @@ export class ProductService {
         const names = Array.isArray(target) ? target.map(String) : [String(target ?? '')];
         return names.some((name) => name.includes(field) || name.includes(snake));
     }
+}
+
+/**
+ * One serialized unit as the detail screen renders it.
+ *
+ * The owner is exposed by **email**, not id — an operator looking at unit #14
+ * of a disputed drop needs to know who holds it, and a UUID answers that only
+ * after another lookup.
+ */
+function toSkuUnit(sku: SkuUnitRow) {
+    return {
+        skuId: sku.id,
+        skuCode: sku.skuCode,
+        serialNumber: sku.serialNumber,
+        variantId: sku.variantId,
+        claimedStatus: sku.claimedStatus,
+        ownerId: sku.ownerId,
+        ownerEmail: sku.owner?.email ?? null,
+        ownerHandle: sku.owner?.handle ?? null,
+        tagId: sku.tagId,
+        tagLifecycleState: sku.tagLifecycleState,
+        vendorId: sku.vendorId,
+        resaleBlocked: sku.resaleBlocked,
+        resaleBlockedReason: sku.resaleBlockedReason,
+        tamperStatus: sku.tamperStatus,
+        lastTapCounter: sku.lastTapCounter,
+        isActive: sku.isActive,
+        createdAt: sku.createdAt.toISOString(),
+    };
 }
 
 /** `undefined` leaves the relation alone; `null`/'' disconnects it. */

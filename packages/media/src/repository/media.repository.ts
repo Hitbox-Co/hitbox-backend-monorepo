@@ -153,6 +153,11 @@ export class MediaRepository {
             ...this.scopeWhere(input.organizationIds),
             ...(input.assetType ? { assetType: input.assetType } : {}),
             ...(input.virusScanStatus ? { virusScanStatus: input.virusScanStatus } : {}),
+            ...(input.archived === 'live'
+                ? { archivedAt: null }
+                : input.archived === 'archived'
+                    ? { archivedAt: { not: null } }
+                    : {}),
         };
         if (input.ownerType && input.ownerId) {
             const column = ownerColumn(input.ownerType as OwnerType);

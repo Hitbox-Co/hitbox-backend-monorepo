@@ -1,7 +1,7 @@
 {
   "name": "@hitbox/releases",
   "version": "1.0.0",
-  "description": "HitBox releases module — Drop release approval workflow — review, decision and compliance sign-off.",
+  "description": "HitBox releases module \u2014 Drop release approval workflow \u2014 review, decision and compliance sign-off.",
   "private": true,
   "main": "./src/index.ts",
   "types": "./src/index.ts",

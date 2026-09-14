@@ -1,7 +1,7 @@
 {
   "name": "@hitbox/markets",
   "version": "1.0.0",
-  "description": "HitBox markets module — Market/currency regions and their country mappings.",
+  "description": "HitBox markets module \u2014 Market/currency regions and their country mappings.",
   "private": true,
   "main": "./src/index.ts",
   "types": "./src/index.ts",

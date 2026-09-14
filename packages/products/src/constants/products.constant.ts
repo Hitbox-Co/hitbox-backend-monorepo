@@ -6,6 +6,20 @@ export const PRODUCTS_ERROR_CODES = {
     TAG_TAKEN: 'PRODUCTS_TAG_TAKEN',
 } as const;
 
+/**
+ * Reading the admin detail screen. Wider than the write gate: a Drop Manager
+ * or Brand Admin needs to inspect a drop they cannot edit platform-wide.
+ */
+export const PRODUCT_READ_CAPABILITY = 'drop:read' as const;
+
+/**
+ * Catalog administration. Paired with `globalOnly` at the router, which is how
+ * "system admin only" is expressed without inventing a resource: an org-scoped
+ * `drop:manage:organization` holder manages their own drops elsewhere, not the
+ * platform catalog.
+ */
+export const PRODUCT_WRITE_CAPABILITY = 'drop:manage' as const;
+
 export const PRODUCT_EVENTS = {
     PRODUCT_CREATED: 'products.product.created',
     PRODUCT_UPDATED: 'products.product.updated',
