@@ -11,6 +11,8 @@
 > one section per screen, with the design-to-field mapping and the known gaps.
 > The administrative **write** surface (markets, orders, products, releases,
 > roles, team) is in [admin-write-apis.md](admin-write-apis.md).
+> Product upload with its serialized edition, minting SKU units, and reading
+> units back per drop: [sku-api.md](sku-api.md).
 > Session handling and the Clerk flow are in
 > [authentication.md](authentication.md).
 >
@@ -673,6 +675,13 @@ Built from the **real seeded catalog**, verified against the running service.
 
 \* Brand Admin's finance is `payment-royalty:read:organization` — their own
 royalties, never platform margin.
+
+**Serialized units are gated separately**, and the answers are not the same as
+the dashboard column above: a Drop Manager sees every unit but no NFC tag UID,
+a Brand Admin sees their own units but no owner, Support sees real tags and
+masked buyers, and the Order Manager, Content Manager and Finance Admin are
+refused outright. The full matrix, with the reasoning and the two catalog gaps
+it exposes, is in [sku-api.md §6](sku-api.md).
 
 > `HITBOX_DB_ADMIN` does not exist in this system. Database administration is a
 > cloud/IAM concern, outside application authorization.

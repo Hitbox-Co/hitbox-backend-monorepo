@@ -30,3 +30,11 @@ export { PRODUCT_SORTS, PUBLIC_PRODUCT_WHERE } from './repository/product.reposi
 // Port: bootstrap injects an adapter that turns a MediaAsset storageRef into
 // a renderable URL. Products owns no object-storage knowledge itself.
 export type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
+
+// Port: bootstrap injects @hitbox/skus so a drop and its serialized edition
+// are created in one transaction. Products never writes the Sku table itself.
+export type {
+    ISkuMinting,
+    SkuMintOutcome,
+    SkuMintSpec,
+} from './domain/interfaces/sku-minting.interface';

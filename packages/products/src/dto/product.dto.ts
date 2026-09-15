@@ -3,6 +3,7 @@ import { ComplianceStatus, DropStatus } from '@hitbox/database';
 import {
     DEFAULT_PRODUCT_GROUP_CODE,
     PRODUCT_CODE_GROUP_LENGTH,
+    SKU_INLINE_MINT_MAX,
 } from '../constants/products.constant';
 
 /**
@@ -76,6 +77,33 @@ export const createProductSchema = z.object({
         .string()
         .regex(new RegExp(`^\\d{${PRODUCT_CODE_GROUP_LENGTH}}$`), 'Must be 4 digits')
         .default(DEFAULT_PRODUCT_GROUP_CODE),
+    /**
+     * Mint the edition in the same request that creates the drop.
+     *
+     * Omit it to create a catalog entry with no units yet and mint later
+     * through `POST /admin/products/:productId/skus`. When present, the
+     * product and its units are written in one transaction — a drop can never
+     * come into existence with a partially minted edition.
+     *
+     * There is deliberately no `tagIds` here. Binding a physical NFC tag needs
+     * `nfc-tag-claim:manage`, which this route does not check (it checks
+     * `drop:manage`), and a payload that quietly bound tags on behalf of a
+     * caller who lacks that capability would be a hole in the one table the
+     * platform's authenticity guarantee rests on. Mint tags through the skus
+     * endpoint, which checks for it.
+     *
+     * There is no `variantId` either, for a duller reason: a drop being created
+     * right now has no variants yet, so any id supplied here would necessarily
+     * belong to a *different* product — and the foreign key would happily
+     * accept it. Mint per variant through the skus endpoint, which checks that
+     * the variant belongs to the drop.
+     */
+    skus: z
+        .object({
+            count: z.number().int().min(1).max(SKU_INLINE_MINT_MAX),
+        })
+        .strict()
+        .optional(),
 });
 
 export type CreateProductDto = z.infer<typeof createProductSchema>;
@@ -84,9 +112,13 @@ export type CreateProductDto = z.infer<typeof createProductSchema>;
  * `groupCode` is omitted: it is the product's unique identifier, generated
  * once at creation. `complianceStatus` is omitted too — it is written by the
  * releases module's reviewer, not by a catalog edit.
+ *
+ * `skus` is omitted because minting is not an edit. Units are physical objects
+ * with owners and provenance; "PATCH the product to say 600 now" has no
+ * meaning once 500 exist. Mint through the skus endpoint, which appends.
  */
 export const updateProductSchema = createProductSchema
-    .omit({ groupCode: true })
+    .omit({ groupCode: true, skus: true })
     .partial()
     .strict();
 

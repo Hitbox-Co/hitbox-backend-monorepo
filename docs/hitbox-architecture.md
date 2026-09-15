@@ -448,6 +448,33 @@ and price sorting (not expressible against a market-scoped price table without
 a denormalized column or raw SQL). `popular` now orders by minted SKU count, a
 proxy for edition size rather than sales.
 
+### The `skus` module and its port
+
+`@hitbox/skus` owns `Sku` and is now a full module rather than a schema
+partial: minting, per-drop reads and single-unit detail at
+`/api/v1/admin/products/:productId/skus` and `/api/v1/admin/skus`.
+
+It illustrates two of the coupling rules cleanly:
+
+- **A port, consumer-defined.** Products declares `ISkuMinting`
+  (`domain/interfaces/sku-minting.interface.ts`) and bootstrap injects the skus
+  service as the implementation, so `POST /admin/products` can create a drop
+  and mint its edition in one transaction while products never writes the `Sku`
+  table. The contract passes a `Prisma.TransactionClient`, which is what makes
+  the two writes atomic across a module boundary.
+- **Visibility resolved from grants, never from role names.**
+  `domain/sku-access.ts` turns the caller's permissions into which blocks of a
+  unit the response may contain — the same pattern as the dashboard's
+  `dashboard-access.ts`. It also refuses `PUBLIC` and `OWN` scopes explicitly,
+  because `PUBLIC` has *ALL* breadth and a bare capability check on an admin
+  route would otherwise admit every signed-in buyer.
+
+The full surface, with the per-role matrix: [admin/sku-api.md](admin/sku-api.md).
+
+Minting writes no provenance. The seq-0 `MINT` row of a unit's hash chain is
+created lazily by `@hitbox/claims` on first use, so the ledger stays
+append-only under one owner.
+
 ---
 
 ## 11. Microservice Extraction Path

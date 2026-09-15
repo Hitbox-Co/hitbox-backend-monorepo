@@ -15,6 +15,7 @@ import { ProductController } from './controller/product.controller';
 import { MarketplaceListingAdapter } from './domain/marketplace-listing.adapter';
 import { ProductDiscoveryAdapter } from './domain/product-discovery.adapter';
 import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
+import type { ISkuMinting } from './domain/interfaces/sku-minting.interface';
 import { ProductRepository } from './repository/product.repository';
 import { ProductService } from './service/product.service';
 
@@ -29,6 +30,14 @@ export interface ProductsModuleDeps {
      * bucket configured, where the media routes are not mounted either.
      */
     mediaUrls?: IMediaUrlResolver | undefined;
+    /**
+     * Mints the serialized units of a drop, so `POST /admin/products` can
+     * create a catalog entry and its edition in one transaction.
+     *
+     * Optional: omit it and a create carrying a `skus` block is refused with a
+     * clear error, rather than quietly producing a drop with no units.
+     */
+    skuMinting?: ISkuMinting | undefined;
     /**
      * Required only to build the admin router. The public catalog router is
      * read-only and needs no authorization.
@@ -66,6 +75,7 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
         eventBus: deps.eventBus,
         logger,
         mediaUrls: deps.mediaUrls,
+        skuMinting: deps.skuMinting,
     });
 
     return {

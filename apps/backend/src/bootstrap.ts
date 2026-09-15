@@ -16,6 +16,7 @@ import { createClaimsModule } from '@hitbox/claims';
 import { createMarketsModule } from '@hitbox/markets';
 import { createOrdersModule } from '@hitbox/orders';
 import { createReleasesModule } from '@hitbox/releases';
+import { createSkusModule } from '@hitbox/skus';
 import { createLeadsModule } from '@hitbox/leads';
 import { buildRoutes } from './routes';
 
@@ -129,11 +130,28 @@ export function bootstrap(): Bootstrapped {
         })
         : null;
 
+    /**
+     * Serialized units. Built BEFORE products because products consumes its
+     * minting port — the consumer is constructed with the provider in hand,
+     * which is what keeps the dependency one-directional.
+     *
+     * `resolvePrincipal` is the adapter that lets skus read the caller's
+     * grants without importing the authorization module: it decides how much
+     * of a unit to reveal from those grants alone, never from the request.
+     */
+    const skusModule = createSkusModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
+    });
+
     const productsModule = createProductsModule({
         prisma,
         eventBus,
         mediaUrls,
         guard: accessControlModule.guard,
+        skuMinting: skusModule.minting,
     });
 
     /**
@@ -227,6 +245,8 @@ export function bootstrap(): Bootstrapped {
         adminOrders: ordersModule.createRouter(authModule.requireAuth),
         adminReleases: releasesModule.createRouter(authModule.requireAuth),
         adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
+        adminProductSkus: skusModule.createProductRouter(authModule.requireAuth),
+        adminSkus: skusModule.createRouter(authModule.requireAuth),
     });
 
     // Public website (hitboxcollectibles.com) — its own database, no

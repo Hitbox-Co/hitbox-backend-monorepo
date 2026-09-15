@@ -4,6 +4,10 @@ export const PRODUCTS_ERROR_CODES = {
     PRODUCT_NOT_FOUND: 'PRODUCTS_NOT_FOUND',
     PRODUCT_CODE_TAKEN: 'PRODUCTS_CODE_TAKEN',
     TAG_TAKEN: 'PRODUCTS_TAG_TAKEN',
+    /** A `skus` block arrived but no minting provider is wired in. */
+    MINTING_UNAVAILABLE: 'PRODUCTS_MINTING_UNAVAILABLE',
+    /** `skus.count` exceeds the drop's own declared `totalSupply`. */
+    SUPPLY_EXCEEDED: 'PRODUCTS_SUPPLY_EXCEEDED',
 } as const;
 
 /**
@@ -38,6 +42,18 @@ export const DEFAULT_PRODUCT_GROUP_CODE = '0000';
 
 /** Retries when a randomly generated groupCode collides. */
 export const PRODUCT_CODE_MAX_ATTEMPTS = 5;
+
+/**
+ * Units mintable in the same request that creates the drop.
+ *
+ * Capped well below a large edition on purpose: this insert runs inside the
+ * transaction that also creates the Product, and a transaction that writes
+ * 10,000 rows holds locks for long enough to matter. Larger editions are minted
+ * in batches through `POST /admin/products/:productId/skus`, which is the same
+ * code path without the product write attached.
+ */
+export const SKU_INLINE_MINT_MAX = 1000;
+
 
 // ── Redis cache (cache-aside; see cache/product-cache.ts) ──────────────────
 // Reads check Redis first and populate it on miss; any mutation (create,

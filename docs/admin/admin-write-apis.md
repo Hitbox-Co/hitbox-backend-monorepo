@@ -60,6 +60,9 @@ role check here.
 | Order status change | `order:manage` | no — an org-scoped Order Manager ships their own orders |
 | Product admin detail | `drop:read` | no |
 | Product create / update / archive | `drop:manage` | **yes** |
+| SKU unit read (list, summary, detail) | `collectible-instance:read` | no |
+| SKU unit mint | `collectible-instance:manage` | no — a Brand Admin mints their own drop's edition |
+| SKU **NFC tag binding** | `nfc-tag-claim:manage` | no — checked in addition to the mint gate |
 | Release read | `release-approval:read` | no |
 | Release submit / amend / decide | `release-approval:manage` | no |
 | Release **reverse a decision** | `release-approval:override:global` | implicit |
@@ -400,6 +403,22 @@ Body as documented in [api-reference.md](../api-reference.md) — `name`,
 
 → `201 { "data": ProductResponse }`. The 12-digit `groupCode` is generated
 server-side: 8 random digits + your 4-digit suffix, retried on collision.
+
+**Optional `skus` block — mint the edition in the same request:**
+
+```json
+{ "name": "Neon Drift — Series 2", "totalSupply": 500, "skus": { "count": 500 } }
+```
+
+The product and its serialized units are written in one transaction, so the
+request either produces a drop with 500 units or produces nothing. The response
+then carries an extra `skus` key reporting `minted`, `firstSerial`,
+`lastSerial` and `skuCodes`; the key is **absent** when no block was sent.
+
+There is deliberately no `tagIds` here — binding a physical NFC tag needs
+`nfc-tag-claim:manage`, which this route does not check. Full contract,
+including minting more units later and reading them back:
+[sku-api.md](sku-api.md).
 
 ### `PATCH /admin/products/:id` 🔒 platform-wide
 
@@ -761,6 +780,15 @@ instantly.
 | `RELEASES_ALREADY_PENDING` | 409 | releases |
 | `RELEASES_COMMENT_REQUIRED` | 422 | releases |
 | `RELEASES_COMPLIANCE_INCOMPLETE` | 400 | releases |
+| `SKUS_NOT_FOUND` | 404 | skus |
+| `SKUS_PRODUCT_NOT_FOUND` | 404 | skus |
+| `SKUS_SUPPLY_EXCEEDED` | 409 | skus |
+| `SKUS_TAG_TAKEN` | 409 | skus |
+| `SKUS_SERIAL_TAKEN` | 409 | skus |
+| `SKUS_VARIANT_MISMATCH` | 400 | skus |
+| `SKUS_FORBIDDEN` | 403 | skus |
+| `PRODUCTS_MINTING_UNAVAILABLE` | 400 | products |
+| `PRODUCTS_SUPPLY_EXCEEDED` | 400 | products |
 | `AUTHZ_FORBIDDEN` | 403 | any `globalOnly` route, when the grant is org-scoped |
 
 ---
@@ -782,6 +810,9 @@ instantly.
 - [ ] Require a comment in the reject dialog — the API rejects without one
 - [ ] Use `canDecide`/`blockedReason` to enable the approve/reject buttons
 - [ ] Default the media browser to `archived=live`
+- [ ] Mint editions over 1000 units in batches — the inline `skus.count` cap is 1000
+- [ ] Test optional SKU blocks with `'tag' in sku`, never against a role name
+- [ ] Render an absent SKU block as *nothing* — absent ≠ `null` ([sku-api.md §6](sku-api.md))
 - [ ] Show `isSystem: true` roles as read-only
 - [ ] Default the Team list to `internalOnly=true`
 - [ ] Refetch the team after assigning a role; grants are cached briefly

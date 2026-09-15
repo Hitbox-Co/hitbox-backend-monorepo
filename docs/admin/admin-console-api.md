@@ -13,6 +13,10 @@
 > CRUD, release approvals, role editing, role assignment — is in
 > [admin-write-apis.md](admin-write-apis.md). This document covers the
 > read/reporting surface.
+>
+> **Product upload and serialized units** — creating a drop together with its
+> edition, minting units, and reading them back with per-role field visibility
+> — are in [sku-api.md](sku-api.md).
 
 ---
 
@@ -812,12 +816,13 @@ What exists today, and what it does not cover:
 | "Ready Queue" / "Live Drops" tabs | ✅ `GET /admin/dashboard/products?status=…` |
 | Compliance sign-off "100% Verified" | ✅ `GET /admin/releases?latestOnly=true` |
 | Step 1 — Drop identification & brand | ✅ `POST /api/v1/admin/products` |
+| Step 1b — edition size / serialized units | ✅ `POST /admin/products` with a `skus` block, or `POST /admin/products/:productId/skus` — [sku-api.md](sku-api.md) |
 | Step 2 — Artwork & media upload | ⚠️ `POST /admin/media/upload-url` uploads the asset, but **no endpoint joins it to the product** as a `ProductImage` |
 | Live marketplace preview — price | ⚠️ price lives in `ProductPrice`; **no endpoint to set it** |
 | Submit for review | ✅ `POST /api/v1/admin/releases` |
 | Approve / reject | ✅ `POST /api/v1/admin/releases/:id/decision` |
 | "Deploy New Drop" / publish action | ❌ **nothing** — no `APPROVED → PUBLISHED/ACTIVE` transition |
-| NFC tag claims "Enabled" toggle | ❌ **nothing** — tags are provisioned on `Sku` by the supply side |
+| NFC tag claims "Enabled" toggle | ⚠️ tags are bound at mint time via `tagIds` ([sku-api.md §3](sku-api.md)); there is no per-drop toggle and no way to bind a tag to an already-minted unit |
 
 **Three endpoints still missing before this screen is buildable end to end:**
 

@@ -366,8 +366,29 @@ export class ProductRepository {
         };
     }
 
-    create(data: Prisma.ProductCreateInput): Promise<ProductWithRelations> {
-        return this.prisma.product.create({ data, include: listInclude });
+    /**
+     * Creates a drop, optionally doing more work in the same transaction.
+     *
+     * `onCreated` exists for one caller: minting the edition alongside the
+     * product. It runs after the insert and before the commit, so a failure in
+     * it takes the product with it — there is no window where a drop exists
+     * with an edition that was supposed to be minted and was not.
+     */
+    async create(
+        data: Prisma.ProductCreateInput,
+        onCreated?: (
+            tx: Prisma.TransactionClient,
+            product: { id: string; groupCode: string; totalSupply: number },
+        ) => Promise<void>,
+    ): Promise<ProductWithRelations> {
+        if (!onCreated) {
+            return this.prisma.product.create({ data, include: listInclude });
+        }
+        return this.prisma.$transaction(async (tx) => {
+            const product = await tx.product.create({ data, include: listInclude });
+            await onCreated(tx, product);
+            return product;
+        });
     }
 
     async update(id: string, data: Prisma.ProductUpdateInput): Promise<ProductWithRelations> {

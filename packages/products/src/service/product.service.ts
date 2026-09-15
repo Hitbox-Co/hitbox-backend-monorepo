@@ -11,6 +11,10 @@ import {
 } from '../constants/products.constant';
 import type { IMediaUrlResolver } from '../domain/interfaces/media-url-resolver.interface';
 import type {
+    ISkuMinting,
+    SkuMintOutcome,
+} from '../domain/interfaces/sku-minting.interface';
+import type {
     CreateProductDto,
     ListProductsQuery,
     PaginatedResult,
@@ -30,6 +34,11 @@ interface ProductServiceDeps {
     logger: Logger;
     /** Optional: without it, image URLs come back null rather than failing. */
     mediaUrls?: IMediaUrlResolver | undefined;
+    /**
+     * Optional: without it, a create carrying a `skus` block is refused rather
+     * than silently creating a drop with no units.
+     */
+    skuMinting?: ISkuMinting | undefined;
 }
 
 /**
@@ -162,13 +171,46 @@ export class ProductService {
         return this.toResponse(product);
     }
 
-    async create(dto: CreateProductDto): Promise<ProductResponse> {
-        const { groupCode: groupSuffix, collectionId, artistId, organizationId, ...fields } = dto;
+    /**
+     * Creates a drop, and — when the payload carries a `skus` block — mints
+     * its edition in the same transaction.
+     *
+     * This is the "product upload" the admin wizard submits: one request that
+     * either produces a drop with N serialized units or produces nothing.
+     */
+    async create(dto: CreateProductDto): Promise<ProductResponse & { skus?: SkuMintOutcome }> {
+        const {
+            groupCode: groupSuffix,
+            collectionId,
+            artistId,
+            organizationId,
+            skus,
+            ...fields
+        } = dto;
+
+        if (skus && !this.deps.skuMinting) {
+            throw AppError.badRequest(
+                'This deployment cannot mint units; create the drop without `skus`.',
+                PRODUCTS_ERROR_CODES.MINTING_UNAVAILABLE,
+            );
+        }
+        // Checked before the insert as well as inside the mint, because the
+        // message differs: here it is "your request contradicts itself", there
+        // it is "someone else minted while you were deciding".
+        if (skus && fields.totalSupply > 0 && skus.count > fields.totalSupply) {
+            throw AppError.badRequest(
+                `Cannot mint ${skus.count} units for a drop declared as ${fields.totalSupply}.`,
+                PRODUCTS_ERROR_CODES.SUPPLY_EXCEEDED,
+            );
+        }
 
         // Random 8-digit prefix + 4-digit group suffix; retry on the (rare)
         // unique-constraint collision instead of pre-checking.
         for (let attempt = 1; attempt <= PRODUCT_CODE_MAX_ATTEMPTS; attempt += 1) {
             const groupCode = `${generateUniqueSegment()}${groupSuffix}`;
+            // Declared per attempt, so a rolled-back transaction cannot leave a
+            // mint result behind for the next one to report.
+            let minted: SkuMintOutcome | undefined;
             try {
                 const now = new Date();
                 const product = await this.deps.products.create({
@@ -187,12 +229,28 @@ export class ProductService {
                     ...(organizationId && {
                         organization: { connect: { id: organizationId } },
                     }),
-                });
+                },
+                    // Runs inside the product's own transaction; a mint failure
+                    // rolls the drop back with it.
+                    skus
+                        ? async (tx, created) => {
+                            minted = await this.deps.skuMinting!.mintWithin(tx, {
+                                productId: created.id,
+                                groupCode: created.groupCode,
+                                totalSupply: created.totalSupply,
+                                count: skus.count,
+                            });
+                        }
+                        : undefined,
+                );
                 await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_CREATED, {
                     productId: product.id,
                     groupCode: product.groupCode,
+                    mintedUnits: minted?.minted ?? 0,
                 });
-                return this.toResponse(product);
+                return minted
+                    ? { ...this.toResponse(product), skus: minted }
+                    : this.toResponse(product);
             } catch (error) {
                 if (this.isUniqueViolation(error, 'groupCode') && attempt < PRODUCT_CODE_MAX_ATTEMPTS) {
                     this.deps.logger.warn({ attempt }, 'groupCode collision — retrying');

@@ -36,6 +36,10 @@ export interface ApiRouters {
     adminReleases: Router;
     /** Catalog administration: product detail with performance + SKU units, CRUD. */
     adminProducts: Router;
+    /** Serialized units of one drop: mint, list, summary. */
+    adminProductSkus: Router;
+    /** Serialized units across drops: cross-drop list and single-unit detail. */
+    adminSkus: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -62,7 +66,13 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/markets', routers.adminMarkets);
     api.use('/admin/orders', routers.adminOrders);
     api.use('/admin/releases', routers.adminReleases);
+    // Mounted BEFORE /admin/products so the nested path wins outright. Express
+    // would fall through to it either way (the catalog router has no route
+    // matching two extra segments), but relying on a miss for correct routing
+    // is one refactor away from breaking silently.
+    api.use('/admin/products/:productId/skus', routers.adminProductSkus);
     api.use('/admin/products', routers.adminProducts);
+    api.use('/admin/skus', routers.adminSkus);
 
     return api;
 }
