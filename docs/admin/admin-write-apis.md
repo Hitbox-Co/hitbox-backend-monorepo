@@ -63,6 +63,8 @@ role check here.
 | SKU unit read (list, summary, detail) | `collectible-instance:read` | no |
 | SKU unit mint | `collectible-instance:manage` | no — a Brand Admin mints their own drop's edition |
 | SKU **NFC tag binding** | `nfc-tag-claim:manage` | no — checked in addition to the mint gate |
+| Product gallery read | `drop:read` | no |
+| Product gallery attach / replace / remove | `drop:manage` | **yes** |
 | Release read | `release-approval:read` | no |
 | Release submit / amend / decide | `release-approval:manage` | no |
 | Release **reverse a decision** | `release-approval:override:global` | implicit |
@@ -787,6 +789,14 @@ instantly.
 | `SKUS_SERIAL_TAKEN` | 409 | skus |
 | `SKUS_VARIANT_MISMATCH` | 400 | skus |
 | `SKUS_FORBIDDEN` | 403 | skus |
+| `SKUS_UNIT_NOT_IN_PRODUCT` | 409 | skus |
+| `SKUS_TAG_ALREADY_BOUND` | 409 | skus |
+| `SKUS_TAG_REPLACE_REFUSED` | 409 | skus |
+| `PRODUCTS_MEDIA_UNAVAILABLE` | 400 | products |
+| `PRODUCTS_IMAGE_ASSET_INVALID` | 400 | products |
+| `PRODUCTS_IMAGE_DUPLICATE` | 409 | products |
+| `PRODUCTS_IMAGE_NOT_FOUND` | 404 | products |
+| `BODY_REQUIRED` | 400 | shared — no JSON body was parsed |
 | `PRODUCTS_MINTING_UNAVAILABLE` | 400 | products |
 | `PRODUCTS_SUPPLY_EXCEEDED` | 400 | products |
 | `AUTHZ_FORBIDDEN` | 403 | any `globalOnly` route, when the grant is org-scoped |
@@ -813,6 +823,9 @@ instantly.
 - [ ] Mint editions over 1000 units in batches — the inline `skus.count` cap is 1000
 - [ ] Test optional SKU blocks with `'tag' in sku`, never against a role name
 - [ ] Render an absent SKU block as *nothing* — absent ≠ `null` ([sku-api.md §6](sku-api.md))
+- [ ] Bind tags through the manifest endpoint, not at mint time, for any real edition ([sku-api.md §3a](sku-api.md))
+- [ ] Always send `Content-Type: application/json` — its absence now returns `400 BODY_REQUIRED`
+- [ ] Call `PUT /admin/products/:id/images` after a reorder; re-render from its response
 - [ ] Show `isSystem: true` roles as read-only
 - [ ] Default the Team list to `internalOnly=true`
 - [ ] Refetch the team after assigning a role; grants are cached briefly

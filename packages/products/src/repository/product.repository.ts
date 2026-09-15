@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { DropStatus, Prisma, ProductPriceStatus } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
 import type { ProductCache } from '../cache/product-cache';
@@ -69,6 +70,29 @@ const marketplaceSelect = {
 } satisfies Prisma.ProductSelect;
 
 export type ProductListingRow = Prisma.ProductGetPayload<{ select: typeof marketplaceSelect }>;
+
+/** One gallery placement, with the asset it points at. */
+const productImageSelect = {
+    id: true,
+    assetId: true,
+    position: true,
+    isPrimary: true,
+    altText: true,
+    createdAt: true,
+    asset: { select: { storageRef: true } },
+} satisfies Prisma.ProductImageSelect;
+
+export type ProductImageRow = Prisma.ProductImageGetPayload<{
+    select: typeof productImageSelect;
+}>;
+
+/** A gallery entry after the service has resolved order and the primary flag. */
+export interface NormalisedImage {
+    assetId: string;
+    position: number;
+    isPrimary: boolean;
+    altText: string | null;
+}
 
 /** One serialized unit of a drop, for the product detail screen. */
 const skuUnitSelect = {
@@ -385,9 +409,15 @@ export class ProductRepository {
             return this.prisma.product.create({ data, include: listInclude });
         }
         return this.prisma.$transaction(async (tx) => {
-            const product = await tx.product.create({ data, include: listInclude });
-            await onCreated(tx, product);
-            return product;
+            const created = await tx.product.create({ data, include: listInclude });
+            await onCreated(tx, created);
+            // Re-read inside the transaction: `created` was projected before
+            // the callback ran, so a gallery written by it is absent from that
+            // snapshot and the response would claim the drop has no images.
+            return (await tx.product.findUniqueOrThrow({
+                where: { id: created.id },
+                include: listInclude,
+            })) as ProductWithRelations;
         });
     }
 
@@ -402,6 +432,143 @@ export class ProductRepository {
             this.cache.invalidateLists(),
         ]);
         return product;
+    }
+
+    // ── Gallery ─────────────────────────────────────────────────────────
+
+    /** Live placements for one product, ordered as they render. */
+    listImages(productId: string): Promise<ProductImageRow[]> {
+        return this.prisma.productImage.findMany({
+            where: { productId, archivedAt: null },
+            select: productImageSelect,
+            orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
+        });
+    }
+
+    findImage(productId: string, imageId: string): Promise<ProductImageRow | null> {
+        return this.prisma.productImage.findFirst({
+            where: { id: imageId, productId, archivedAt: null },
+            select: productImageSelect,
+        });
+    }
+
+    /**
+     * Writes the gallery for one product.
+     *
+     * `mode: 'replace'` archives every placement not in `entries` first, so the
+     * result is exactly what was sent. `mode: 'append'` leaves existing rows
+     * alone.
+     *
+     * Runs as one transaction because the primary flag is a cross-row
+     * invariant: demoting the old primary and promoting the new one in two
+     * statements leaves a window with zero primaries, and a listing rendered
+     * in that window shows no image.
+     *
+     * Re-attaching an asset that was previously removed **revives the archived
+     * row** rather than inserting a second one — `@@unique([productId,
+     * assetId])` spans archived rows too, so a plain insert would fail with a
+     * constraint error that means nothing to the operator who just dragged an
+     * image back in.
+     */
+    async writeImages(
+        productId: string,
+        entries: NormalisedImage[],
+        mode: 'append' | 'replace',
+        tx?: Prisma.TransactionClient,
+    ): Promise<ProductImageRow[]> {
+        const run = async (client: Prisma.TransactionClient) => {
+            const now = new Date();
+            const keepAssetIds = entries.map((entry) => entry.assetId);
+
+            if (mode === 'replace') {
+                await client.productImage.updateMany({
+                    where: { productId, archivedAt: null, assetId: { notIn: keepAssetIds } },
+                    data: { archivedAt: now },
+                });
+            }
+
+            for (const entry of entries) {
+                await client.productImage.upsert({
+                    where: { productId_assetId: { productId, assetId: entry.assetId } },
+                    create: {
+                        id: randomUUID(),
+                        productId,
+                        assetId: entry.assetId,
+                        position: entry.position,
+                        isPrimary: entry.isPrimary,
+                        altText: entry.altText,
+                        createdAt: now,
+                    },
+                    update: {
+                        position: entry.position,
+                        isPrimary: entry.isPrimary,
+                        altText: entry.altText,
+                        // Revives a previously removed placement.
+                        archivedAt: null,
+                    },
+                });
+            }
+
+            // Exactly one primary, always. Any row not in `entries` that still
+            // claims it is demoted here rather than left as a second primary.
+            const primary = entries.find((entry) => entry.isPrimary);
+            if (primary) {
+                await client.productImage.updateMany({
+                    where: {
+                        productId,
+                        archivedAt: null,
+                        isPrimary: true,
+                        assetId: { not: primary.assetId },
+                    },
+                    data: { isPrimary: false },
+                });
+            }
+        };
+
+        // Read back through the SAME client. A caller-supplied `tx` has not
+        // committed yet, so reading through `this.prisma` here would open a
+        // second connection that cannot see any of the rows just written and
+        // would report an empty gallery.
+        if (tx) {
+            await run(tx);
+            return tx.productImage.findMany({
+                where: { productId, archivedAt: null },
+                select: productImageSelect,
+                orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
+            });
+        }
+
+        await this.prisma.$transaction(run);
+        await Promise.all([this.cache.invalidateEntity(productId), this.cache.invalidateLists()]);
+        return this.listImages(productId);
+    }
+
+    /** Soft-removes one placement. The `MediaAsset` itself is untouched. */
+    async archiveImage(productId: string, imageId: string): Promise<ProductImageRow[]> {
+        await this.prisma.$transaction(async (tx) => {
+            const removed = await tx.productImage.update({
+                where: { id: imageId },
+                data: { archivedAt: new Date(), isPrimary: false },
+                select: { isPrimary: true },
+            });
+            // Removing the primary promotes the next image rather than leaving
+            // the drop with a gallery and no card image.
+            if (removed.isPrimary) {
+                const next = await tx.productImage.findFirst({
+                    where: { productId, archivedAt: null },
+                    orderBy: { position: 'asc' },
+                    select: { id: true },
+                });
+                if (next) {
+                    await tx.productImage.update({
+                        where: { id: next.id },
+                        data: { isPrimary: true },
+                    });
+                }
+            }
+        });
+        await Promise.all([this.cache.invalidateEntity(productId), this.cache.invalidateLists()]);
+        return this.listImages(productId);
     }
 
     /**

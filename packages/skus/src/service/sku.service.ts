@@ -1,5 +1,5 @@
 import type { Logger } from 'pino';
-import { Prisma } from '@hitbox/database';
+import { ClaimedStatus, Prisma, TagLifecycleState } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import {
@@ -10,6 +10,9 @@ import {
 import { Visibility, maskEmail, maskId, maskTag } from '../domain/sku-access';
 import type { SkuAccess } from '../domain/sku-access';
 import type {
+    BindTagDto,
+    BulkBindResult,
+    BulkBindTagsDto,
     ListSkusQuery,
     MintResult,
     MintSkusDto,
@@ -23,7 +26,18 @@ import type {
     SkuDetailRow,
     SkuRepository,
     SkuRow,
+    TagBindTarget,
 } from '../repository/sku.repository';
+
+/**
+ * Tag states that mean "the physical tag is gone or untrustworthy", and so
+ * make re-tagging a claimed unit legitimate rather than destructive.
+ */
+const REPLACEABLE_TAG_STATES: TagLifecycleState[] = [
+    TagLifecycleState.LOST,
+    TagLifecycleState.REVOKED,
+    TagLifecycleState.DISPUTED,
+];
 
 interface SkuServiceDeps {
     skus: SkuRepository;
@@ -187,6 +201,208 @@ export class SkuService {
             provisioningBatchId: spec.provisioningBatchId ?? null,
             isActive: spec.isActive,
         });
+    }
+
+    // ── Tag binding ─────────────────────────────────────────────────────────
+
+    /**
+     * Binds a whole vendor manifest to an already-minted edition.
+     *
+     * This is the answer to "I minted 500 units — how do 500 different tag
+     * UIDs get in?". They arrive as a manifest from the tag vendor, keyed by
+     * serial number, and are applied in batches against units that already
+     * exist. Requiring all 500 UIDs at mint time would mean knowing them
+     * before a single unit existed.
+     */
+    async bulkBindTags(
+        access: SkuAccess,
+        productId: string,
+        dto: BulkBindTagsDto,
+    ): Promise<BulkBindResult> {
+        this.requireTagCustody(access);
+        await this.requireProduct(access, productId);
+
+        const serialNumbers = dto.bindings
+            .map((binding) => binding.serialNumber)
+            .filter((value): value is number => value !== undefined);
+        const skuCodes = dto.bindings
+            .map((binding) => binding.skuCode)
+            .filter((value): value is string => value !== undefined);
+
+        const targets = await this.deps.skus.findForBinding(productId, serialNumbers, skuCodes);
+        const bySerial = new Map(targets.map((target) => [target.serialNumber, target]));
+        const byCode = new Map(targets.map((target) => [target.skuCode, target]));
+
+        // Every failure is collected before anything is written. A manifest is
+        // applied by a person with a box of tags in front of them; telling them
+        // about one bad row at a time is 40 round trips.
+        const problems: string[] = [];
+        const resolved: {
+            target: TagBindTarget;
+            tagId: string;
+            replaced: boolean;
+        }[] = [];
+
+        for (const binding of dto.bindings) {
+            const label = binding.skuCode ?? `#${binding.serialNumber}`;
+            const target =
+                binding.skuCode !== undefined
+                    ? byCode.get(binding.skuCode)
+                    : bySerial.get(binding.serialNumber!);
+
+            if (!target) {
+                problems.push(`${label}: not a unit of this drop`);
+                continue;
+            }
+            const check = this.tagReplaceProblem(target, binding.tagId, dto.replace);
+            if (check) {
+                problems.push(`${label}: ${check}`);
+                continue;
+            }
+            resolved.push({ target, tagId: binding.tagId, replaced: target.tagId !== null });
+        }
+
+        if (problems.length > 0) {
+            throw AppError.conflict(
+                `Manifest rejected: ${problems.join('; ')}`,
+                SKUS_ERROR_CODES.UNIT_NOT_IN_PRODUCT,
+            );
+        }
+
+        await this.assertTagsFree(
+            dto.bindings.map((binding) => binding.tagId),
+            new Set(resolved.map((entry) => entry.target.skuCode)),
+        );
+
+        try {
+            await this.deps.skus.bindTags(
+                resolved.map((entry) => ({
+                    skuId: entry.target.id,
+                    tagId: entry.tagId,
+                    vendorId: dto.vendorId ?? null,
+                    provisioningBatchId: dto.provisioningBatchId ?? null,
+                })),
+            );
+        } catch (error) {
+            throw this.asTagConflict(error);
+        }
+
+        return {
+            productId,
+            bound: resolved.length,
+            items: resolved.map((entry) => ({
+                skuCode: entry.target.skuCode,
+                serialNumber: entry.target.serialNumber,
+                tagId: entry.tagId,
+                replaced: entry.replaced,
+            })),
+        };
+    }
+
+    /** Binds one tag to one unit. */
+    async bindTag(access: SkuAccess, skuId: string, dto: BindTagDto): Promise<SkuDetail> {
+        this.requireTagCustody(access);
+
+        // Confirms the unit exists AND that the caller's scope reaches the
+        // drop it belongs to, before anything is written.
+        this.requireReachable(await this.deps.skus.findDetail(skuId), access);
+
+        const target = await this.deps.skus.findByIdForBinding(skuId);
+        if (!target) {
+            throw AppError.notFound('Unit not found', SKUS_ERROR_CODES.NOT_FOUND);
+        }
+
+        const problem = this.tagReplaceProblem(target, dto.tagId, dto.replace);
+        if (problem) {
+            throw AppError.conflict(
+                `${target.skuCode}: ${problem}`,
+                target.tagId
+                    ? SKUS_ERROR_CODES.TAG_ALREADY_BOUND
+                    : SKUS_ERROR_CODES.TAG_REPLACE_REFUSED,
+            );
+        }
+
+        await this.assertTagsFree([dto.tagId], new Set([target.skuCode]));
+
+        try {
+            await this.deps.skus.bindTags([
+                {
+                    skuId,
+                    tagId: dto.tagId,
+                    vendorId: dto.vendorId ?? null,
+                    provisioningBatchId: dto.provisioningBatchId ?? null,
+                },
+            ]);
+        } catch (error) {
+            throw this.asTagConflict(error);
+        }
+
+        return this.getDetail(access, skuId);
+    }
+
+    private requireTagCustody(access: SkuAccess): void {
+        if (!access.canManageTags) {
+            throw AppError.forbidden(
+                'Binding NFC tags requires the nfc-tag-claim:manage capability.',
+                SKUS_ERROR_CODES.FORBIDDEN,
+            );
+        }
+    }
+
+    /**
+     * Why this binding cannot proceed, or null.
+     *
+     * Re-tagging a CLAIMED unit is refused unless its current tag is already
+     * recorded as LOST / REVOKED / DISPUTED. The owner's app and the unit's
+     * hash chain are keyed to the tag it was claimed with; swapping it under a
+     * live owner silently breaks verification for the person holding the item.
+     * Mark the old tag lost first — that is what those states are for.
+     */
+    private tagReplaceProblem(
+        target: TagBindTarget,
+        tagId: string,
+        replace: boolean,
+    ): string | null {
+        if (target.tagId === tagId) return null; // idempotent re-send
+        if (target.tagId === null) return null;
+        if (!replace) {
+            return `already bound to ${target.tagId}; send replace: true to overwrite`;
+        }
+        if (
+            target.claimedStatus === ClaimedStatus.CLAIMED &&
+            !REPLACEABLE_TAG_STATES.includes(target.tagLifecycleState)
+        ) {
+            return (
+                `is claimed and its tag is ${target.tagLifecycleState}; ` +
+                'mark the tag LOST, REVOKED or DISPUTED before re-tagging'
+            );
+        }
+        return null;
+    }
+
+    /** Refuses tags already bound elsewhere, naming every conflict at once. */
+    private async assertTagsFree(tagIds: string[], ownCodes: Set<string>): Promise<void> {
+        const bound = await this.deps.skus.findBoundTags(tagIds);
+        const conflicts = bound.filter((row) => !ownCodes.has(row.skuCode));
+        if (conflicts.length > 0) {
+            throw AppError.conflict(
+                `Already bound to another unit: ${conflicts
+                    .map((row) => `${row.tagId} → ${row.skuCode}`)
+                    .join(', ')}`,
+                SKUS_ERROR_CODES.TAG_TAKEN,
+            );
+        }
+    }
+
+    /** The unique index is the authority; this turns its error into a usable one. */
+    private asTagConflict(error: unknown): unknown {
+        if (isUniqueViolation(error, 'tagId')) {
+            return AppError.conflict(
+                'One of these NFC tags was bound to another unit while this request was in flight.',
+                SKUS_ERROR_CODES.TAG_TAKEN,
+            );
+        }
+        return error;
     }
 
     // ── Reads ───────────────────────────────────────────────────────────────

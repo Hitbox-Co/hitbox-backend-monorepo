@@ -2,6 +2,7 @@ import { ClaimedStatus, TagLifecycleState } from '@hitbox/database';
 import { z } from 'zod';
 import {
     SKU_MINT_MAX_BATCH,
+    SKU_TAG_BIND_MAX,
     SKUS_DEFAULT_LIMIT,
     SKUS_MAX_LIMIT,
 } from '../constants/skus.constant';
@@ -61,6 +62,84 @@ export const mintSkusSchema = z
     });
 
 export type MintSkusDto = z.infer<typeof mintSkusSchema>;
+
+// ── Tag binding ─────────────────────────────────────────────────────────────
+
+/**
+ * Bind one tag to one already-minted unit.
+ *
+ * This is the endpoint that makes a 500-unit edition practical: mint the units
+ * first with no tags, then bind as the physical tags arrive from the vendor.
+ * Supplying 500 UIDs at mint time requires knowing all 500 before a single
+ * unit exists, which is not how tag provisioning works.
+ */
+export const bindTagSchema = z
+    .object({
+        tagId,
+        vendorId: z.string().uuid().optional(),
+        provisioningBatchId: z.string().trim().min(1).max(120).optional(),
+        /**
+         * Overwrite a tag that is already bound.
+         *
+         * Off by default: re-tagging is a physical-world event (a chip failed,
+         * an item was re-tagged after repair), not something a retried request
+         * should do silently. Refused outright on a CLAIMED unit whose tag is
+         * still healthy — the owner's app and the hash chain are keyed to it.
+         */
+        replace: z.boolean().default(false),
+    })
+    .strict();
+export type BindTagDto = z.infer<typeof bindTagSchema>;
+
+/** One row of a vendor manifest: which unit, which tag. */
+const tagBindingSchema = z
+    .object({
+        /** Identify the unit by its position in the edition… */
+        serialNumber: z.coerce.number().int().min(1).optional(),
+        /** …or by its full code. Exactly one of the two. */
+        skuCode: z.string().trim().min(1).max(64).optional(),
+        tagId,
+    })
+    .strict()
+    .refine(
+        (value) =>
+            (value.serialNumber === undefined) !== (value.skuCode === undefined),
+        { message: 'Provide exactly one of serialNumber or skuCode' },
+    );
+
+/**
+ * `POST /admin/products/:productId/skus/tags` — bind a batch.
+ *
+ * Shaped to be a direct translation of a vendor's CSV manifest
+ * (`serial,tagId` per line), because that is what actually arrives with a box
+ * of tags.
+ */
+export const bulkBindTagsSchema = z
+    .object({
+        bindings: z.array(tagBindingSchema).min(1).max(SKU_TAG_BIND_MAX),
+        vendorId: z.string().uuid().optional(),
+        provisioningBatchId: z.string().trim().min(1).max(120).optional(),
+        replace: z.boolean().default(false),
+    })
+    .strict()
+    .refine(
+        (value) => new Set(value.bindings.map((b) => b.tagId)).size === value.bindings.length,
+        { message: 'The same tag appears twice in this batch', path: ['bindings'] },
+    )
+    .refine(
+        (value) => {
+            const keys = value.bindings.map((b) => b.skuCode ?? `#${b.serialNumber}`);
+            return new Set(keys).size === keys.length;
+        },
+        { message: 'The same unit appears twice in this batch', path: ['bindings'] },
+    );
+export type BulkBindTagsDto = z.infer<typeof bulkBindTagsSchema>;
+
+export interface BulkBindResult {
+    productId: string;
+    bound: number;
+    items: { skuCode: string; serialNumber: number; tagId: string; replaced: boolean }[];
+}
 
 // ── Queries ─────────────────────────────────────────────────────────────────
 

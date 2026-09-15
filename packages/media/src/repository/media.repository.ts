@@ -4,12 +4,46 @@ import { ownerColumn } from '../domain/storage-key';
 import type { OwnerType } from '../domain/storage-key';
 import type { ListMediaQuery, ScanResultDto } from '../dto/media.dto';
 
+/** What other modules are told about an asset they are joining to. */
+export interface AssetRef {
+    id: string;
+    storageRef: string;
+    assetType: AssetType;
+    mimeType: string;
+    archivedAt: Date | null;
+    productId: string | null;
+    organizationId: string | null;
+}
+
 /** The only place in this module that touches Prisma. */
 export class MediaRepository {
     constructor(private readonly prisma: PrismaClient) { }
 
     findById(id: string): Promise<MediaAsset | null> {
         return this.prisma.mediaAsset.findUnique({ where: { id } });
+    }
+
+    /**
+     * Bulk lookup for other modules that join assets into their own tables
+     * (today: the products gallery, through the `IMediaAssets` port).
+     *
+     * One query for the whole batch rather than N: attaching a 12-image
+     * gallery should cost one round trip, and the caller needs to report
+     * *every* bad id at once instead of failing on the first.
+     */
+    findManyByIds(ids: string[]): Promise<AssetRef[]> {
+        return this.prisma.mediaAsset.findMany({
+            where: { id: { in: ids } },
+            select: {
+                id: true,
+                storageRef: true,
+                assetType: true,
+                mimeType: true,
+                archivedAt: true,
+                productId: true,
+                organizationId: true,
+            },
+        });
     }
 
     create(input: {

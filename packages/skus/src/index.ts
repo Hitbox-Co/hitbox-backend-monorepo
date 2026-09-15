@@ -29,8 +29,16 @@ export {
     SKUS_MODULE,
 } from './constants/skus.constant';
 
-export { listSkusQuerySchema, mintSkusSchema } from './dto/sku.dto';
+export {
+    bindTagSchema,
+    bulkBindTagsSchema,
+    listSkusQuerySchema,
+    mintSkusSchema,
+} from './dto/sku.dto';
 export type {
+    BindTagDto,
+    BulkBindResult,
+    BulkBindTagsDto,
     ListSkusQuery,
     MintResult,
     MintSkusDto,

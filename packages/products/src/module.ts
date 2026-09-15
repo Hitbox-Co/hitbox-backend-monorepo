@@ -15,6 +15,7 @@ import { ProductController } from './controller/product.controller';
 import { MarketplaceListingAdapter } from './domain/marketplace-listing.adapter';
 import { ProductDiscoveryAdapter } from './domain/product-discovery.adapter';
 import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
+import type { IMediaAssets } from './domain/interfaces/media-assets.interface';
 import type { ISkuMinting } from './domain/interfaces/sku-minting.interface';
 import { ProductRepository } from './repository/product.repository';
 import { ProductService } from './service/product.service';
@@ -38,6 +39,14 @@ export interface ProductsModuleDeps {
      * clear error, rather than quietly producing a drop with no units.
      */
     skuMinting?: ISkuMinting | undefined;
+    /**
+     * Validates media assets before they are joined into a product gallery.
+     * Provided by @hitbox/media, which owns the `MediaAsset` table.
+     *
+     * Optional: omit it and image attachment is refused with a clear error
+     * rather than writing joins nobody checked.
+     */
+    mediaAssets?: IMediaAssets | undefined;
     /**
      * Required only to build the admin router. The public catalog router is
      * read-only and needs no authorization.
@@ -76,6 +85,7 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
         logger,
         mediaUrls: deps.mediaUrls,
         skuMinting: deps.skuMinting,
+        mediaAssets: deps.mediaAssets,
     });
 
     return {
@@ -136,6 +146,34 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
                 '/:id',
                 guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
                 controller.archive,
+            );
+
+            // Gallery. Reading takes the same capability as the detail screen;
+            // writing is catalog administration like any other product edit.
+            router.get(
+                '/:id/images',
+                guard.requirePermission(PRODUCT_READ_CAPABILITY),
+                controller.listImages,
+            );
+            router.post(
+                '/:id/images',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.attachImages,
+            );
+            router.put(
+                '/:id/images',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.replaceImages,
+            );
+            router.patch(
+                '/:id/images/:imageId',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.updateImage,
+            );
+            router.delete(
+                '/:id/images/:imageId',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.removeImage,
             );
 
             return router;

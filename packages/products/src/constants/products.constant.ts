@@ -8,6 +8,13 @@ export const PRODUCTS_ERROR_CODES = {
     MINTING_UNAVAILABLE: 'PRODUCTS_MINTING_UNAVAILABLE',
     /** `skus.count` exceeds the drop's own declared `totalSupply`. */
     SUPPLY_EXCEEDED: 'PRODUCTS_SUPPLY_EXCEEDED',
+    /** An `images` block arrived but no asset-lookup provider is wired in. */
+    MEDIA_UNAVAILABLE: 'PRODUCTS_MEDIA_UNAVAILABLE',
+    /** One or more `assetId`s do not exist, are archived, or are not images. */
+    IMAGE_ASSET_INVALID: 'PRODUCTS_IMAGE_ASSET_INVALID',
+    /** The same asset was attached to this product twice. */
+    IMAGE_DUPLICATE: 'PRODUCTS_IMAGE_DUPLICATE',
+    IMAGE_NOT_FOUND: 'PRODUCTS_IMAGE_NOT_FOUND',
 } as const;
 
 /**
@@ -53,6 +60,25 @@ export const PRODUCT_CODE_MAX_ATTEMPTS = 5;
  * code path without the product write attached.
  */
 export const SKU_INLINE_MINT_MAX = 1000;
+
+/**
+ * Images per drop.
+ *
+ * A gallery, not a media library — the drop page renders these, and a
+ * hundred-image payload is a mistake rather than a requirement.
+ */
+export const PRODUCT_IMAGE_MAX = 24;
+
+/**
+ * Asset types accepted into a product gallery.
+ *
+ * `DROP_IMAGE` lives under the `drop-images/` prefix, which is the only
+ * product-facing prefix with public read. Attaching an `EXCLUSIVE_CONTENT` or
+ * `LEGAL_DOCUMENT` asset would produce a gallery entry whose URL 403s for
+ * every shopper — so it is refused at attach time instead of rendering as a
+ * broken image forever.
+ */
+export const PRODUCT_IMAGE_ASSET_TYPES = ['DROP_IMAGE'] as const;
 
 
 // ── Redis cache (cache-aside; see cache/product-cache.ts) ──────────────────

@@ -7,6 +7,7 @@ import {
     PRODUCT_CODE_MAX_ATTEMPTS,
     PRODUCT_CODE_UNIQUE_LENGTH,
     PRODUCT_EVENTS,
+    PRODUCT_IMAGE_ASSET_TYPES,
     PRODUCTS_ERROR_CODES,
 } from '../constants/products.constant';
 import type { IMediaUrlResolver } from '../domain/interfaces/media-url-resolver.interface';
@@ -14,13 +15,20 @@ import type {
     ISkuMinting,
     SkuMintOutcome,
 } from '../domain/interfaces/sku-minting.interface';
+import type { IMediaAssets } from '../domain/interfaces/media-assets.interface';
 import type {
+    AttachProductImagesDto,
     CreateProductDto,
     ListProductsQuery,
     PaginatedResult,
+    ProductImageResponse,
+    ReplaceProductImagesDto,
     UpdateProductDto,
+    UpdateProductImageDto,
 } from '../dto/product.dto';
 import type {
+    NormalisedImage,
+    ProductImageRow,
     ProductListingRow,
     ProductPerformance,
     ProductRepository,
@@ -39,6 +47,11 @@ interface ProductServiceDeps {
      * than silently creating a drop with no units.
      */
     skuMinting?: ISkuMinting | undefined;
+    /**
+     * Optional: without it, attaching images is refused rather than writing
+     * gallery rows pointing at assets nobody validated.
+     */
+    mediaAssets?: IMediaAssets | undefined;
 }
 
 /**
@@ -185,6 +198,7 @@ export class ProductService {
             artistId,
             organizationId,
             skus,
+            images,
             ...fields
         } = dto;
 
@@ -202,6 +216,14 @@ export class ProductService {
                 `Cannot mint ${skus.count} units for a drop declared as ${fields.totalSupply}.`,
                 PRODUCTS_ERROR_CODES.SUPPLY_EXCEEDED,
             );
+        }
+
+        // Assets are validated BEFORE the product is written. Inside the
+        // transaction a bad asset id would roll back a drop the operator
+        // otherwise created correctly, and the whole payload would have to be
+        // resubmitted to fix one typo'd uuid.
+        if (images?.length) {
+            await this.assertUsableAssets(null, images.map((image) => image.assetId));
         }
 
         // Random 8-digit prefix + 4-digit group suffix; retry on the (rare)
@@ -230,16 +252,38 @@ export class ProductService {
                         organization: { connect: { id: organizationId } },
                     }),
                 },
-                    // Runs inside the product's own transaction; a mint failure
-                    // rolls the drop back with it.
-                    skus
+                    // Runs inside the product's own transaction; a failure in
+                    // either the mint or the gallery rolls the drop back too.
+                    skus || images?.length
                         ? async (tx, created) => {
-                            minted = await this.deps.skuMinting!.mintWithin(tx, {
-                                productId: created.id,
-                                groupCode: created.groupCode,
-                                totalSupply: created.totalSupply,
-                                count: skus.count,
-                            });
+                            if (skus) {
+                                minted = await this.deps.skuMinting!.mintWithin(tx, {
+                                    productId: created.id,
+                                    groupCode: created.groupCode,
+                                    totalSupply: created.totalSupply,
+                                    count: skus.count,
+                                });
+                            }
+                            if (images?.length) {
+                                await this.deps.products.writeImages(
+                                    created.id,
+                                    normaliseGallery(
+                                        images.map((image) => ({
+                                            assetId: image.assetId,
+                                            ...(image.position !== undefined
+                                                ? { position: image.position }
+                                                : {}),
+                                            ...(image.isPrimary !== undefined
+                                                ? { isPrimary: image.isPrimary }
+                                                : {}),
+                                            altText: image.altText ?? null,
+                                        })),
+                                        {},
+                                    ),
+                                    'append',
+                                    tx,
+                                );
+                            }
                         }
                         : undefined,
                 );
@@ -282,6 +326,224 @@ export class ProductService {
         await this.requireById(id);
         await this.deps.products.archive(id);
         await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_ARCHIVED, { productId: id });
+    }
+
+    // ── Gallery ─────────────────────────────────────────────────────────
+
+    async listImages(productId: string): Promise<ProductImageResponse[]> {
+        await this.requireById(productId);
+        return (await this.deps.products.listImages(productId)).map((row) =>
+            this.toImageResponse(row),
+        );
+    }
+
+    /** `POST /admin/products/:id/images` — append to the gallery. */
+    async attachImages(
+        productId: string,
+        dto: AttachProductImagesDto,
+    ): Promise<ProductImageResponse[]> {
+        await this.requireById(productId);
+        const existing = await this.deps.products.listImages(productId);
+
+        // Re-attaching an asset already in the live gallery is a client bug
+        // (usually a double-submit), and silently moving it would hide that.
+        const present = new Set(existing.map((row) => row.assetId));
+        const duplicate = dto.images.find((image) => present.has(image.assetId));
+        if (duplicate) {
+            throw AppError.conflict(
+                `Asset ${duplicate.assetId} is already in this product's gallery.`,
+                PRODUCTS_ERROR_CODES.IMAGE_DUPLICATE,
+            );
+        }
+
+        await this.assertUsableAssets(
+            productId,
+            dto.images.map((image) => image.assetId),
+        );
+
+        const entries = normaliseGallery(
+            [
+                ...existing.map((row) => ({
+                    assetId: row.assetId,
+                    position: row.position,
+                    isPrimary: row.isPrimary,
+                    altText: row.altText,
+                })),
+                ...dto.images.map((image) => ({
+                    assetId: image.assetId,
+                    ...(image.position !== undefined ? { position: image.position } : {}),
+                    ...(image.isPrimary !== undefined ? { isPrimary: image.isPrimary } : {}),
+                    altText: image.altText ?? null,
+                })),
+            ],
+            { totalWas: existing.length },
+        );
+
+        const rows = await this.deps.products.writeImages(productId, entries, 'append');
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, { productId });
+        return rows.map((row) => this.toImageResponse(row));
+    }
+
+    /** `PUT /admin/products/:id/images` — replace the gallery wholesale. */
+    async replaceImages(
+        productId: string,
+        dto: ReplaceProductImagesDto,
+    ): Promise<ProductImageResponse[]> {
+        await this.requireById(productId);
+
+        const seen = new Set<string>();
+        for (const image of dto.images) {
+            if (seen.has(image.assetId)) {
+                throw AppError.badRequest(
+                    `Asset ${image.assetId} appears twice in the gallery.`,
+                    PRODUCTS_ERROR_CODES.IMAGE_DUPLICATE,
+                );
+            }
+            seen.add(image.assetId);
+        }
+
+        await this.assertUsableAssets(
+            productId,
+            dto.images.map((image) => image.assetId),
+        );
+
+        const entries = normaliseGallery(
+            dto.images.map((image) => ({
+                assetId: image.assetId,
+                ...(image.position !== undefined ? { position: image.position } : {}),
+                ...(image.isPrimary !== undefined ? { isPrimary: image.isPrimary } : {}),
+                altText: image.altText ?? null,
+            })),
+            {},
+        );
+
+        const rows = await this.deps.products.writeImages(productId, entries, 'replace');
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, { productId });
+        return rows.map((row) => this.toImageResponse(row));
+    }
+
+    /** `PATCH /admin/products/:id/images/:imageId` — move or relabel one. */
+    async updateImage(
+        productId: string,
+        imageId: string,
+        dto: UpdateProductImageDto,
+    ): Promise<ProductImageResponse[]> {
+        await this.requireById(productId);
+        const target = await this.deps.products.findImage(productId, imageId);
+        if (!target) {
+            throw AppError.notFound(
+                'Image placement not found on this product',
+                PRODUCTS_ERROR_CODES.IMAGE_NOT_FOUND,
+            );
+        }
+
+        const existing = await this.deps.products.listImages(productId);
+        const entries = normaliseGallery(
+            existing.map((row) =>
+                row.id === imageId
+                    ? {
+                        assetId: row.assetId,
+                        position: dto.position ?? row.position,
+                        isPrimary: dto.isPrimary ?? row.isPrimary,
+                        altText: dto.altText !== undefined ? dto.altText : row.altText,
+                    }
+                    : {
+                        assetId: row.assetId,
+                        position: row.position,
+                        // A second row claiming primary is demoted below.
+                        isPrimary: dto.isPrimary === true ? false : row.isPrimary,
+                        altText: row.altText,
+                    },
+            ),
+            {},
+        );
+
+        const rows = await this.deps.products.writeImages(productId, entries, 'replace');
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, { productId });
+        return rows.map((row) => this.toImageResponse(row));
+    }
+
+    /** `DELETE /admin/products/:id/images/:imageId` */
+    async removeImage(productId: string, imageId: string): Promise<ProductImageResponse[]> {
+        await this.requireById(productId);
+        const target = await this.deps.products.findImage(productId, imageId);
+        if (!target) {
+            throw AppError.notFound(
+                'Image placement not found on this product',
+                PRODUCTS_ERROR_CODES.IMAGE_NOT_FOUND,
+            );
+        }
+        const rows = await this.deps.products.archiveImage(productId, imageId);
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, { productId });
+        return rows.map((row) => this.toImageResponse(row));
+    }
+
+    /**
+     * Refuses assets that would render as a broken image.
+     *
+     * Every failure is reported at once rather than on the first bad id — a
+     * client uploading a twelve-image gallery should not have to submit twelve
+     * times to learn about twelve problems.
+     */
+    private async assertUsableAssets(
+        productId: string | null,
+        assetIds: string[],
+    ): Promise<void> {
+        if (assetIds.length === 0) return;
+        if (!this.deps.mediaAssets) {
+            throw AppError.badRequest(
+                'This deployment cannot attach media; create the drop without `images`.',
+                PRODUCTS_ERROR_CODES.MEDIA_UNAVAILABLE,
+            );
+        }
+
+        const found = await this.deps.mediaAssets.findByIds(assetIds);
+        const byId = new Map(found.map((asset) => [asset.id, asset]));
+        const problems: string[] = [];
+
+        for (const assetId of assetIds) {
+            const asset = byId.get(assetId);
+            if (!asset) {
+                problems.push(`${assetId}: no such media asset`);
+                continue;
+            }
+            if (asset.archivedAt) {
+                problems.push(`${assetId}: asset is archived`);
+                continue;
+            }
+            if (!PRODUCT_IMAGE_ASSET_TYPES.includes(asset.assetType as 'DROP_IMAGE')) {
+                // A private-prefix asset in a public gallery is a URL that
+                // 403s for every shopper, forever.
+                problems.push(
+                    `${assetId}: assetType is ${asset.assetType}, expected one of ` +
+                    `${PRODUCT_IMAGE_ASSET_TYPES.join(', ')}`,
+                );
+                continue;
+            }
+            if (asset.productId && asset.productId !== productId) {
+                problems.push(`${assetId}: uploaded against a different product`);
+            }
+        }
+
+        if (problems.length > 0) {
+            throw AppError.badRequest(
+                `Cannot attach: ${problems.join('; ')}`,
+                PRODUCTS_ERROR_CODES.IMAGE_ASSET_INVALID,
+            );
+        }
+    }
+
+    private toImageResponse(row: ProductImageRow): ProductImageResponse {
+        return {
+            imageId: row.id,
+            assetId: row.assetId,
+            url: this.deps.mediaUrls?.publicUrl(row.asset.storageRef) ?? null,
+            storageRef: row.asset.storageRef,
+            position: row.position,
+            isPrimary: row.isPrimary,
+            altText: row.altText,
+            createdAt: row.createdAt.toISOString(),
+        };
     }
 
     /** The first renderable image URL for a listing row, or null. */
@@ -397,10 +659,54 @@ function toSkuUnit(sku: SkuUnitRow) {
     };
 }
 
+/**
+ * Turns whatever the client sent into a gallery that satisfies both
+ * invariants: contiguous 0-based positions, and exactly one primary.
+ *
+ * Neither is enforced by the schema — `position` is a plain Int and
+ * `isPrimary` a plain Boolean, so nothing stops two rows claiming the card
+ * image or a gallery numbering itself 0, 5, 5, 11. Both are the kind of drift
+ * a drag-and-drop UI produces constantly, and both render wrong rather than
+ * failing loudly, so they are normalised on every write.
+ *
+ * Ordering rule: explicit `position` wins; entries without one keep their
+ * arrival order, after the positioned ones. `totalWas` biases appended entries
+ * to the end of an existing gallery instead of interleaving them.
+ */
+export function normaliseGallery(
+    entries: {
+        assetId: string;
+        position?: number | undefined;
+        isPrimary?: boolean | undefined;
+        altText: string | null;
+    }[],
+    opts: { totalWas?: number },
+): NormalisedImage[] {
+    const ordered = entries
+        .map((entry, index) => ({
+            entry,
+            sortKey: entry.position ?? (opts.totalWas ?? 0) + index,
+            index,
+        }))
+        .sort((a, b) => a.sortKey - b.sortKey || a.index - b.index);
+
+    // First explicit claim wins; a second is demoted rather than rejected,
+    // because "make this one the cover" is the intent behind every such
+    // payload and erroring on it would be pedantry.
+    const claimed = ordered.find((row) => row.entry.isPrimary === true);
+
+    return ordered.map((row, position) => ({
+        assetId: row.entry.assetId,
+        position,
+        isPrimary: claimed ? row.entry.assetId === claimed.entry.assetId : position === 0,
+        altText: row.entry.altText,
+    }));
+}
+
 /** `undefined` leaves the relation alone; `null`/'' disconnects it. */
 function relationUpdate(
     relation: 'collection' | 'artist' | 'organization',
-    id: string | undefined,
+    id: string | null | undefined,
 ): Record<string, unknown> {
     if (id === undefined) return {};
     return { [relation]: id ? { connect: { id } } : { disconnect: true } };

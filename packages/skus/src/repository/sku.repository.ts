@@ -99,6 +99,16 @@ const detailSelect = {
 
 export type SkuDetailRow = Prisma.SkuGetPayload<{ select: typeof detailSelect }>;
 
+/** The subset of a unit the tag-binding rules need to decide. */
+export interface TagBindTarget {
+    id: string;
+    skuCode: string;
+    serialNumber: number;
+    tagId: string | null;
+    tagLifecycleState: TagLifecycleState;
+    claimedStatus: ClaimedStatus;
+}
+
 export interface MintSpec {
     productId: string;
     groupCode: string;
@@ -234,6 +244,91 @@ export class SkuRepository {
             skuCodes: rows.map((row) => row.skuCode),
             tagsBound: tagIds.length,
         };
+    }
+
+    // ── Tag binding ─────────────────────────────────────────────────────
+
+    /**
+     * Resolves manifest rows to units, by serial number or by code.
+     *
+     * One query for the whole manifest rather than one per row — a 500-line
+     * vendor file should cost one round trip, and every unresolvable row has
+     * to be reported together rather than failing on the first.
+     */
+    findForBinding(
+        productId: string,
+        serialNumbers: number[],
+        skuCodes: string[],
+    ): Promise<TagBindTarget[]> {
+        const or: Prisma.SkuWhereInput[] = [];
+        if (serialNumbers.length > 0) or.push({ serialNumber: { in: serialNumbers } });
+        if (skuCodes.length > 0) or.push({ skuCode: { in: skuCodes } });
+        if (or.length === 0) return Promise.resolve([]);
+
+        return this.prisma.sku.findMany({
+            where: { productId, OR: or },
+            select: {
+                id: true,
+                skuCode: true,
+                serialNumber: true,
+                tagId: true,
+                tagLifecycleState: true,
+                claimedStatus: true,
+            },
+        });
+    }
+
+    findByIdForBinding(skuId: string): Promise<TagBindTarget | null> {
+        return this.prisma.sku.findUnique({
+            where: { id: skuId },
+            select: {
+                id: true,
+                skuCode: true,
+                serialNumber: true,
+                tagId: true,
+                tagLifecycleState: true,
+                claimedStatus: true,
+            },
+        });
+    }
+
+    /**
+     * Applies a whole manifest in one transaction.
+     *
+     * All-or-nothing on purpose: a partially applied manifest leaves a box of
+     * physical tags in an unknown state, and working out which of 500 items
+     * got written is a warehouse problem, not a database one.
+     */
+    bindTags(
+        bindings: {
+            skuId: string;
+            tagId: string;
+            vendorId?: string | null | undefined;
+            provisioningBatchId?: string | null | undefined;
+        }[],
+    ): Promise<void> {
+        const now = new Date();
+        return this.prisma.$transaction(async (tx) => {
+            for (const binding of bindings) {
+                await tx.sku.update({
+                    where: { id: binding.skuId },
+                    data: {
+                        tagId: binding.tagId,
+                        // A unit with a tag written to it is BOUND. ACTIVE is
+                        // reached on first claim, by the claims module.
+                        tagLifecycleState: TagLifecycleState.BOUND,
+                        ...(binding.vendorId !== undefined && binding.vendorId !== null
+                            ? { vendorId: binding.vendorId }
+                            : {}),
+                        ...(binding.provisioningBatchId !== undefined &&
+                            binding.provisioningBatchId !== null
+                            ? { provisioningBatchId: binding.provisioningBatchId }
+                            : {}),
+                        updatedAt: now,
+                    },
+                });
+            }
+        });
     }
 
     /** Units already minted for a drop, counted inside the caller's transaction. */

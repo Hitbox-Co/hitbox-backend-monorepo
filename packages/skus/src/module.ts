@@ -5,6 +5,7 @@ import { createModuleLogger } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import {
     SKU_READ_CAPABILITY,
+    SKU_TAG_CAPABILITY,
     SKU_WRITE_CAPABILITY,
     SKUS_MODULE,
 } from './constants/skus.constant';
@@ -107,6 +108,15 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
                 controller.mint,
             );
 
+            // Applying a tag manifest to an already-minted edition. Gated on
+            // tag custody, NOT on minting: a Drop Manager mints the edition,
+            // and whoever holds `nfc-tag-claim:manage` binds the tags to it.
+            router.post(
+                '/tags',
+                deps.guard.requirePermission(SKU_TAG_CAPABILITY, { context: productContext }),
+                controller.bulkBindTags,
+            );
+
             return router;
         },
 
@@ -132,6 +142,11 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
                 '/:skuId',
                 deps.guard.requirePermission(SKU_READ_CAPABILITY, { context: skuContext }),
                 controller.getById,
+            );
+            router.patch(
+                '/:skuId/tag',
+                deps.guard.requirePermission(SKU_TAG_CAPABILITY, { context: skuContext }),
+                controller.bindTag,
             );
 
             return router;

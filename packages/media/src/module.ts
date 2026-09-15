@@ -7,6 +7,7 @@ import { MediaController } from './controller/media.controller';
 import type { MediaCallerResolver } from './controller/media.controller';
 import type { IObjectStorage } from './domain/interfaces/object-storage.interface';
 import { MediaRepository } from './repository/media.repository';
+import type { AssetRef } from './repository/media.repository';
 import { MediaService } from './service/media.service';
 import type { ScanPipelineMode } from './service/media.service';
 
@@ -63,6 +64,18 @@ export interface MediaModuleDeps {
 
 export interface MediaModule {
     createRouter(requireAuth: RequestHandler): Router;
+    /**
+     * Asset lookup for modules that join `MediaAsset` into their own tables —
+     * today the products gallery. Media owns the table, so media answers
+     * "does this asset exist, is it an image, is it archived" rather than
+     * letting a consumer query it directly.
+     */
+    assets: IAssetLookup;
+}
+
+/** The provider side of products' `IMediaAssets` port. */
+export interface IAssetLookup {
+    findByIds(ids: string[]): Promise<AssetRef[]>;
 }
 
 export function createMediaModule(deps: MediaModuleDeps): MediaModule {
@@ -78,6 +91,8 @@ export function createMediaModule(deps: MediaModuleDeps): MediaModule {
     const controller = new MediaController(service, deps.resolveCaller);
 
     return {
+        assets: { findByIds: (ids) => repository.findManyByIds(ids) },
+
         createRouter(requireAuth) {
             const router = Router();
 

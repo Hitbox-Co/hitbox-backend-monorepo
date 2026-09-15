@@ -2,7 +2,12 @@ import type { Request, RequestHandler } from 'express';
 import { asyncHandler } from '@hitbox/shared';
 import { buildSkuAccess } from '../domain/sku-access';
 import type { SkuAccess, SkuPrincipal } from '../domain/sku-access';
-import { listSkusQuerySchema, mintSkusSchema } from '../dto/sku.dto';
+import {
+    bindTagSchema,
+    bulkBindTagsSchema,
+    listSkusQuerySchema,
+    mintSkusSchema,
+} from '../dto/sku.dto';
 import type { SkuService } from '../service/sku.service';
 
 /**
@@ -27,6 +32,33 @@ export class SkuController {
             dto,
         );
         res.status(201).json({ data: result });
+    });
+
+    /**
+     * POST /admin/products/:productId/skus/tags — apply a vendor manifest.
+     *
+     * The batch is all-or-nothing: a half-applied manifest leaves a box of
+     * physical tags in a state nobody can reconcile from the database.
+     */
+    bulkBindTags: RequestHandler = asyncHandler(async (req, res) => {
+        const access = await this.access(req);
+        const dto = bulkBindTagsSchema.parse(req.body);
+        res.json({
+            data: await this.service.bulkBindTags(
+                access,
+                req.params.productId as string,
+                dto,
+            ),
+        });
+    });
+
+    /** PATCH /admin/skus/:skuId/tag — bind or replace one unit's tag. */
+    bindTag: RequestHandler = asyncHandler(async (req, res) => {
+        const access = await this.access(req);
+        const dto = bindTagSchema.parse(req.body);
+        res.json({
+            data: await this.service.bindTag(access, req.params.skuId as string, dto),
+        });
     });
 
     /** GET /admin/products/:productId/skus — the units of one drop. */

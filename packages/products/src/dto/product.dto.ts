@@ -3,6 +3,8 @@ import { ComplianceStatus, DropStatus } from '@hitbox/database';
 import {
     DEFAULT_PRODUCT_GROUP_CODE,
     PRODUCT_CODE_GROUP_LENGTH,
+    PRODUCT_CODE_UNIQUE_LENGTH,
+    PRODUCT_IMAGE_MAX,
     SKU_INLINE_MINT_MAX,
 } from '../constants/products.constant';
 
@@ -19,17 +21,97 @@ import {
  * `genre` is gone entirely and has no replacement column.
  */
 
-// ── Queries ─────────────────────────────────────────────────────────────
+// ── Input coercion ──────────────────────────────────────────────────────
 
-/** A free-form catalog facet: short, trimmed, non-empty. */
-const facet = z.string().trim().min(1).max(64);
+/**
+ * These wrappers exist because the strict versions produced a wall of 422s
+ * against every real client.
+ *
+ * A browser form, an HTML input, a Postman collection and most HTTP clients
+ * all send numbers and booleans as **strings**, and send a field the user left
+ * blank as `""` or `null` rather than omitting it. None of that is a malformed
+ * request — it is what "no value" looks like over the wire — so the schema
+ * accepts it and normalises, instead of rejecting it and making the client
+ * pre-clean its own payload.
+ *
+ * What is NOT relaxed: types that cannot be recovered unambiguously. A
+ * non-numeric string is still an error, and an unknown enum value is still an
+ * error. The goal is to stop rejecting well-meant input, not to stop
+ * validating.
+ */
+
+/** A free-form catalog facet: short, trimmed. `""`/null normalise to null. */
+const facet = z
+    .union([z.string(), z.null()])
+    .transform((value) => {
+        const trimmed = value?.trim() ?? '';
+        return trimmed === '' ? null : trimmed;
+    })
+    .pipe(z.string().max(64).nullable());
+
+/** A facet in a query string, where null has no meaning. */
+const facetQuery = z.string().trim().min(1).max(64);
+
+/** Free text. `""` and `null` both mean "no value" and normalise to null. */
+const optionalText = (max: number) =>
+    z
+        .union([z.string(), z.null()])
+        .transform((value) => {
+            const trimmed = value?.trim() ?? '';
+            return trimmed === '' ? null : trimmed;
+        })
+        .pipe(z.string().max(max).nullable());
+
+/**
+ * A uuid reference. `""` normalises to `null`, and **null is preserved** —
+ * on create it means "not set", on update it means "disconnect this relation",
+ * and collapsing it to `undefined` would silently turn a detach into a no-op.
+ */
+const optionalUuid = z
+    .union([z.string(), z.null()])
+    .transform((value) => (value === '' || value == null ? null : value))
+    .pipe(z.string().uuid().nullable());
+
+/** An integer that tolerates `"500"`. Rejects `"abc"`, as it should. */
+const int = (opts: { min?: number; max?: number } = {}) => {
+    let schema = z.coerce.number().int();
+    if (opts.min !== undefined) schema = schema.min(opts.min);
+    if (opts.max !== undefined) schema = schema.max(opts.max);
+    return schema;
+};
+
+/**
+ * A boolean that tolerates `"true"` / `"false"` / `1` / `0`.
+ *
+ * Explicitly NOT `z.coerce.boolean()`, which is a trap: it applies
+ * `Boolean(value)`, and `Boolean("false")` is `true` — so the single most
+ * common wire representation of false would silently become true.
+ */
+const bool = z.union([
+    z.boolean(),
+    z.literal('true').transform(() => true),
+    z.literal('false').transform(() => false),
+    z.literal(1).transform(() => true),
+    z.literal(0).transform(() => false),
+    z.literal('1').transform(() => true),
+    z.literal('0').transform(() => false),
+]);
+
+/** An enum that tolerates the lower-case spelling a UI select often sends. */
+const upperEnum = <T extends Record<string, string>>(values: T) =>
+    z
+        .union([z.string(), z.null()])
+        .transform((value) => value?.toUpperCase())
+        .pipe(z.nativeEnum(values));
+
+// ── Queries ─────────────────────────────────────────────────────────────
 
 export const listProductsQuerySchema = z.object({
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce.number().int().min(1).max(100).default(20),
-    category: facet.optional(),
-    vertical: facet.optional(),
-    rarity: facet.optional(),
+    category: facetQuery.optional(),
+    vertical: facetQuery.optional(),
+    rarity: facetQuery.optional(),
     status: z.nativeEnum(DropStatus).optional(),
     collectionId: z.string().uuid().optional(),
     artistId: z.string().uuid().optional(),
@@ -49,33 +131,132 @@ export const productDetailQuerySchema = z.object({
 });
 export type ProductDetailQuery = z.infer<typeof productDetailQuerySchema>;
 
+// ── Product images ──────────────────────────────────────────────────────
+
+/**
+ * One gallery placement.
+ *
+ * The image itself is a `MediaAsset` uploaded through
+ * `POST /admin/media/upload-url`; this row only carries *where it sits* on the
+ * product. That split is why `assetId` is the only required field — the file
+ * already exists, this is arranging it.
+ */
+export const productImageInputSchema = z
+    .object({
+        assetId: z.string().uuid(),
+        /**
+         * Display order, 0-first. Omit and entries take the order they were
+         * sent in; the server renumbers to a contiguous 0..n-1 range either
+         * way, so gaps and duplicates from a drag-and-drop UI are harmless.
+         */
+        position: int({ min: 0, max: 999 }).optional(),
+        /**
+         * The card/hero image. Exactly one placement carries it: setting it on
+         * a second entry clears the first, and if no entry claims it the
+         * lowest position gets it — a product whose gallery has no primary
+         * renders with no image at all on every listing surface.
+         */
+        isPrimary: bool.optional(),
+        altText: optionalText(300).optional(),
+    })
+    .strict();
+export type ProductImageInput = z.infer<typeof productImageInputSchema>;
+
+/** `POST /admin/products/:id/images` — append to the gallery. */
+export const attachProductImagesSchema = z
+    .object({
+        images: z.array(productImageInputSchema).min(1).max(PRODUCT_IMAGE_MAX),
+    })
+    .strict();
+export type AttachProductImagesDto = z.infer<typeof attachProductImagesSchema>;
+
+/**
+ * `PUT /admin/products/:id/images` — replace the gallery wholesale.
+ *
+ * Replace rather than diff, for the same reason market country lists are
+ * replaced: after a drag-and-drop reorder the client knows the final state and
+ * not the sequence of moves that produced it. An empty array clears the
+ * gallery, which is a legitimate thing to want and impossible to express with
+ * a merge.
+ */
+export const replaceProductImagesSchema = z
+    .object({
+        images: z.array(productImageInputSchema).max(PRODUCT_IMAGE_MAX),
+    })
+    .strict();
+export type ReplaceProductImagesDto = z.infer<typeof replaceProductImagesSchema>;
+
+/** `PATCH /admin/products/:id/images/:imageId` — move or relabel one. */
+export const updateProductImageSchema = z
+    .object({
+        position: int({ min: 0, max: 999 }).optional(),
+        isPrimary: bool.optional(),
+        altText: optionalText(300).optional(),
+    })
+    .strict();
+export type UpdateProductImageDto = z.infer<typeof updateProductImageSchema>;
+
+export interface ProductImageResponse {
+    imageId: string;
+    assetId: string;
+    /** Renderable URL, or null when no bucket is configured on this deploy. */
+    url: string | null;
+    storageRef: string;
+    position: number;
+    isPrimary: boolean;
+    altText: string | null;
+    createdAt: string;
+}
+
 // ── Mutations ───────────────────────────────────────────────────────────
 
 export const createProductSchema = z.object({
-    name: z.string().min(1).max(255),
-    description: z.string().optional(),
+    name: z.string().trim().min(1).max(255),
+    description: optionalText(5000).optional(),
     vertical: facet.optional(),
     category: facet.optional(),
     rarity: facet.optional(),
-    collectionId: z.string().uuid().optional(),
-    artistId: z.string().uuid().optional(),
-    organizationId: z.string().uuid().optional(),
+    collectionId: optionalUuid.optional(),
+    artistId: optionalUuid.optional(),
+    organizationId: optionalUuid.optional(),
     /** Number of serialized SKUs that will exist for this drop. */
-    totalSupply: z.number().int().min(0).default(0),
+    totalSupply: int({ min: 0 }).default(0),
     /** Max units one buyer may purchase; omit for unlimited. */
-    purchaseLimit: z.number().int().positive().optional(),
-    releaseStart: z.coerce.date().optional(),
-    releaseEnd: z.coerce.date().optional(),
+    purchaseLimit: int({ min: 1 }).nullish(),
+    releaseStart: z.coerce.date().nullish(),
+    releaseEnd: z.coerce.date().nullish(),
     /** New drops start in DRAFT; the releases module drives the rest. */
-    status: z.nativeEnum(DropStatus).default(DropStatus.DRAFT),
-    isAgeSpecific: z.boolean().default(false),
-    minimumAge: z.number().int().min(0).max(120).optional(),
+    status: upperEnum(DropStatus).default(DropStatus.DRAFT),
+    isAgeSpecific: bool.default(false),
+    minimumAge: int({ min: 0, max: 120 }).nullish(),
     /** Pointer to the published odds disclosure (required for randomised drops). */
-    oddsDisclosureRef: z.string().max(500).optional(),
-    /** 4 trailing digits of the group code identifying the product group. */
+    oddsDisclosureRef: optionalText(500).optional(),
+    /**
+     * The 4-digit **group suffix**, not the full product code.
+     *
+     * The server returns a 12-digit `groupCode` (8 random digits + this
+     * suffix), so a client that round-trips the value it got back is sending
+     * 12 digits — which is why the 12-digit form is accepted here and its last
+     * four taken. Rejecting it produced a 422 that read "Must be 4 digits" at a
+     * field the API had just handed the caller as 12.
+     */
     groupCode: z
-        .string()
-        .regex(new RegExp(`^\\d{${PRODUCT_CODE_GROUP_LENGTH}}$`), 'Must be 4 digits')
+        .union([z.string(), z.number(), z.null()])
+        .transform((value) => (value == null ? DEFAULT_PRODUCT_GROUP_CODE : String(value).trim()))
+        .transform((value) =>
+            value.length === PRODUCT_CODE_UNIQUE_LENGTH + PRODUCT_CODE_GROUP_LENGTH
+                ? value.slice(-PRODUCT_CODE_GROUP_LENGTH)
+                : value,
+        )
+        .pipe(
+            z
+                .string()
+                .regex(
+                    new RegExp(`^\\d{${PRODUCT_CODE_GROUP_LENGTH}}$`),
+                    `Must be ${PRODUCT_CODE_GROUP_LENGTH} digits (the group suffix), ` +
+                    `or the full ${PRODUCT_CODE_UNIQUE_LENGTH + PRODUCT_CODE_GROUP_LENGTH}-digit product code`,
+                ),
+        )
         .default(DEFAULT_PRODUCT_GROUP_CODE),
     /**
      * Mint the edition in the same request that creates the drop.
@@ -100,10 +281,18 @@ export const createProductSchema = z.object({
      */
     skus: z
         .object({
-            count: z.number().int().min(1).max(SKU_INLINE_MINT_MAX),
+            count: int({ min: 1, max: SKU_INLINE_MINT_MAX }),
         })
         .strict()
         .optional(),
+    /**
+     * Attach already-uploaded media as the drop's gallery.
+     *
+     * Each entry references a `MediaAsset` that was uploaded through
+     * `POST /admin/media/upload-url` — this joins it to the product as a
+     * `ProductImage`, in the same transaction as the product itself.
+     */
+    images: z.array(productImageInputSchema).max(PRODUCT_IMAGE_MAX).optional(),
 });
 
 export type CreateProductDto = z.infer<typeof createProductSchema>;

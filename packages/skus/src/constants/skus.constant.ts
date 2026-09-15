@@ -12,6 +12,12 @@ export const SKUS_ERROR_CODES = {
     /** Refused: the variant does not belong to the product being minted. */
     VARIANT_MISMATCH: 'SKUS_VARIANT_MISMATCH',
     FORBIDDEN: 'SKUS_FORBIDDEN',
+    /** Refused: a binding names a unit that is not in this drop. */
+    UNIT_NOT_IN_PRODUCT: 'SKUS_UNIT_NOT_IN_PRODUCT',
+    /** Refused: the unit already carries a tag and `replace` was not set. */
+    TAG_ALREADY_BOUND: 'SKUS_TAG_ALREADY_BOUND',
+    /** Refused: re-tagging a claimed unit whose current tag is still healthy. */
+    TAG_REPLACE_REFUSED: 'SKUS_TAG_REPLACE_REFUSED',
 } as const;
 
 /**
@@ -58,6 +64,15 @@ export const SKU_MINT_MAX_BATCH = 1000;
 
 /** Retries when a concurrent mint takes the serial range first. */
 export const SKU_MINT_MAX_ATTEMPTS = 5;
+
+/**
+ * Tag bindings per bulk call.
+ *
+ * Matched to a vendor manifest: a box of tags ships in the hundreds, and the
+ * whole batch is bound in one transaction so a half-applied manifest is not a
+ * state anyone has to reconcile by hand.
+ */
+export const SKU_TAG_BIND_MAX = 1000;
 
 /** `skuCode` = `<groupCode>-<serial, zero-padded to this width>`. */
 export const SKU_SERIAL_PAD = 6;

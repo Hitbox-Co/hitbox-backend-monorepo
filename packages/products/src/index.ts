@@ -11,15 +11,24 @@ export {
 
 // DTOs
 export {
+    attachProductImagesSchema,
     createProductSchema,
     listProductsQuerySchema,
+    productImageInputSchema,
+    replaceProductImagesSchema,
+    updateProductImageSchema,
     updateProductSchema,
 } from './dto/product.dto';
 export type {
+    AttachProductImagesDto,
     CreateProductDto,
     ListProductsQuery,
     PaginatedResult,
+    ProductImageInput,
+    ProductImageResponse,
+    ReplaceProductImagesDto,
     UpdateProductDto,
+    UpdateProductImageDto,
 } from './dto/product.dto';
 
 // Service type (for other modules that receive it via DI)
@@ -30,6 +39,13 @@ export { PRODUCT_SORTS, PUBLIC_PRODUCT_WHERE } from './repository/product.reposi
 // Port: bootstrap injects an adapter that turns a MediaAsset storageRef into
 // a renderable URL. Products owns no object-storage knowledge itself.
 export type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
+
+// Port: bootstrap injects @hitbox/media, which owns MediaAsset, so the gallery
+// can validate an asset exists and is an image before joining to it.
+export type {
+    IMediaAssets,
+    MediaAssetRef,
+} from './domain/interfaces/media-assets.interface';
 
 // Port: bootstrap injects @hitbox/skus so a drop and its serialized edition
 // are created in one transaction. Products never writes the Sku table itself.

@@ -17,7 +17,13 @@
  */
 
 export { createMediaModule } from './module';
-export type { MediaModule, MediaModuleDeps, MediaPermissionGuard } from './module';
+export type {
+    IAssetLookup,
+    MediaModule,
+    MediaModuleDeps,
+    MediaPermissionGuard,
+} from './module';
+export type { AssetRef } from './repository/media.repository';
 
 export {
     ALLOWED_MIME_TYPES,

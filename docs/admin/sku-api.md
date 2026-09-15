@@ -6,6 +6,9 @@
 > How much of a unit you get back depends on **your grants**, not on the
 > endpoint. Section 6 is the matrix.
 >
+> Creating the drop itself, the accepted request formats (and the `422`
+> troubleshooting table), and the image gallery:
+> [product-upload-api.md](product-upload-api.md).
 > Session handling and the Clerk flow: [authentication.md](authentication.md).
 > The rest of the admin write surface: [admin-write-apis.md](admin-write-apis.md).
 > Screen-by-screen reference: [admin-console-api.md](admin-console-api.md).
@@ -79,7 +82,10 @@ Content-Type: application/json
 | `groupCode` | 4 digits | the **group suffix**; the server prefixes 8 random digits |
 | `status` | `DropStatus` | defaults to `DRAFT`; the releases module drives the rest |
 | `skus.count` | int 1–1000 | omit the whole block to create a catalog entry with no units |
-| `skus.variantId` | uuid | mint against one variant of the drop |
+| `images[]` | ≤24 entries | attaches uploaded assets as the gallery — [product-upload-api.md §3](product-upload-api.md) |
+
+The full field table, and what the body may look like on the wire, are in
+[product-upload-api.md §2](product-upload-api.md).
 
 `vertical`, `category` and `rarity` are free-form strings, not enums — the
 columns are `String?` and a fixed list kept only in TypeScript would be a
@@ -90,7 +96,11 @@ second source of truth that drifts.
 Binding a physical NFC tag requires `nfc-tag-claim:manage`. This route checks
 `drop:manage`. A payload that bound tags here would let a caller write to the
 one table the platform's authenticity guarantee rests on without ever holding
-the capability that governs it. Mint tags through §3, which checks for it.
+the capability that governs it. Bind tags through §3a, which checks for it.
+
+There is no `skus.variantId` either: a drop being created has no variants yet,
+so any id supplied would necessarily belong to a *different* product — and the
+foreign key would accept it. Mint per variant through §3.
 
 ### Response `201`
 
@@ -209,6 +219,139 @@ The supply cap is enforced **inside** the same transaction. Checked outside it,
 two callers each see 400 of 500 minted and each mint 100, and the edition
 quietly becomes 600 — in a table whose entire purpose is to say how many of a
 thing exist.
+
+---
+
+## 3a. "I'm minting 500 units — how do 500 different tag IDs get in?"
+
+**Not through the mint call.** Passing 500 UIDs to `POST .../skus` requires
+knowing all 500 *before a single unit exists*, which is not how tag
+provisioning works: the units are minted when the drop is planned, and the
+physical tags arrive later, in boxes, with a manifest.
+
+So there are two paths, and for anything past a handful of units you want the
+second.
+
+### Path A — tags in hand at mint time (small batches)
+
+Pass `tagIds` alongside `count`, exactly as long as `count` (§3). Fine for 10
+units. For 500 it means a 500-element array in one request body, and it is
+impossible past 1000 because that is the batch cap.
+
+### Path B — mint bare, bind from the manifest (the normal path)
+
+```
+1. POST /admin/products/:id/skus        { "count": 500 }
+      → 500 units, UNPROVISIONED, no tags
+2.   … tags are manufactured and shipped …
+3. POST /admin/products/:id/skus/tags   { "bindings": [ … ] }
+      → units become BOUND
+```
+
+Step 1 and step 3 are days or weeks apart, which is the point.
+
+### `POST /api/v1/admin/products/:productId/skus/tags`
+
+**Capability: `nfc-tag-claim:manage`** — deliberately *not* the minting
+capability. A Drop Manager mints the edition; whoever holds tag custody binds
+the tags. Today only `HITBOX_SYSTEM_ADMIN` holds it.
+
+The body is a direct translation of a vendor CSV (`serial,tagId` per line),
+because that is what actually arrives with a box of tags:
+
+```json
+{
+  "bindings": [
+    { "serialNumber": 1, "tagId": "04:A3:9B:2C:5D:6E:80" },
+    { "serialNumber": 2, "tagId": "04-a3-9b-2c-5d-6e-81" },
+    { "serialNumber": 3, "tagId": "04a39b2c5d6e82" }
+  ],
+  "vendorId": "11112222-3333-4444-5555-666677778888",
+  "provisioningBatchId": "BATCH-2026-09-41",
+  "replace": false
+}
+```
+
+| Field | Notes |
+|---|---|
+| `bindings[].serialNumber` | position in the edition — **or** |
+| `bindings[].skuCode` | the full code. Exactly one of the two per row |
+| `bindings[].tagId` | hex, any separator style |
+| `vendorId` / `provisioningBatchId` | applied to every unit in the batch |
+| `replace` | allow overwriting a tag already bound. Default `false` |
+
+Up to **1000 bindings per call**. A 10,000-unit edition is ten calls.
+
+```json
+{
+  "data": {
+    "productId": "0f1e2d3c-…",
+    "bound": 3,
+    "items": [
+      { "skuCode": "123456780042-000001", "serialNumber": 1, "tagId": "04A39B2C5D6E80", "replaced": false },
+      { "skuCode": "123456780042-000002", "serialNumber": 2, "tagId": "04A39B2C5D6E81", "replaced": false },
+      { "skuCode": "123456780042-000003", "serialNumber": 3, "tagId": "04A39B2C5D6E82", "replaced": false }
+    ]
+  }
+}
+```
+
+### Five rules that make this safe
+
+**1. Tags are normalised before anything else.** `04:A3:9B:…`, `04-a3-9b-…`
+and `04a39b…` are one tag, stored as `04A39B…`. `Sku.tagId` is unique
+platform-wide and that index is the primary defence against cloned tags — it
+only works if the stored form is canonical. A batch containing the same
+physical tag under two spellings is rejected as a duplicate.
+
+**2. The batch is all-or-nothing.** One transaction. A half-applied manifest
+leaves a box of physical tags in a state nobody can reconcile from the
+database — working out which of 500 items got written is a warehouse problem.
+
+**3. Every problem is reported at once.** The manifest is applied by a person
+with a box in front of them; telling them about one bad row per request is 40
+round trips.
+
+```json
+{ "error": {
+    "code": "SKUS_UNIT_NOT_IN_PRODUCT",
+    "message": "Manifest rejected: #501: not a unit of this drop; #14: already bound to 04A39B2C5D6E77; send replace: true to overwrite",
+    "details": null } }
+```
+
+**4. Re-sending an identical binding is a no-op, not an error.** Retrying a
+timed-out manifest is safe.
+
+**5. Re-tagging a claimed unit is refused.** Even with `replace: true`, a unit
+whose `claimedStatus` is `CLAIMED` is refused unless its tag is already marked
+`LOST`, `REVOKED` or `DISPUTED`. The owner's app and the unit's hash chain are
+keyed to the tag it was claimed with; swapping it under a live owner silently
+breaks verification for the person holding the object. Mark the old tag lost
+first — that is what those states are for.
+
+```json
+{ "error": {
+    "code": "SKUS_TAG_REPLACE_REFUSED",
+    "message": "123456780042-000014: is claimed and its tag is ACTIVE; mark the tag LOST, REVOKED or DISPUTED before re-tagging",
+    "details": null } }
+```
+
+### `PATCH /api/v1/admin/skus/:skuId/tag`
+
+One unit, same rules. For the single-item case — a chip failed, an item was
+re-tagged after repair.
+
+```json
+{ "tagId": "04A39B2C5D6E99", "replace": true, "provisioningBatchId": "BATCH-2026-10-02" }
+```
+
+Returns the full unit detail, shaped for your grants (§6).
+
+### Tracking progress
+
+`GET /admin/products/:id/skus/summary` reports `tagged` / `untagged`, and
+`GET /admin/products/:id/skus?tagged=false` lists exactly the units still
+waiting for one. That pair is how an operator drives a partial rollout.
 
 ---
 
@@ -491,6 +634,9 @@ All errors use the platform envelope:
 | `409` | `SKUS_SUPPLY_EXCEEDED` | minting would push the edition past `totalSupply` |
 | `409` | `SKUS_TAG_TAKEN` | an NFC tag UID is already bound to another unit |
 | `409` | `SKUS_SERIAL_TAKEN` | five consecutive serial-range collisions |
+| `409` | `SKUS_UNIT_NOT_IN_PRODUCT` | a manifest row names a unit that is not in this drop |
+| `409` | `SKUS_TAG_ALREADY_BOUND` | the unit carries a tag and `replace` was not set |
+| `409` | `SKUS_TAG_REPLACE_REFUSED` | re-tagging a claimed unit whose tag is still healthy |
 | `422` | `VALIDATION_ERROR` | schema failure — e.g. `tagIds` length ≠ `count` |
 
 **Out-of-scope records return `404`, not `403`.** A `403` confirms the id
@@ -515,8 +661,8 @@ its own `firstSerial`/`lastSerial`; poll `/skus/summary` for progress. Do not
 run the batches in parallel — they will collide on the serial range, and while
 the retry handles it correctly, serialised calls are faster.
 
-**Binding tags to already-minted units** is not yet supported. Tags are bound
-at mint time. See §9.
+**Binding tags to already-minted units** is the normal path for any edition
+past a handful — mint bare, then apply the vendor manifest. See §3a.
 
 **Rendering an inventory table.** Read `/skus/summary` for the header counts and
 `/skus?page=…` for the rows — the summary is a single grouped query and is much
@@ -533,8 +679,8 @@ name will be wrong the moment an operator defines a new role.
 
 | Gap | Note |
 |---|---|
-| Bind a tag to an existing unit | `PATCH /admin/skus/:skuId/tag`, gated on `nfc-tag-claim:manage`. The main reason to want this: tags arrive from the vendor after the edition is minted |
+| Change a tag's lifecycle state | No endpoint sets `LOST` / `REVOKED` / `DISPUTED`, which means the re-tag path in §3a rule 5 cannot currently be unblocked for a claimed unit. This is the most useful next addition |
 | Block / unblock resale on a unit | `resaleBlocked` + `resaleBlockedReason` are readable and set to `false` at mint; nothing writes them |
 | Archive a unit | `Sku.archivedAt` is readable and filterable; nothing sets it |
 | Transfer ownership administratively | ownership moves only through the claims module today |
-| Bulk tag import from a supply manifest | the `supply` module owns `SupplyBatch`; no endpoint joins a manifest to a mint |
+| Link a binding to a `SupplyBatch` | `provisioningBatchId` is a free-text reference, not a foreign key — the `supply` module owns `SupplyBatch` and nothing joins the two |

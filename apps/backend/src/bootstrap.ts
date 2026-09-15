@@ -152,6 +152,11 @@ export function bootstrap(): Bootstrapped {
         mediaUrls,
         guard: accessControlModule.guard,
         skuMinting: skusModule.minting,
+        // Media owns MediaAsset, so media answers "is this a real, live,
+        // public-prefix image?" before products joins a gallery row to it.
+        // Undefined on a deploy with no bucket — image attachment is then
+        // refused with a clear error instead of writing unvalidated joins.
+        mediaAssets: mediaModule?.assets,
     });
 
     /**
