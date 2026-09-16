@@ -46,3 +46,14 @@ export type {
 
 export type { OrderCallerResolver } from './controller/order.controller';
 export type { OrderService, OrderView } from './service/order.service';
+
+// The adapters other modules consume through their own ports: payments'
+// `IOrderLedger` and finance's `IOrderRevenueSource`. Neither interface is
+// imported here — orders is the provider in both relationships, and bootstrap
+// is where the two shapes meet.
+export { OrderLedgerAdapter, OrderRevenueAdapter } from './domain/order-ledger.adapter';
+export { OrderWriteRepository } from './repository/order-write.repository';
+export type {
+    PlaceOrderParams,
+    PlaceOrderResult,
+} from './repository/order-write.repository';

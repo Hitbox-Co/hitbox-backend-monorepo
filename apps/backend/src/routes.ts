@@ -40,6 +40,24 @@ export interface ApiRouters {
     adminProductSkus: Router;
     /** Serialized units across drops: cross-drop list and single-unit detail. */
     adminSkus: Router;
+    /**
+     * Buyer-facing money routes: POST /checkout and POST /refunds. Owned by
+     * the payments module, because a purchase starts with a payment and the
+     * dependency between payments and orders runs one way.
+     */
+    payments: Router;
+    /**
+     * Operator-facing payments: transactions, the refund workflow, disputes,
+     * gateway configuration and the webhook replay queue.
+     */
+    adminPayments: Router;
+    /**
+     * Finance: royalty rules, the royalty ledger, balances, payout batches,
+     * adjustments and the platform's own revenue ledger. ONE namespace —
+     * there is no /artist-royalties or /finance-admin route group, because a
+     * royalty read narrows by the caller's grant, not by the path they call.
+     */
+    adminFinance: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -60,11 +78,16 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/verify', routers.verify);
     api.use('/ledger', routers.ledger);
     api.use('/authz', routers.authz);
+    // Buyer money routes sit beside /orders rather than under /admin: these
+    // are the two things a buyer does with their own wallet.
+    api.use('/', routers.payments);
     api.use('/admin/authz', routers.adminAuthz);
     api.use('/admin/dashboard', routers.adminDashboard);
     api.use('/admin/media', routers.adminMedia);
     api.use('/admin/markets', routers.adminMarkets);
     api.use('/admin/orders', routers.adminOrders);
+    api.use('/admin/payments', routers.adminPayments);
+    api.use('/admin/finance', routers.adminFinance);
     api.use('/admin/releases', routers.adminReleases);
     // Mounted BEFORE /admin/products so the nested path wins outright. Express
     // would fall through to it either way (the catalog router has no route

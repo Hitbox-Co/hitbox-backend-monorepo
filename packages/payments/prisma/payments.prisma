@@ -3,7 +3,7 @@
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
 // Owns: PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent,
-//       RefundRequest
+//       RefundRequest, DisputeCase
 //
 // Everything that talks to a payment provider. No card data or credentials are
 // ever stored — only opaque gateway references and a secrets-manager pointer.
@@ -30,8 +30,17 @@ model PaymentTransaction {
   reviewedAt     DateTime?
   reviewNote     String?
   failureReason  String?
+  /// When the gateway confirmed settlement. Distinct from `updatedAt`, which
+  /// moves for a review note too.
+  settledAt      DateTime?
   createdAt      DateTime
   updatedAt      DateTime
+
+  disputeCases DisputeCase[]
+
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([gatewayRef])
 }
 
 /// Gateway credentials binding at one scope: PLATFORM-wide, per ORGANIZATION,
@@ -68,6 +77,13 @@ model PaymentWebhookEvent {
 /// A refund through its approval chain. `physicalReturnConfirmedAt` gates
 /// refunds on physical goods — money moves only once the item is back.
 /// `gatewayRefundId` links to the provider's refund object.
+///
+/// The columns after the return gate exist because a HitBox refund is not only
+/// a money movement: the item carries an NFC tag that may already have been
+/// claimed. `nfcTagCondition` is what the warehouse found, `claimRevokedAt`
+/// records that ownership was taken back, and `resaleBlockedUntil` is the
+/// quarantine window on a tag that came back damaged — a tag that stops
+/// responding must not reappear on the resale market the next day.
 model RefundRequest {
   id                        String       @id @db.Uuid
   orderId                   String       @db.Uuid
@@ -75,15 +91,75 @@ model RefundRequest {
   requestedById             String       @db.Uuid
   requestedBy               User         @relation("User_requestedBy", fields: [requestedById], references: [id])
   reason                    String
+  reasonCode                RefundReason
   status                    RefundStatus
   amount                    Decimal      @db.Decimal(12, 2)
+  currency                  Currency
+  /// False for a digital-only order, which skips the AWAITING_RETURN hold.
+  physicalReturnRequired    Boolean
   physicalReturnConfirmedAt DateTime?
+  /// What the returned tag looked like. Null until the return is inspected.
+  nfcTagCondition           NfcTagCondition?
   approvedById              String?      @db.Uuid
   approvedBy                User?        @relation("User_approvedBy", fields: [approvedById], references: [id])
   approvedAt                DateTime?
+  rejectionReason           String?
   gatewayRefundId           String?
+  /// When the gateway confirmed the money moved.
+  processedAt               DateTime?
+  /// Set when the buyer's claim on the item was taken back as part of this
+  /// refund. Plain timestamp — the claim itself is the claims module's record.
+  claimRevokedAt            DateTime?
+  /// Quarantine window on the returned tag (default 90 days on a damaged or
+  /// missing tag). Null means the unit is free to re-enter circulation.
+  resaleBlockedUntil        DateTime?
   createdAt                 DateTime
   updatedAt                 DateTime
+
+  @@index([orderId])
+  @@index([status, createdAt])
+}
+
+/// A chargeback or payment dispute raised at the provider.
+///
+/// Separate from RefundRequest on purpose: a refund is something HitBox
+/// decides to do, a dispute is something a card network does to HitBox. They
+/// have different clocks (`evidenceDueBy` is the network's deadline, and
+/// missing it loses the case by default), different actors, and different
+/// financial consequences — a lost dispute costs the sale AND a fee, which is
+/// posted as two adjustment entries rather than one refund.
+model DisputeCase {
+  id                   String             @id @db.Uuid
+  orderId              String             @db.Uuid
+  order                Order              @relation(fields: [orderId], references: [id])
+  paymentTransactionId String?            @db.Uuid
+  paymentTransaction   PaymentTransaction? @relation(fields: [paymentTransactionId], references: [id])
+  gateway              PaymentGateway
+  /// The provider's dispute id. Unique, so a redelivered dispute webhook
+  /// updates the case instead of opening a second one.
+  gatewayCaseRef       String?            @unique
+  reasonCode           DisputeReason
+  reason               String?
+  status               DisputeStatus
+  amount               Decimal            @db.Decimal(12, 2)
+  currency             Currency
+  /// Fee the network charges regardless of outcome, when one applies.
+  feeAmount            Decimal?           @db.Decimal(12, 2)
+  /// The network's evidence deadline. Missing it is a loss by default, which
+  /// is why it is a column and not a note.
+  evidenceDueBy        DateTime?
+  evidenceSubmittedAt  DateTime?
+  evidence             Json?
+  /// Resolver's user id. Not a foreign key — the case outlives the account.
+  resolvedById         String?            @db.Uuid
+  resolvedAt           DateTime?
+  resolutionNote       String?
+  openedAt             DateTime
+  createdAt            DateTime
+  updatedAt            DateTime
+
+  @@index([orderId])
+  @@index([status, evidenceDueBy])
 }
 
 /// Charge attempt state. NEEDS_REVIEW parks a transaction for a human instead
@@ -118,4 +194,52 @@ enum RefundStatus {
   APPROVED
   PROCESSED
   REJECTED
+}
+
+/// Why a refund was asked for. The free-text `reason` carries the detail; this
+/// is what reporting groups by — "defective tag" is a manufacturing signal,
+/// "changed mind" is not.
+enum RefundReason {
+  DEFECTIVE_ITEM
+  DEFECTIVE_TAG
+  NOT_AS_DESCRIBED
+  NOT_DELIVERED
+  DUPLICATE_CHARGE
+  BUYER_CHANGED_MIND
+  FRAUDULENT_CHARGE
+  OTHER
+}
+
+/// Condition of the NFC tag on a returned item. DAMAGED / MISSING / TAMPERED
+/// all quarantine the unit from resale; INTACT lets it go back into stock.
+enum NfcTagCondition {
+  INTACT
+  DAMAGED
+  MISSING
+  TAMPERED
+}
+
+/// Dispute lifecycle, mirroring how card networks actually run one: it opens,
+/// HitBox either submits evidence or accepts, and the network decides. WON /
+/// LOST / ACCEPTED are terminal.
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  EVIDENCE_SUBMITTED
+  WON
+  LOST
+  ACCEPTED
+  WITHDRAWN
+}
+
+/// The network's stated reason for the dispute.
+enum DisputeReason {
+  FRAUDULENT
+  PRODUCT_NOT_RECEIVED
+  PRODUCT_UNACCEPTABLE
+  DUPLICATE
+  SUBSCRIPTION_CANCELED
+  CREDIT_NOT_PROCESSED
+  UNRECOGNIZED
+  OTHER
 }

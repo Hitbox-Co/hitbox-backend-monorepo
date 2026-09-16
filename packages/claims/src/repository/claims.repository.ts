@@ -183,6 +183,119 @@ export class ClaimsRepository {
     }
 
     /**
+     * Takes ownership back, atomically.
+     *
+     * Called when a refund or a lost dispute means the buyer no longer has the
+     * item. Five things move together, and the reason they are one transaction
+     * is that any subset of them is a lie about who owns what:
+     *
+     *   * the claim is stamped revoked (never deleted — the claim *happened*)
+     *   * the SKU's owner is cleared and its claim state reset
+     *   * the tag is quarantined if a block window was supplied
+     *   * the current ownership period is closed
+     *   * a FLAG row extends the hash chain, so the revocation is provable
+     *
+     * The buyer's shelf entry is archived rather than removed, for the same
+     * reason the claim row survives: it is a record of something that was true.
+     *
+     * Returns null when there was nothing to revoke — an unclaimed unit, or a
+     * claim already revoked. Idempotent by that guard, because a refund that
+     * is executed twice must not write two FLAG rows.
+     */
+    async revokeClaim(params: {
+        sku: SkuForTag;
+        claimId: string | null;
+        reason: string;
+        resaleBlockedUntil: Date | null;
+        now: Date;
+    }): Promise<{ claimId: string | null; ledgerEntryId: string } | null> {
+        const { sku, reason, resaleBlockedUntil, now } = params;
+
+        return this.prisma.$transaction(async (tx) => {
+            // Race guard: only proceed while the SKU is still CLAIMED.
+            const released = await tx.sku.updateMany({
+                where: { id: sku.id, claimedStatus: { in: ['CLAIMED', 'FLAGGED'] } },
+                data: {
+                    claimedStatus: resaleBlockedUntil ? 'FLAGGED' : 'UNCLAIMED',
+                    ownerId: null,
+                    ...(resaleBlockedUntil
+                        ? {
+                            resaleBlocked: true,
+                            resaleBlockedReason: reason.slice(0, 500),
+                            tagLifecycleState: 'DISPUTED' as const,
+                        }
+                        : {}),
+                    updatedAt: now,
+                },
+            });
+            if (released.count === 0) return null;
+
+            const claim = params.claimId
+                ? await tx.productClaim.findUnique({ where: { id: params.claimId } })
+                : await tx.productClaim.findFirst({
+                    where: { skuId: sku.id, revokedAt: null },
+                    orderBy: { claimedNo: 'desc' },
+                });
+
+            if (claim && claim.revokedAt === null) {
+                await tx.productClaim.updateMany({
+                    where: { id: claim.id, revokedAt: null },
+                    data: { revokedAt: now, revokedReason: reason.slice(0, 500) },
+                });
+            }
+
+            await tx.productHistory.updateMany({
+                where: { skuId: sku.id, isCurrent: true },
+                data: { isCurrent: false, endedAt: now },
+            });
+
+            if (claim?.userId) {
+                await tx.buyerCollection.updateMany({
+                    where: { userId: claim.userId, skuId: sku.id, archivedAt: null },
+                    data: { archivedAt: now },
+                });
+            }
+
+            // Extend the chain rather than rewriting it: the CLAIM row stays,
+            // and a FLAG row after it records that the claim was undone. An
+            // edit would break every subsequent hash, which is the property
+            // the chain exists to have.
+            const last = await tx.blockchainLedger.findFirst({
+                where: { skuId: sku.id },
+                orderBy: { sequenceNo: 'desc' },
+            });
+            const hash = computeLedgerHash({
+                productId: sku.product.groupCode,
+                tagId: sku.tagId,
+                ownerId: LEDGER_ORIGIN_OWNER,
+                dateTime: now.toISOString(),
+            });
+            const payload: LedgerPayload = {
+                ownerLabel: LEDGER_ORIGIN_OWNER,
+                ...(claim ? { claimId: claim.id } : {}),
+            };
+            const ledger = await tx.blockchainLedger.create({
+                data: {
+                    id: randomUUID(),
+                    skuId: sku.id,
+                    txType: 'FLAG',
+                    sequenceNo: (last?.sequenceNo ?? -1) + 1,
+                    previousHash: last?.currentHash ?? null,
+                    currentHash: hash,
+                    payload: {
+                        ...payload,
+                        revocationReason: reason.slice(0, 500),
+                        resaleBlockedUntil: resaleBlockedUntil?.toISOString() ?? null,
+                    } as unknown as Prisma.InputJsonValue,
+                    createdAt: now,
+                },
+            });
+
+            return { claimId: claim?.id ?? null, ledgerEntryId: ledger.id };
+        }, { maxWait: 10_000, timeout: 20_000 });
+    }
+
+    /**
      * First-time claim, atomic. Returns null if the SKU was claimed by a
      * concurrent request (the conditional update matched zero rows). May throw
      * Prisma P2002 on a claimCode collision — the service retries with a new code.

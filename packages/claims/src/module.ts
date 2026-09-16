@@ -31,6 +31,12 @@ export interface ClaimsRouters {
 
 export interface ClaimsModule {
     service: ClaimsService;
+    /**
+     * Payments' `IClaimRevocation`: take ownership back when a refund or a
+     * lost dispute means the buyer no longer has the item. Structural, not an
+     * import — claims is the provider here and bootstrap connects the two.
+     */
+    revocation: Pick<ClaimsService, 'revokeClaim'>;
     /** requireAuth comes from the auth module at bootstrap. */
     createRouters(requireAuth: RequestHandler): ClaimsRouters;
 }
@@ -55,6 +61,7 @@ export function createClaimsModule(deps: ClaimsModuleDeps): ClaimsModule {
 
     return {
         service,
+        revocation: service,
         createRouters(requireAuth) {
             const controller = new ClaimsController(service);
 

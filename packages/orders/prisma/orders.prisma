@@ -35,6 +35,14 @@ model Order {
   gateway        PaymentGateway
   /// When the buyer accepted the drop's terms — evidence for disputes.
   termsAcceptedAt DateTime?
+  /// The ProductClaim that took ownership of this order's unit, and when.
+  /// Payment and ownership are decoupled: an order is PAID on day 1 and may be
+  /// claimed on day 6, or never. Royalty accrues at the claim, so this is the
+  /// column that says whether this order has earned anyone anything yet.
+  /// Deliberately NOT a foreign key — claims owns that record and a revocation
+  /// must never be blocked by an order row pointing at it.
+  claimId         String?   @db.Uuid
+  claimedAt       DateTime?
   shippedAt       DateTime?
   deliveredAt     DateTime?
   trackingNote    String?
@@ -49,8 +57,17 @@ model Order {
   // ── Cross-module back-relations ───────────────────────────────────────────
   paymentTransactions PaymentTransaction[]
   refundRequests      RefundRequest[]
+  disputeCases        DisputeCase[]
   royaltyLedgerEntrys RoyaltyLedgerEntry[]
   financeLedgerEntrys FinanceLedgerEntry[]
+  adjustmentEntrys    AdjustmentEntry[]
+
+  /// The admin order list is "newest first, filtered by org/status"; the claim
+  /// lookup is how an accrual finds the order behind a claimed unit.
+  @@index([organizationId, placedAt])
+  @@index([status, placedAt])
+  @@index([skuId])
+  @@index([claimId])
 }
 
 /// A frozen copy of the shipping or billing address for one order. The address
@@ -93,6 +110,12 @@ model InventoryReservation {
   status    ReservationStatus
   expiresAt DateTime
   createdAt DateTime
+
+  /// One live hold per unit: the partial index cannot be expressed in Prisma,
+  /// so the sweeper and the reserve path both filter on (skuId, status).
+  @@index([skuId, status])
+  /// The expiry sweeper's scan.
+  @@index([status, expiresAt])
 }
 
 /// Order lifecycle. Fulfilment states (SHIPPED/DELIVERED) apply to physical

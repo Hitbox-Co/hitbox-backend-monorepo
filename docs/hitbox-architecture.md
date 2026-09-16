@@ -281,6 +281,10 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 | `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist) for the Marketplace feed |
 | `IArtistCollectionStats` (collections) | `ArtistCollectionStatsAdapter` (artist) | `ArtistCollection` capacity (`Σ maximumLimit`) for the collection-progress stat |
 | `IMediaUrlResolver` (products, collections, claims) | closure over `S3ObjectStorage` (bootstrap) | a renderable URL for a `MediaAsset.storageRef` |
+| `IOrderLedger` (payments) | `OrderLedgerAdapter` (orders) | place / settle / cancel / refund an order; sweep expired stock holds |
+| `IOrderRevenueSource` (finance) | `OrderRevenueAdapter` (orders) | what a serialized unit sold for, and what it cost — the inputs to a royalty accrual |
+| `IFinancePostings`, `IRoyaltyReversal` (payments) | `FinanceLedgerService`, `RoyaltyAccrualService` (finance) | book a sale / refund / chargeback; un-earn a royalty when money goes back |
+| `IClaimRevocation` (payments) | `ClaimsService` (claims) | take ownership back and quarantine the tag on a refund |
 
 `IMediaUrlResolver` is declared **three times**, once per consumer, rather than
 shared. That is the same call discover and marketplace already make: each
@@ -325,6 +329,17 @@ Current event catalog:
 | `products.product.created` | products | — (future: notifications, search index) | `{ productId, groupCode }` |
 | `products.product.updated` | products | — | `{ productId }` |
 | `products.product.archived` | products | — | `{ productId }` |
+| `claims.product.claimed` | claims | **finance** (accrue a royalty), **orders** (link `Order.claimId`), collections | `ProductClaimedPayload` |
+| `claims.claim.revoked` | claims | — | `ClaimRevokedPayload` |
+| `finance.royalty.accrued` / `.reversed` | finance | — | see `@hitbox/finance` |
+| `finance.payout.scheduled` / `.paid` | finance | — (artist notification is the obvious next one) | see `@hitbox/finance` |
+| `payments.payment.succeeded` / `.failed` | payments | — | see `@hitbox/payments` |
+| `payments.refund.*`, `payments.dispute.*` | payments | — | see `@hitbox/payments` |
+
+The claim event is the one worth noticing: it is what makes **payment and
+ownership decoupled** real. A royalty is earned when the physical item reaches
+its buyer and the tag is tapped, not when the card clears — see
+[finance/royalty-lifecycle.md](finance/royalty-lifecycle.md).
 
 **Delivery semantics today:** in-process, at-most-once, no retries. Handlers are written idempotently (upserts, guarded updates) so that upgrading to a broker (at-least-once + retries) requires changing **one line** — the `eventBus` instantiation in shared.
 
@@ -386,7 +401,9 @@ Cross-module relations (e.g. `Product.owner → User`) work because Prisma sees 
 ```text
 1. index.ts        loads root .env (before ANY app import — env.ts validates at import time)
 2. app.ts          cors → helmet → morgan → express.json (captures rawBody) → urlencoded
-3. routes.ts       /api/v1/{health, auth, users, products, discover, marketplace, collections}
+                   then /webhooks/payments (outside /api/v1, own rate-limit budget)
+3. routes.ts       /api/v1/{health, auth, users, products, discover, marketplace, collections,
+                            checkout, refunds, admin/payments, admin/finance, …}
 4. requireAuth     (protected routes only) verifies JWT, attaches req.auth
 5. controller      Zod-parses input → calls service
 6. service         business rules; throws AppError; publishes events

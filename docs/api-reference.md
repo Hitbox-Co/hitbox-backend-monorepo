@@ -635,6 +635,24 @@ Every module prefixes its codes, so a code always tells you where it came from:
 | `USERS_*` | users |
 | `PRODUCTS_*` | products |
 | `COLLECTIONS_*` | collections |
+| `ORDERS_*` | orders |
+| `PAYMENTS_*` | payments |
+| `FINANCE_*` | finance |
 | `VALIDATION_ERROR`, `NOT_FOUND`, `INTERNAL_ERROR`, … | shared |
 
 (discover and marketplace define no error codes of their own — they only read, so shared codes cover them.)
+
+---
+
+## Money endpoints
+
+Checkout, payments, refunds, disputes, royalties and payouts are documented
+separately, together with the design they implement:
+
+* [finance/api-reference.md](finance/api-reference.md) — every endpoint, with its
+  capability and payloads
+* [finance/README.md](finance/README.md) — the rest of the finance documentation
+
+In short: `POST /api/v1/checkout` and `POST /api/v1/refunds` for buyers,
+`/api/v1/admin/payments/*` and `/api/v1/admin/finance/*` for operators, and
+`POST /webhooks/payments/stripe` (outside `/api/v1`) for the provider.

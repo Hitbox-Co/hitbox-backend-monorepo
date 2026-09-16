@@ -74,6 +74,35 @@ const envSchema = z.object({
      * image traffic onto a CDN without touching code.
      */
     MEDIA_S3_PUBLIC_BASE_URL: z.string().url().optional(),
+
+    // ── Payments (optional) ─────────────────────────────────────────────────
+    // Absent on a deploy that takes no money. @hitbox/payments asserts what it
+    // needs itself (createPaymentsModule), same pattern as Clerk above: a
+    // missing webhook secret fails at the module that requires it rather than
+    // at every app that merely imports @hitbox/shared.
+    //
+    // Gateway API keys are deliberately NOT declared here. They live in the
+    // secrets manager and PaymentGatewayConfig stores only a pointer
+    // (`credentialsRef`) — naming them in this schema would invite passing
+    // them around as values and printing them in the validation report.
+    /**
+     * Stripe's webhook signing secret (`whsec_…`). Required to accept
+     * `/webhooks/payments/stripe`; without it the route is not mounted at all,
+     * because an unverified payment webhook is a way to mark any order paid.
+     */
+    STRIPE_WEBHOOK_SECRET: z.string().min(1).optional(),
+    /**
+     * How far a webhook's timestamp may be from now, in seconds. Stripe's own
+     * default is 300; the window is what stops a captured delivery being
+     * replayed indefinitely.
+     */
+    PAYMENT_WEBHOOK_TOLERANCE_SECONDS: z.coerce.number().int().positive().default(300),
+    /**
+     * How long a checkout holds a serialized unit before the sweeper releases
+     * it. Long enough for a 3-D Secure challenge, short enough that a
+     * abandoned basket does not keep a one-of-500 unit off sale for an hour.
+     */
+    INVENTORY_HOLD_SECONDS: z.coerce.number().int().positive().default(900),
 });
 
 export type Env = z.infer<typeof envSchema>;

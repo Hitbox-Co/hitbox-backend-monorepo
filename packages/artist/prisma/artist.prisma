@@ -42,6 +42,11 @@ model Artist {
   mediaAssets   MediaAsset[]
   royaltyRules  RoyaltyRule[]
   follows       Follow[]
+  /// Royalties owed TO this artist, and the batches that paid them. Named
+  /// relation on the entries because an artist is both a rule scope and a
+  /// payee, and Prisma needs the two links disambiguated.
+  royaltyLedgerEntrys RoyaltyLedgerEntry[] @relation("RoyaltyLedgerEntry_payeeArtist")
+  royaltyPayouts      RoyaltyPayout[]
 }
 
 /// A curated series of products by one artist — the unit buyers try to

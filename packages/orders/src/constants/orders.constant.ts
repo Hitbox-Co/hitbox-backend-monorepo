@@ -6,6 +6,12 @@ export const ORDERS_ERROR_CODES = {
     INVALID_TRANSITION: 'ORDERS_INVALID_TRANSITION',
     /** PAID / REFUNDED are written by the payments pipeline, never by hand. */
     STATUS_NOT_SETTABLE: 'ORDERS_STATUS_NOT_SETTABLE',
+    /** The drop is not on sale: wrong status, not open yet, or closed. */
+    NOT_PURCHASABLE: 'ORDERS_NOT_PURCHASABLE',
+    /** Every unit is sold or held by another checkout. */
+    OUT_OF_STOCK: 'ORDERS_OUT_OF_STOCK',
+    /** No active price row exists for the buyer's market. */
+    NO_PRICE: 'ORDERS_NO_PRICE',
 } as const;
 
 /** Reading the order list and detail. */

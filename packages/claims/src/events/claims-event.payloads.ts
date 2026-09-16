@@ -17,3 +17,19 @@ export interface ProductClaimedPayload {
     productId: string;
     userId: string;
 }
+
+/**
+ * Emitted by CLAIMS_EVENTS.CLAIM_REVOKED after ownership is taken back, which
+ * today means a refund was executed or a dispute was lost.
+ *
+ * `claimId` is null when the unit turned out to hold no live claim.
+ * `resaleBlockedUntil` is set when the returned tag was damaged, missing or
+ * tampered with and the unit is quarantined until that moment.
+ */
+export interface ClaimRevokedPayload {
+    skuId: string;
+    claimId: string | null;
+    reason: string;
+    actorId: string | null;
+    resaleBlockedUntil: string | null;
+}

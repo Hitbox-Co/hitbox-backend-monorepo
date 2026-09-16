@@ -62,8 +62,8 @@ Every model has exactly one owning module. The merge script enforces this — a 
 | **Content** | `@hitbox/content` | `ContentBundle`, `ContentBundleItem`, `ContentUnlock` | Exclusive content and the per-user grants that open it. |
 | **Evolution** | `@hitbox/evolution` | `EvolutionRule`, `EvolutionEvent` | Collectibles that change as thresholds are crossed. |
 | **Orders** | `@hitbox/orders` | `Order`, `OrderAddress`, `InventoryReservation` | The purchase record and the stock it holds. |
-| **Payments** | `@hitbox/payments` | `PaymentTransaction`, `PaymentGatewayConfig`, `PaymentWebhookEvent`, `RefundRequest` | Everything that talks to a payment provider. |
-| **Finance** | `@hitbox/finance` | `RoyaltyRule`, `RoyaltyLedgerEntry`, `FinanceLedgerEntry` | Royalty splits and the two append-only money ledgers. |
+| **Payments** | `@hitbox/payments` | `PaymentTransaction`, `PaymentGatewayConfig`, `PaymentWebhookEvent`, `RefundRequest`, `DisputeCase` | Everything that talks to a payment provider. See [finance/](finance/README.md). |
+| **Finance** | `@hitbox/finance` | `RoyaltyRule`, `RoyaltyLedgerEntry`, `RoyaltyPayout`, `AdjustmentEntry`, `FinanceLedgerEntry` | Royalty rules, accrual, payout batches, corrections and the platform ledger. See [finance/](finance/README.md). |
 | **Notifications** | `@hitbox/notifications` | `NotificationTemplate`, `Notification`, `NotificationPreference` | Templated delivery + per-user channel opt-in. |
 | **Social** | `@hitbox/social` | `Follow`, `WishlistItem` | Buyer intent signals feeding feeds and triggers. |
 | **Resale** | `@hitbox/resale` | `ResaleListing` | The secondary market. |

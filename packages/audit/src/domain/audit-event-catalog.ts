@@ -53,6 +53,7 @@ const { INFO, WARNING, CRITICAL } = AuditSeverity;
 /** Shorthand for the doc citations below. */
 const AUTHZ = 'docs/authorization/authorization-architecture.md';
 const AUDIT_DOC = 'docs/audit-logging.md';
+const FINANCE_DOC = 'docs/finance/finance-revenue-ledger.md';
 
 export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
     // ── Role administration ─────────────────────────────────────────────────
@@ -203,6 +204,67 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         description: 'A royalty posting was overridden outside the normal calculation.',
         defaultSeverity: CRITICAL,
         sourceStories: [`${AUDIT_DOC} §write-paths`],
+    },
+    // ── Finance & revenue ledger ────────────────────────────────────────────
+    // Every write path in @hitbox/finance and @hitbox/payments lands here.
+    // The accrual is INFO because it happens on every claim and is valuable in
+    // aggregate rather than individually; everything that MOVES money, changes
+    // what someone is owed, or changes where money lands is CRITICAL.
+    {
+        eventType: 'payment.settle',
+        personaGroup: SYSTEM,
+        description: 'A charge settled and its order was marked paid.',
+        defaultSeverity: CRITICAL,
+        sourceStories: [`${FINANCE_DOC} §payment-flow`],
+    },
+    {
+        eventType: 'royalty.accrue',
+        personaGroup: SYSTEM,
+        description: 'A royalty was accrued against a claim.',
+        defaultSeverity: INFO,
+        sourceStories: [`${FINANCE_DOC} §royalty-lifecycle`],
+    },
+    {
+        eventType: 'royalty.rule.change',
+        personaGroup: HITBOX_ADMIN,
+        description: 'A royalty rule was created or closed.',
+        defaultSeverity: CRITICAL,
+        sourceStories: [`${FINANCE_DOC} §royalty-rules`],
+    },
+    {
+        eventType: 'royalty.payout.schedule',
+        personaGroup: HITBOX_EMPLOYEE,
+        description: 'Accrued royalties were batched into a payout.',
+        defaultSeverity: WARNING,
+        sourceStories: [`${FINANCE_DOC} §payouts`],
+    },
+    {
+        eventType: 'royalty.payout.execute',
+        personaGroup: HITBOX_EMPLOYEE,
+        description: 'A royalty payout was approved, paid, or failed.',
+        defaultSeverity: CRITICAL,
+        sourceStories: [`${FINANCE_DOC} §payouts`],
+    },
+    {
+        eventType: 'adjustment.create',
+        personaGroup: HITBOX_EMPLOYEE,
+        description: 'A correction was posted against a financial record.',
+        defaultSeverity: CRITICAL,
+        sourceStories: [`${FINANCE_DOC} §immutability`],
+    },
+    {
+        eventType: 'dispute.open',
+        personaGroup: SYSTEM,
+        description: 'A chargeback or payment dispute was opened.',
+        defaultSeverity: CRITICAL,
+        sourceStories: [`${FINANCE_DOC} §disputes`],
+    },
+    {
+        eventType: 'dispute.resolve',
+        personaGroup: HITBOX_EMPLOYEE,
+        description: 'A dispute was resolved, or evidence was submitted for it.',
+        defaultSeverity: CRITICAL,
+        sourceStories: [`${FINANCE_DOC} §disputes`],
     },
 
     // ── Catalog ─────────────────────────────────────────────────────────────

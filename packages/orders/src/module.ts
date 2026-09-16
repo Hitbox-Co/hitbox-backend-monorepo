@@ -10,7 +10,12 @@ import {
 } from './constants/orders.constant';
 import { OrderController } from './controller/order.controller';
 import type { OrderCallerResolver } from './controller/order.controller';
+import {
+    OrderLedgerAdapter,
+    OrderRevenueAdapter,
+} from './domain/order-ledger.adapter';
 import { OrderRepository } from './repository/order.repository';
+import { OrderWriteRepository } from './repository/order-write.repository';
 import { OrderService } from './service/order.service';
 
 /** Structural guard — the shape of `requirePermission`, not an import. */
@@ -28,17 +33,71 @@ export interface OrdersModuleDeps {
     resolveCaller: OrderCallerResolver;
 }
 
+/** The claim event orders links back to the order. Matches @hitbox/claims. */
+interface ClaimedEventPayload {
+    claimId: string;
+    skuId: string;
+    productId: string;
+    userId: string;
+}
+
 export interface OrdersModule {
     createRouter(requireAuth: RequestHandler): Router;
+    /**
+     * Payments' `IOrderLedger`: place an order, settle it, cancel it, refund
+     * it, sweep expired stock holds. Checkout lives in payments because the
+     * dependency has to run one way and money is what starts the sequence —
+     * see docs/finance/module-boundaries.md.
+     */
+    ledger: OrderLedgerAdapter;
+    /**
+     * Finance's `IOrderRevenueSource`: what this unit sold for and what it
+     * cost, which is everything a royalty accrual needs from an order.
+     */
+    revenue: OrderRevenueAdapter;
 }
 
 export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
     const logger = createModuleLogger(ORDERS_MODULE);
     const orders = new OrderRepository(deps.prisma);
+    const writes = new OrderWriteRepository(deps.prisma);
     const service = new OrderService({ orders, eventBus: deps.eventBus, logger });
     const controller = new OrderController(service, deps.resolveCaller);
 
+    /**
+     * Payment and ownership are decoupled, so the order needs telling when its
+     * unit is finally claimed. Orders writes its own table here rather than
+     * letting claims or finance reach into it — and the write is guarded on
+     * `claimId: null`, so a redelivered event cannot overwrite the first claim.
+     */
+    deps.eventBus.subscribe<ClaimedEventPayload>(
+        'claims.product.claimed',
+        async (payload) => {
+            try {
+                const orderId = await writes.linkClaim({
+                    skuId: payload.skuId,
+                    claimId: payload.claimId,
+                    claimedAt: new Date(),
+                });
+                if (orderId) {
+                    logger.info(
+                        { orderId, claimId: payload.claimId, skuId: payload.skuId },
+                        'order linked to the claim that took ownership of its unit',
+                    );
+                }
+            } catch (error) {
+                logger.error(
+                    { err: error, claimId: payload.claimId, skuId: payload.skuId },
+                    'failed to link a claim to its order',
+                );
+            }
+        },
+    );
+
     return {
+        ledger: new OrderLedgerAdapter(writes),
+        revenue: new OrderRevenueAdapter(writes),
+
         createRouter(requireAuth) {
             const router = Router();
             router.use(requireAuth);

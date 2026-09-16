@@ -26,6 +26,7 @@ export type {
 
 // Event payload contracts (for subscribers in other modules)
 export type {
+    ClaimRevokedPayload,
     ProductClaimedPayload,
 } from './events/claims-event.payloads';
 

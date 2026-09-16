@@ -31,6 +31,11 @@ model Organization {
   orders                Order[]
   paymentGatewayConfigs PaymentGatewayConfig[]
   royaltyRules          RoyaltyRule[]
+  /// Royalties owed TO this organization (a brand deal), as distinct from the
+  /// rules that define them — named relations because an org can be both the
+  /// scope a rule applies to and the party it pays.
+  royaltyLedgerEntrys   RoyaltyLedgerEntry[] @relation("RoyaltyLedgerEntry_payeeOrganization")
+  royaltyPayouts        RoyaltyPayout[]
 }
 
 /// Which kind of entity an Organization represents. HITBOX is the platform's

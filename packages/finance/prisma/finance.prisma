@@ -2,10 +2,13 @@
 // FINANCE MODULE SCHEMA  (packages/finance/prisma/finance.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: RoyaltyRule, RoyaltyLedgerEntry, FinanceLedgerEntry
+// Owns: RoyaltyRule, RoyaltyLedgerEntry, RoyaltyPayout, AdjustmentEntry,
+//       FinanceLedgerEntry
 //
-// Accounting. Both ledgers are append-only: a mistake is corrected by posting
-// an ADJUSTMENT entry that references the original, never by editing a row.
+// Accounting. Every ledger here is append-only: a mistake is corrected by
+// posting an ADJUSTMENT entry that references the original, never by editing a
+// row. See docs/finance/finance-revenue-ledger.md for the design and
+// docs/finance/royalty-lifecycle.md for the states these columns move through.
 // ============================================================================
 
 /// A royalty split, resolved most-specific-first: product → collection →
@@ -14,6 +17,12 @@
 /// the simple case and `splitConfig` carries multi-party breakdowns.
 /// `effectiveFrom`/`effectiveTo` make rules versioned rather than mutable, so
 /// re-running an old order's royalties reproduces the original numbers.
+///
+/// `payoutThreshold` + `payoutFrequency` live here rather than in a global
+/// settings row because "accrue until $500, then pay monthly" is a term of the
+/// artist's deal, not a platform constant — and a deal that changes has to
+/// change without rewriting the entries already accrued under the old one,
+/// which versioning by `effectiveFrom` is exactly what gives us.
 model RoyaltyRule {
   id             String            @id @db.Uuid
   organizationId String?           @db.Uuid
@@ -28,28 +37,178 @@ model RoyaltyRule {
   splitType      String
   splitConfig    Json
   percentage     Decimal?          @db.Decimal(6, 3)
+  /// Minimum accrued balance before a payout is scheduled. Null falls back to
+  /// the module default (see ROYALTY_DEFAULT_PAYOUT_THRESHOLD).
+  payoutThreshold Decimal?         @db.Decimal(12, 2)
+  /// How often an above-threshold balance is swept. Null = module default.
+  payoutFrequency PayoutFrequency?
   effectiveFrom  DateTime
   effectiveTo    DateTime?
   createdAt      DateTime
 
   royaltyLedgerEntrys RoyaltyLedgerEntry[]
+
+  /// Rule resolution walks the four scope columns most-specific-first and
+  /// filters on the effective window, every time an accrual is computed.
+  @@index([productId, effectiveFrom])
+  @@index([collectionId, effectiveFrom])
+  @@index([artistId, effectiveFrom])
+  @@index([organizationId, effectiveFrom])
 }
 
-/// What one order owes under one royalty rule. `entryType = ADJUSTMENT` with
-/// `adjustsEntryId` set is how a correction is posted; `adjustsEntryId` is a
-/// self-reference kept as a plain id (no FK) so the append-only chain never
-/// blocks on referential checks. A payee's balance is the sum of its rows.
+/// What one order owes under one royalty rule.
+///
+/// Three things make this table the spine of the royalty system:
+///
+///   **It is accrued at claim, not at payment.** `claimId` / `skuId` record
+///   which physical item's claim triggered it; an order that is paid but never
+///   claimed owes nothing. Those two are plain ids with no foreign key — the
+///   ledger must stay readable and summable after a claim is revoked, and a
+///   revocation that failed on an FK check would leave money unaccounted for.
+///
+///   **It carries its own arithmetic.** `grossRevenue`, `costOfGoods`,
+///   `netProfit`, `basis` and `percentage` are snapshots taken at accrual, so
+///   an entry can be re-checked years later without re-reading a price table
+///   that has since changed. `amount` is the posted figure and the only one
+///   summed.
+///
+///   **It is never edited.** `entryType = ADJUSTMENT` with `adjustsEntryId`
+///   set is how a correction is posted; the original keeps its own row and its
+///   own status. A payee's balance is the sum of its rows.
+///
+/// `accrualKey` is the idempotency guard: one entry per (trigger, rule), so a
+/// replayed claim event or a re-run job cannot double-credit an artist.
 model RoyaltyLedgerEntry {
   id             String          @id @db.Uuid
   orderId        String          @db.Uuid
   order          Order           @relation(fields: [orderId], references: [id])
   ruleId         String          @db.Uuid
   rule           RoyaltyRule     @relation(fields: [ruleId], references: [id])
+
+  // ── What triggered it ─────────────────────────────────────────────────────
+  /// The serialized unit whose claim accrued this. No FK — see the note above.
+  skuId          String?         @db.Uuid
+  /// The ProductClaim that triggered accrual. No FK, same reason.
+  claimId        String?         @db.Uuid
+  /// `claim:<claimId>:rule:<ruleId>` for an accrual, `reversal:<entryId>` for a
+  /// reversal. Unique, which is what makes accrual safe to retry.
+  accrualKey     String          @unique
+
+  // ── Who is owed ───────────────────────────────────────────────────────────
+  payeeType           RoyaltyPayeeType
+  payeeArtistId       String?       @db.Uuid
+  payeeArtist         Artist?       @relation("RoyaltyLedgerEntry_payeeArtist", fields: [payeeArtistId], references: [id])
+  payeeOrganizationId String?       @db.Uuid
+  payeeOrganization   Organization? @relation("RoyaltyLedgerEntry_payeeOrganization", fields: [payeeOrganizationId], references: [id])
+
+  // ── The arithmetic, snapshotted ───────────────────────────────────────────
+  basis          RoyaltyBasis
+  percentage     Decimal?        @db.Decimal(6, 3)
+  grossRevenue   Decimal?        @db.Decimal(12, 2)
+  costOfGoods    Decimal?        @db.Decimal(12, 2)
+  netProfit      Decimal?        @db.Decimal(12, 2)
+
+  // ── The posting ───────────────────────────────────────────────────────────
   amount         Decimal         @db.Decimal(12, 2)
   currency       Currency
   entryType      LedgerEntryType
+  status         RoyaltyEntryStatus
   adjustsEntryId String?         @db.Uuid
+  /// Set when the entry joins a payout batch; cleared only by a failed payout.
+  payoutId       String?         @db.Uuid
+  payout         RoyaltyPayout?  @relation(fields: [payoutId], references: [id])
+  accruedAt      DateTime
+  paidAt         DateTime?
   createdAt      DateTime
+
+  /// The balance query: "everything ACCRUED for this payee in this currency".
+  @@index([payeeArtistId, status, currency])
+  @@index([payeeOrganizationId, status, currency])
+  /// Order and claim drill-downs from the admin order detail.
+  @@index([orderId])
+  @@index([claimId])
+  /// Batch membership, for the payout statement.
+  @@index([payoutId])
+}
+
+/// One payout batch: the money that actually leaves the platform for one
+/// payee, in one currency, covering N accrued entries.
+///
+/// The doc's lifecycle is "45 orders accrue $506.25, threshold met, finance
+/// approves, gateway pays". That is three distinct facts — which entries,
+/// who approved, what the provider did — and they belong on a row of their own
+/// rather than smeared across 45 entry rows. The entries still carry
+/// `status`; this carries the batch.
+model RoyaltyPayout {
+  id                  String        @id @db.Uuid
+  payeeType           RoyaltyPayeeType
+  payeeArtistId       String?       @db.Uuid
+  payeeArtist         Artist?       @relation(fields: [payeeArtistId], references: [id])
+  payeeOrganizationId String?       @db.Uuid
+  payeeOrganization   Organization? @relation(fields: [payeeOrganizationId], references: [id])
+  amount              Decimal       @db.Decimal(12, 2)
+  currency            Currency
+  /// How many ledger entries this batch settles — denormalised so a statement
+  /// list does not need a count per row.
+  entryCount          Int
+  /// The threshold in force when the batch was scheduled, snapshotted so a
+  /// later change to the rule does not rewrite why this batch existed.
+  thresholdApplied    Decimal?      @db.Decimal(12, 2)
+  status              PayoutStatus
+  scheduledAt         DateTime
+  /// Approver's user id. Intentionally not a foreign key — a payout record
+  /// must outlive the approver's account.
+  approvedById        String?       @db.Uuid
+  approvedAt          DateTime?
+  /// The provider's own payout object id, for reconciliation.
+  gatewayPayoutRef    String?
+  paidAt              DateTime?
+  failureReason       String?
+  createdAt           DateTime
+  updatedAt           DateTime
+
+  royaltyLedgerEntrys RoyaltyLedgerEntry[]
+
+  @@index([payeeArtistId, status])
+  @@index([payeeOrganizationId, status])
+  @@index([status, scheduledAt])
+}
+
+/// A correction to a financial record. The immutability principle in one
+/// table: nothing above is ever edited or deleted, so every reversal, fee
+/// correction and write-off is a row here pointing at what it corrects.
+///
+/// `targetType` + `targetId` is a polymorphic pointer with **no** foreign key,
+/// deliberately: an adjustment must be postable against a record in any
+/// module, and the correction trail must survive the archival of what it
+/// corrects. `amountAdjustment` is signed — negative reverses, positive adds.
+model AdjustmentEntry {
+  id               String              @id @db.Uuid
+  targetType       AdjustmentTargetType
+  targetId         String              @db.Uuid
+  /// The order the correction ultimately belongs to, when there is one, so
+  /// order-level reporting does not need a join per target type.
+  orderId          String?             @db.Uuid
+  order            Order?              @relation(fields: [orderId], references: [id])
+  /// Signed. -11.25 reverses an $11.25 royalty; +5.00 posts a make-good.
+  amountAdjustment Decimal             @db.Decimal(12, 2)
+  currency         Currency
+  reasonCode       AdjustmentReason
+  reason           String
+  /// Actor's user id. No foreign key: a correction outlives the person.
+  actorId          String?             @db.Uuid
+  /// The refund or dispute that caused it, when it was not a manual posting.
+  refundRequestId  String?             @db.Uuid
+  disputeCaseId    String?             @db.Uuid
+  /// The royalty or finance entry this correction produced, if it posted one.
+  resultingEntryId String?             @db.Uuid
+  metadata         Json?
+  createdAt        DateTime
+
+  /// "Show me everything that corrected this record" — the traceability test.
+  @@index([targetType, targetId])
+  @@index([orderId])
+  @@index([createdAt])
 }
 
 /// Platform-side double-entry line. `direction` (CREDIT/DEBIT) plus `amount`
@@ -57,18 +216,29 @@ model RoyaltyLedgerEntry {
 /// margin is reportable without re-reading the catalog or the gateway.
 /// `orderId` is nullable for entries with no order behind them (platform fees,
 /// manual adjustments, payouts).
+///
+/// `postingKey` is the same idempotency guard the royalty ledger uses: a
+/// settlement webhook that is delivered twice posts revenue once.
 model FinanceLedgerEntry {
   id          String           @id @db.Uuid
   orderId     String?          @db.Uuid
   order       Order?           @relation(fields: [orderId], references: [id])
   entryType   LedgerEntryType
   direction   FinanceDirection
+  category    FinanceCategory
   amount      Decimal          @db.Decimal(12, 2)
   currency    Currency
   costOfGoods Decimal?         @db.Decimal(12, 2)
   gatewayFee  Decimal?         @db.Decimal(12, 2)
+  /// Correction chain, mirroring RoyaltyLedgerEntry. Plain id, no FK.
+  adjustsEntryId String?       @db.Uuid
+  postingKey  String?          @unique
   description String?
   createdAt   DateTime
+
+  @@index([orderId])
+  @@index([category, createdAt])
+  @@index([createdAt])
 }
 
 /// What a royalty percentage is taken from.
@@ -88,4 +258,73 @@ enum LedgerEntryType {
 enum FinanceDirection {
   CREDIT
   DEBIT
+}
+
+/// Where a royalty entry is in its journey to the payee's bank account.
+/// REVERSED is terminal and set only on an entry an adjustment has cancelled —
+/// the row itself still exists and still carries its original amount.
+enum RoyaltyEntryStatus {
+  ACCRUED
+  PENDING_PAYOUT
+  PAID
+  REVERSED
+}
+
+/// Who a royalty is owed to. An artist deal and a brand deal settle to
+/// different parties, and the distinction has to survive into reporting.
+enum RoyaltyPayeeType {
+  ARTIST
+  ORGANIZATION
+}
+
+/// How often an above-threshold balance is swept into a payout batch.
+enum PayoutFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+}
+
+/// Payout batch lifecycle. SCHEDULED is "threshold met, entries locked";
+/// APPROVED is a human's decision; PAID is the provider's confirmation.
+enum PayoutStatus {
+  SCHEDULED
+  APPROVED
+  PAID
+  FAILED
+  CANCELLED
+}
+
+/// What an adjustment entry corrects. Polymorphic by design — see the model.
+enum AdjustmentTargetType {
+  ROYALTY_LEDGER_ENTRY
+  FINANCE_LEDGER_ENTRY
+  ORDER
+  PAYMENT_TRANSACTION
+  ROYALTY_PAYOUT
+}
+
+/// Why a correction was posted. A free-text `reason` always accompanies it;
+/// this is the machine-readable half, for reporting on correction causes.
+enum AdjustmentReason {
+  REFUND_REVERSAL
+  DISPUTE_LOSS
+  CHARGEBACK_FEE
+  CALCULATION_ERROR
+  RULE_CORRECTION
+  GOODWILL
+  MANUAL_CORRECTION
+}
+
+/// What a platform finance line represents. Keeps "revenue" separable from
+/// "the fee the gateway took" without a second table.
+enum FinanceCategory {
+  SALE_REVENUE
+  COST_OF_GOODS
+  GATEWAY_FEE
+  REFUND
+  CHARGEBACK
+  ROYALTY_EXPENSE
+  ROYALTY_PAYOUT
+  ADJUSTMENT
 }

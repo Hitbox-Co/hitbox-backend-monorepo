@@ -258,6 +258,75 @@ export class ClaimsService {
         };
     }
 
+    /**
+     * Takes a claim back — the claims side of payments' `IClaimRevocation`.
+     *
+     * The design document's day-21 step: a refunded collectible whose claim
+     * still stands would leave someone holding the certificate of authenticity
+     * for an object they returned, and nothing would stop them listing it for
+     * resale. So the claim is revoked, the owner cleared, and — if the tag came
+     * back damaged, missing or tampered with — the unit is quarantined for the
+     * window the refund workflow computed.
+     *
+     * Nothing is deleted. The claim row keeps its timestamp and gains a
+     * revocation; the hash chain gains a FLAG row rather than losing its CLAIM
+     * row. Provenance that can be edited is not provenance.
+     *
+     * A unit that was never claimed returns `revoked: false` and is not an
+     * error: refunding an order whose buyer never tapped the tag is ordinary.
+     */
+    async revokeClaim(input: {
+        skuId: string;
+        claimId?: string | null;
+        reason: string;
+        actorId: string | null;
+        resaleBlockedUntil: Date | null;
+    }): Promise<{ revoked: boolean; claimId: string | null; ledgerEntryId: string | null }> {
+        const sku = await this.deps.claims.findSkuById(input.skuId);
+        if (!sku) {
+            throw AppError.notFound(
+                'No serialized unit with that id',
+                CLAIMS_ERROR_CODES.TAG_NOT_FOUND,
+            );
+        }
+
+        const result = await this.deps.claims.revokeClaim({
+            sku,
+            claimId: input.claimId ?? null,
+            reason: input.reason,
+            resaleBlockedUntil: input.resaleBlockedUntil,
+            now: new Date(),
+        });
+
+        if (!result) {
+            this.deps.logger.info(
+                { skuId: input.skuId },
+                'claim revocation had nothing to revoke — the unit was not claimed',
+            );
+            return { revoked: false, claimId: null, ledgerEntryId: null };
+        }
+
+        this.deps.logger.info(
+            {
+                skuId: input.skuId,
+                claimId: result.claimId,
+                actorId: input.actorId,
+                resaleBlockedUntil: input.resaleBlockedUntil?.toISOString() ?? null,
+            },
+            'claim revoked',
+        );
+
+        await this.deps.eventBus.publish(CLAIMS_EVENTS.CLAIM_REVOKED, {
+            skuId: input.skuId,
+            claimId: result.claimId,
+            reason: input.reason,
+            actorId: input.actorId,
+            resaleBlockedUntil: input.resaleBlockedUntil?.toISOString() ?? null,
+        });
+
+        return { revoked: true, claimId: result.claimId, ledgerEntryId: result.ledgerEntryId };
+    }
+
     private async requireSku(tagId: string): Promise<SkuForTag> {
         const sku = await this.deps.claims.findSkuByTagId(tagId);
         if (!sku) {

@@ -4,6 +4,9 @@ import { prisma } from '@hitbox/database';
 import { eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
 import { createAccessControlModule } from '@hitbox/access-control';
+import { createAuditModule, correlationIdOf } from '@hitbox/audit';
+import { buildFinanceAccess, createFinanceModule } from '@hitbox/finance';
+import { buildPaymentAccess, createPaymentsModule } from '@hitbox/payments';
 import { createDashboardModule } from '@hitbox/dashboard';
 import { createMediaModule, isPublicKey, S3ObjectStorage } from '@hitbox/media';
 import { createUsersModule } from '@hitbox/users';
@@ -30,6 +33,18 @@ export interface Bootstrapped {
      * shares the mobile platform's @hitbox/database.
      */
     leadsRouter: Router;
+    /**
+     * Payment provider callbacks, mounted at /webhooks/payments — outside
+     * /api/v1 and on their own budget (see app.ts). A 503 router when no
+     * webhook signing secret is configured: an unverified payment webhook is a
+     * way to mark any order paid, so "no secret" means "no endpoint".
+     */
+    webhookRouter: Router;
+    /**
+     * Frees stock holds whose checkout never completed. Call it from a
+     * scheduler; it is idempotent and safe to run concurrently.
+     */
+    releaseExpiredReservations(): Promise<number>;
     /**
      * Subscribes the authorization cache to cross-instance invalidation
      * broadcasts. Until this runs, each process still caches locally but only
@@ -230,6 +245,92 @@ export function bootstrap(): Bootstrapped {
     const claimsModule = createClaimsModule({ prisma, eventBus, mediaUrls });
     const claimsRouters = claimsModule.createRouters(authModule.requireAuth);
 
+    // ── Money ───────────────────────────────────────────────────────────────
+    //
+    // Four modules, one direction of dependency:
+    //
+    //     payments ──▶ orders     (place, settle, cancel, refund an order)
+    //     payments ──▶ finance    (book the sale / refund / chargeback,
+    //                              reverse the artist's royalty)
+    //     payments ──▶ claims     (revoke ownership on a refund)
+    //     finance  ──▶ orders     (what was this unit sold for, and what did
+    //                              it cost — via IOrderRevenueSource)
+    //     finance  ◀── claims     (by EVENT: accrue when a tag is tapped)
+    //
+    // Nothing points back. Checkout lives in payments rather than orders for
+    // exactly that reason — see docs/finance/module-boundaries.md.
+
+    /**
+     * The compliance trail. Constructed here for its `recorder` port, which
+     * finance and payments write every money movement through; the audit read
+     * API is a separate surface and is not mounted by this change.
+     */
+    const auditModule = createAuditModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        resolveReader: async (req: Request) => {
+            const principal = await accessControlModule.guard.describePrincipal(req);
+            const orgId = principal.roles
+                .map((role) => role.organizationId)
+                .find((id): id is string => id !== null);
+            const global = principal.permissions.includes('audit-log:read:global');
+            return {
+                actor: { type: 'HITBOX_EMPLOYEE' as const, id: principal.userId },
+                scope:
+                    global || !orgId
+                        ? ({ kind: 'GLOBAL' } as const)
+                        : ({ kind: 'ORGANIZATION', organizationId: orgId } as const),
+                correlationId: correlationIdOf(req as Request & { correlationId?: string }),
+            };
+        },
+    });
+
+    /**
+     * Finance. Accrues on `claims.product.claimed` (the subscription is inside
+     * the factory) and reads the sale behind a claim through orders' adapter,
+     * never through the Order table.
+     */
+    const financeModule = createFinanceModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        audit: auditModule.recorder,
+        orderRevenue: ordersModule.revenue,
+        resolveAccess: async (req: Request) =>
+            buildFinanceAccess(await accessControlModule.guard.describePrincipal(req)),
+    });
+
+    /**
+     * Payments. No gateway adapter is wired on this deployment: the platform
+     * records the order and the pending charge, the buyer completes payment in
+     * the provider's own flow, and the *webhook* is what settles the order —
+     * which is how card payments actually work, and the only statement about
+     * money this system treats as authoritative. Refunds are issued in the
+     * provider's dashboard and their reference supplied to `/process`.
+     *
+     * Without STRIPE_WEBHOOK_SECRET the webhook route is not mounted at all.
+     */
+    const paymentsModule = createPaymentsModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        audit: auditModule.recorder,
+        orders: ordersModule.ledger,
+        finance: financeModule.postings,
+        royalties: financeModule.royaltyReversal,
+        claims: claimsModule.revocation,
+        webhookSigningSecret: env.STRIPE_WEBHOOK_SECRET,
+        webhookToleranceSeconds: env.PAYMENT_WEBHOOK_TOLERANCE_SECONDS,
+        holdSeconds: env.INVENTORY_HOLD_SECONDS,
+        resolveAccess: async (req: Request) =>
+            buildPaymentAccess(await accessControlModule.guard.describePrincipal(req)),
+        // requireAuth has already run on every route that uses this, so
+        // `req.auth` is present; the non-null assertion is the same one the
+        // access-control principal resolver makes one line above.
+        resolveBuyer: (req: Request) => req.auth?.accountId as string,
+    });
+
     const apiRouter = buildRoutes({
         auth: authModule.router,
         users: usersModule.createRouter(authModule.requireAuth),
@@ -252,6 +353,9 @@ export function bootstrap(): Bootstrapped {
         adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
         adminProductSkus: skusModule.createProductRouter(authModule.requireAuth),
         adminSkus: skusModule.createRouter(authModule.requireAuth),
+        payments: paymentsModule.createBuyerRouter(authModule.requireAuth),
+        adminPayments: paymentsModule.createAdminRouter(authModule.requireAuth),
+        adminFinance: financeModule.createRouter(authModule.requireAuth),
     });
 
     // Public website (hitboxcollectibles.com) — its own database, no
@@ -261,9 +365,35 @@ export function bootstrap(): Bootstrapped {
     return {
         apiRouter,
         leadsRouter: leadsModule.router,
+        webhookRouter: paymentsModule.createWebhookRouter() ?? webhooksUnavailableRouter(),
+        releaseExpiredReservations: () => paymentsModule.releaseExpiredReservations(),
         startCaches: () => accessControlModule.startCache(),
         stopCaches: () => accessControlModule.stopCache(),
     };
+}
+
+/**
+ * Stands in for the payment webhook route when no signing secret is
+ * configured.
+ *
+ * The distinction this preserves is worth the extra router: a 503 says "this
+ * deployment cannot verify payment callbacks", while an unmounted route would
+ * 404 and look to the provider — and to whoever is debugging — exactly like a
+ * misconfigured URL. What it must never do is accept the delivery.
+ */
+function webhooksUnavailableRouter(): Router {
+    const router = Router();
+    router.use((_req, res) => {
+        res.status(503).json({
+            error: {
+                code: 'WEBHOOKS_UNAVAILABLE',
+                message:
+                    'Payment webhooks are not configured on this deployment (no signing secret).',
+                details: null,
+            },
+        });
+    });
+    return router;
 }
 
 /**
