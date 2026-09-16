@@ -182,7 +182,20 @@ export class SkuRepository {
      * leaking down here.
      */
     runInTransaction<T>(work: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
-        return this.prisma.$transaction(work);
+        return this.prisma.$transaction(work, {
+            // Remote (Neon) round-trips add up; the default 5s is too tight.
+            //
+            // `work` is a supply-cap read followed by `mintWithin`, which is
+            // itself a serial read plus a `createMany` of the whole batch. On a
+            // 500-unit manifest that is one large insert behind three round
+            // trips, and the default ceiling cuts the transaction off partway
+            // with "Transaction already closed" — after the rows were sent.
+            //
+            // Same figures as @hitbox/claims and the drop-create path in
+            // @hitbox/products, which run into this for the same reason.
+            maxWait: 10_000,
+            timeout: 20_000,
+        });
     }
 
     /**

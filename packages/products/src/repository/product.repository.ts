@@ -408,17 +408,38 @@ export class ProductRepository {
         if (!onCreated) {
             return this.prisma.product.create({ data, include: listInclude });
         }
-        return this.prisma.$transaction(async (tx) => {
-            const created = await tx.product.create({ data, include: listInclude });
-            await onCreated(tx, created);
-            // Re-read inside the transaction: `created` was projected before
-            // the callback ran, so a gallery written by it is absent from that
-            // snapshot and the response would claim the drop has no images.
-            return (await tx.product.findUniqueOrThrow({
-                where: { id: created.id },
-                include: listInclude,
-            })) as ProductWithRelations;
-        });
+        return this.prisma.$transaction(
+            async (tx) => {
+                const created = await tx.product.create({ data, include: listInclude });
+                await onCreated(tx, created);
+                // Re-read inside the transaction: `created` was projected before
+                // the callback ran, so a gallery written by it is absent from that
+                // snapshot and the response would claim the drop has no images.
+                return (await tx.product.findUniqueOrThrow({
+                    where: { id: created.id },
+                    include: listInclude,
+                })) as ProductWithRelations;
+            },
+            {
+                // Remote (Neon) round-trips add up; the default 5s is too tight.
+                //
+                // This is four sequential statements at minimum — create the
+                // Product, read the highest serial, insert the whole edition,
+                // re-read with relations — because `onCreated` mints every unit
+                // of the drop in the middle of it. A large edition is a big
+                // insert on top of several round trips to us-east-2, which is
+                // how a perfectly valid drop still died at 5323ms with
+                // "Transaction already closed".
+                //
+                // Raising the ceiling rather than splitting the work is
+                // deliberate: the atomicity is the whole point of this method.
+                // A Product that exists with a half-minted edition, and no
+                // record of which half, is a far worse outcome than a slow
+                // request. Same figures as the claim path in @hitbox/claims.
+                maxWait: 10_000,
+                timeout: 20_000,
+            },
+        );
     }
 
     async update(id: string, data: Prisma.ProductUpdateInput): Promise<ProductWithRelations> {
