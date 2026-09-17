@@ -638,6 +638,7 @@ Every module prefixes its codes, so a code always tells you where it came from:
 | `ORDERS_*` | orders |
 | `PAYMENTS_*` | payments |
 | `FINANCE_*` | finance |
+| `TAX_*` | tax |
 | `VALIDATION_ERROR`, `NOT_FOUND`, `INTERNAL_ERROR`, … | shared |
 
 (discover and marketplace define no error codes of their own — they only read, so shared codes cover them.)
@@ -656,3 +657,19 @@ separately, together with the design they implement:
 In short: `POST /api/v1/checkout` and `POST /api/v1/refunds` for buyers,
 `/api/v1/admin/payments/*` and `/api/v1/admin/finance/*` for operators, and
 `POST /webhooks/payments/stripe` (outside `/api/v1`) for the provider.
+
+---
+
+## Tax & invoicing endpoints
+
+GST and US sales tax, customer invoices (PDF on S3), artist tax documents and
+tax return filings are documented separately:
+
+* [tax/api-reference.md](tax/api-reference.md) — every endpoint with its access
+  level, and the buyer / artist / admin split
+* [tax/README.md](tax/README.md) — the rest of the tax documentation
+
+In short: `GET /api/v1/invoices/*` for a buyer's own receipts, and
+`/api/v1/admin/tax/*` for rates, invoice administration, artist tax paperwork
+and return data — where an artist and an operator call the same routes and are
+narrowed by their grant.

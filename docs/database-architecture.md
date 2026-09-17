@@ -64,6 +64,7 @@ Every model has exactly one owning module. The merge script enforces this — a 
 | **Orders** | `@hitbox/orders` | `Order`, `OrderAddress`, `InventoryReservation` | The purchase record and the stock it holds. |
 | **Payments** | `@hitbox/payments` | `PaymentTransaction`, `PaymentGatewayConfig`, `PaymentWebhookEvent`, `RefundRequest`, `DisputeCase` | Everything that talks to a payment provider. See [finance/](finance/README.md). |
 | **Finance** | `@hitbox/finance` | `RoyaltyRule`, `RoyaltyLedgerEntry`, `RoyaltyPayout`, `AdjustmentEntry`, `FinanceLedgerEntry` | Royalty rules, accrual, payout batches, corrections and the platform ledger. See [finance/](finance/README.md). |
+| **Tax** | `@hitbox/tax` | `TaxConfiguration`, `Invoice`, `InvoiceLineItem`, `InvoiceNumberSequence`, `TaxReturnFiling`, `ArtistTaxDocument`, `TaxAdjustmentEntry` | GST/sales-tax rates, the customer invoice and its PDF, artist tax paperwork and the returns it is all reported on. See [tax/](tax/README.md). |
 | **Notifications** | `@hitbox/notifications` | `NotificationTemplate`, `Notification`, `NotificationPreference` | Templated delivery + per-user channel opt-in. |
 | **Social** | `@hitbox/social` | `Follow`, `WishlistItem` | Buyer intent signals feeding feeds and triggers. |
 | **Resale** | `@hitbox/resale` | `ResaleListing` | The secondary market. |
