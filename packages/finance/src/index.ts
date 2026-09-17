@@ -50,6 +50,7 @@ export type {
     IOrderRevenueSource,
     OrderRevenueSnapshot,
 } from './domain/interfaces/order-revenue.interface';
+export { PayoutReportingAdapter } from './domain/payout-reporting.adapter';
 export { NOOP_FINANCE_AUDIT } from './domain/interfaces/audit-recorder.port';
 export type {
     FinanceAuditRecordInput,

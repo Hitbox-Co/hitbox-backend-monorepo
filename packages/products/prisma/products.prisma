@@ -59,6 +59,8 @@ model Product {
   orders           Order[]
   royaltyRules     RoyaltyRule[]
   wishlistItems    WishlistItem[]
+  /// Per-product GST/sales-tax rates and HSN codes — see packages/tax.
+  taxConfigurations TaxConfiguration[]
 }
 
 /// A purchasable option of a product — size, colourway, edition. Modelled as a

@@ -58,6 +58,21 @@ export interface ApiRouters {
      * royalty read narrows by the caller's grant, not by the path they call.
      */
     adminFinance: Router;
+    /**
+     * A buyer's own invoices: list, detail, and a short-lived download link
+     * for the PDF. Gated on `order:read` rather than the money capability,
+     * because an invoice is a fact about the caller's own order and buyers
+     * hold no payment-royalty grant at all.
+     */
+    tax: Router;
+    /**
+     * Tax administration: rates and HSN/SAC codes, invoice issue/void,
+     * artist tax documents (W-9, PAN, GSTIN), return filings and the report
+     * data behind GSTR-1, state sales tax, Form 16A and 1099-NEC. ONE
+     * namespace — an artist reading their own 1099 figures and an operator
+     * reading everyone's call the same route and are narrowed by their grant.
+     */
+    adminTax: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -81,6 +96,9 @@ export function buildRoutes(routers: ApiRouters): Router {
     // Buyer money routes sit beside /orders rather than under /admin: these
     // are the two things a buyer does with their own wallet.
     api.use('/', routers.payments);
+    // The buyer's receipts sit beside their orders and their wallet, for the
+    // same reason: these are things a buyer does with their own purchases.
+    api.use('/', routers.tax);
     api.use('/admin/authz', routers.adminAuthz);
     api.use('/admin/dashboard', routers.adminDashboard);
     api.use('/admin/media', routers.adminMedia);
@@ -88,6 +106,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/orders', routers.adminOrders);
     api.use('/admin/payments', routers.adminPayments);
     api.use('/admin/finance', routers.adminFinance);
+    api.use('/admin/tax', routers.adminTax);
     api.use('/admin/releases', routers.adminReleases);
     // Mounted BEFORE /admin/products so the nested path wins outright. Express
     // would fall through to it either way (the catalog router has no route

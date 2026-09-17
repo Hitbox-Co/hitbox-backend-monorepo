@@ -47,6 +47,10 @@ model Artist {
   /// payee, and Prisma needs the two links disambiguated.
   royaltyLedgerEntrys RoyaltyLedgerEntry[] @relation("RoyaltyLedgerEntry_payeeArtist")
   royaltyPayouts      RoyaltyPayout[]
+  /// W-9 / PAN / GST registration and the information returns issued to this
+  /// artist — see packages/tax.
+  artistTaxDocuments  ArtistTaxDocument[]
+  taxReturnFilings    TaxReturnFiling[]
 }
 
 /// A curated series of products by one artist — the unit buyers try to

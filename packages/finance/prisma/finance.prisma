@@ -168,6 +168,10 @@ model RoyaltyPayout {
   updatedAt           DateTime
 
   royaltyLedgerEntrys RoyaltyLedgerEntry[]
+  /// Form 16A / 1099-NEC filings substantiated by this payout. Both report
+  /// *paid* royalty income, so a filing points at the executed payout rather
+  /// than at the accrual — see packages/tax and docs/tax/compliance-mapping.md.
+  taxReturnFilings    TaxReturnFiling[]
 
   @@index([payeeArtistId, status])
   @@index([payeeOrganizationId, status])

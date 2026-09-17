@@ -20,6 +20,13 @@ import { createMarketsModule } from '@hitbox/markets';
 import { createOrdersModule } from '@hitbox/orders';
 import { createReleasesModule } from '@hitbox/releases';
 import { createSkusModule } from '@hitbox/skus';
+import {
+    buildBuyerTaxAccess,
+    buildTaxAccess,
+    createTaxModule,
+    S3DocumentStorage,
+    supplierProfilesFromEnv,
+} from '@hitbox/tax';
 import { createLeadsModule } from '@hitbox/leads';
 import { buildRoutes } from './routes';
 
@@ -331,6 +338,53 @@ export function bootstrap(): Bootstrapped {
         resolveBuyer: (req: Request) => req.auth?.accountId as string,
     });
 
+    /**
+     * Tax & invoicing. Built after finance and orders because it consumes both
+     * — the order behind an invoice, and the payout behind a Form 16A /
+     * 1099-NEC — and after artist for the "which artist is this user" lookup.
+     *
+     * It subscribes to `payments.order.settled` inside the factory: tax is due
+     * on the supply, so the invoice is issued when the order settles, NOT when
+     * the item is claimed. That is the one place it deliberately differs from
+     * finance's accrual trigger — see docs/tax/invoice-generation.md §2.
+     *
+     * Storage is its own `S3DocumentStorage` against the same bucket, not the
+     * media module's adapter: media presigns PUT URLs for a browser to upload
+     * through, and an invoice is produced by the server and must never be
+     * writable by a client. Null on a deploy with no bucket — invoices are
+     * still issued and every figure still recorded, and only the document
+     * routes report storage unavailable.
+     */
+    const taxDocumentStorage = env.MEDIA_S3_BUCKET
+        ? new S3DocumentStorage({
+            bucket: env.MEDIA_S3_BUCKET,
+            region: env.MEDIA_S3_REGION ?? 'us-east-1',
+            endpoint: env.MEDIA_S3_ENDPOINT,
+            forcePathStyle: Boolean(env.MEDIA_S3_ENDPOINT),
+            kmsKeyId: env.TAX_S3_KMS_KEY_ID,
+        })
+        : null;
+
+    const taxModule = createTaxModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        audit: auditModule.recorder,
+        orders: ordersModule.invoicing,
+        payouts: financeModule.payoutReporting,
+        artists: artistModule.ownership,
+        storage: taxDocumentStorage,
+        suppliers: supplierProfilesFromEnv(process.env),
+        logoPath: env.TAX_INVOICE_LOGO_PATH,
+        resolveAccess: async (req: Request) =>
+            buildTaxAccess(await accessControlModule.guard.describePrincipal(req)),
+        // Always BUYER scope, even for a caller who also holds
+        // payment-royalty:read:global — the buyer surface's contract is "your
+        // own receipts", and a wider grant must not change what it returns.
+        resolveBuyerAccess: async (req: Request) =>
+            buildBuyerTaxAccess(await accessControlModule.guard.describePrincipal(req)),
+    });
+
     const apiRouter = buildRoutes({
         auth: authModule.router,
         users: usersModule.createRouter(authModule.requireAuth),
@@ -356,6 +410,8 @@ export function bootstrap(): Bootstrapped {
         payments: paymentsModule.createBuyerRouter(authModule.requireAuth),
         adminPayments: paymentsModule.createAdminRouter(authModule.requireAuth),
         adminFinance: financeModule.createRouter(authModule.requireAuth),
+        tax: taxModule.createBuyerRouter(authModule.requireAuth),
+        adminTax: taxModule.createAdminRouter(authModule.requireAuth),
     });
 
     // Public website (hitboxcollectibles.com) — its own database, no

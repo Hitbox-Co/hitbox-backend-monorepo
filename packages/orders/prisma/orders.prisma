@@ -61,6 +61,9 @@ model Order {
   royaltyLedgerEntrys RoyaltyLedgerEntry[]
   financeLedgerEntrys FinanceLedgerEntry[]
   adjustmentEntrys    AdjustmentEntry[]
+  /// The statutory customer invoice. One per order, written once payment
+  /// settles — see packages/tax.
+  invoice             Invoice?
 
   /// The admin order list is "newest first, filtered by org/status"; the claim
   /// lookup is how an accrual finds the order behind a claimed unit.

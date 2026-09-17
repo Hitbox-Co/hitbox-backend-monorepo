@@ -75,6 +75,47 @@ const envSchema = z.object({
      */
     MEDIA_S3_PUBLIC_BASE_URL: z.string().url().optional(),
 
+    // ── Tax & invoicing (optional) ──────────────────────────────────────────
+    // HitBox's own identity as a supplier, per jurisdiction. Deployment
+    // identity rather than business data: a staging deploy must not print a
+    // production GSTIN on an invoice, and an environment variable is the
+    // cheapest way to guarantee that. @hitbox/tax asserts what it needs itself
+    // — a country with no profile simply cannot have invoices issued in it,
+    // which fails at issue time with a clear error rather than at boot.
+    //
+    // Addresses are pipe-separated, one line per segment:
+    //   TAX_SUPPLIER_IN_ADDRESS="4th Floor, Prestige Atrium|Bengaluru 560001|India"
+    //
+    // Bank account numbers are deliberately absent. HitBox is paid through the
+    // gateway before the invoice exists, so the document is a receipt, not a
+    // request for payment — printing an account number on every customer PDF
+    // would be a fraud surface for no benefit.
+    /** India: HitBox's GSTIN. Without it, no Indian invoice can be issued. */
+    TAX_SUPPLIER_IN_GSTIN: z.string().min(1).optional(),
+    TAX_SUPPLIER_IN_PAN: z.string().min(1).optional(),
+    TAX_SUPPLIER_IN_NAME: z.string().min(1).optional(),
+    TAX_SUPPLIER_IN_ADDRESS: z.string().min(1).optional(),
+    TAX_SUPPLIER_IN_PHONE: z.string().min(1).optional(),
+    /** US: HitBox's EIN. Best practice rather than law — see docs/tax/. */
+    TAX_SUPPLIER_US_EIN: z.string().min(1).optional(),
+    TAX_SUPPLIER_US_NAME: z.string().min(1).optional(),
+    TAX_SUPPLIER_US_ADDRESS: z.string().min(1).optional(),
+    TAX_SUPPLIER_US_PHONE: z.string().min(1).optional(),
+    /** Printed in the "FROM" block of every invoice, both jurisdictions. */
+    TAX_SUPPLIER_EMAIL: z.string().email().optional(),
+    /**
+     * Overrides the logo on the invoice PDF. Absolute path to a PNG; defaults
+     * to the one bundled in @hitbox/tax. A missing file degrades to a text
+     * wordmark rather than failing — an invoice without a logo is still valid.
+     */
+    TAX_INVOICE_LOGO_PATH: z.string().min(1).optional(),
+    /**
+     * Separate KMS key for tax documents. Optional: the bucket's default
+     * encryption already covers them, and this exists for the case where W-9s
+     * and invoices need a different key from the rest of the bucket.
+     */
+    TAX_S3_KMS_KEY_ID: z.string().min(1).optional(),
+
     // ── Payments (optional) ─────────────────────────────────────────────────
     // Absent on a deploy that takes no money. @hitbox/payments asserts what it
     // needs itself (createPaymentsModule), same pattern as Clerk above: a

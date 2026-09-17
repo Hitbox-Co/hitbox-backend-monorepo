@@ -13,6 +13,7 @@ import type { FinanceAccessResolver } from './controller/finance.controller';
 import type { IFinanceAuditRecorder } from './domain/interfaces/audit-recorder.port';
 import { NOOP_FINANCE_AUDIT } from './domain/interfaces/audit-recorder.port';
 import type { IOrderRevenueSource } from './domain/interfaces/order-revenue.interface';
+import { PayoutReportingAdapter } from './domain/payout-reporting.adapter';
 import { FinanceLedgerRepository } from './repository/finance-ledger.repository';
 import { PayoutRepository } from './repository/payout.repository';
 import { RoyaltyLedgerRepository } from './repository/royalty-ledger.repository';
@@ -66,6 +67,12 @@ export interface FinanceModule {
     /** Exposed for jobs and scripts that run the sweep without HTTP. */
     payouts: RoyaltyPayoutService;
     accrual: RoyaltyAccrualService;
+    /**
+     * Tax's `IPayoutLookup`: was this payout actually PAID, and who approved
+     * it. Form 16A and 1099-NEC report paid income, so tax asks here rather
+     * than summing the royalty ledger — see docs/tax/compliance-mapping.md.
+     */
+    payoutReporting: PayoutReportingAdapter;
     createRouter(requireAuth: RequestHandler): Router;
 }
 
@@ -145,6 +152,7 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
         postings: ledger,
         payouts,
         accrual,
+        payoutReporting: new PayoutReportingAdapter(deps.prisma),
 
         createRouter(requireAuth) {
             const router = Router();

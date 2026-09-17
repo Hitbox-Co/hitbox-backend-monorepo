@@ -7,8 +7,10 @@ import type { OrderWriteRepository } from '../repository/order-write.repository'
  * `OrderLedgerAdapter` answers payments' `IOrderLedger` (place, settle,
  * cancel, refund, sweep). `OrderRevenueAdapter` answers finance's
  * `IOrderRevenueSource` (what was this unit sold for, and what did it cost).
+ * `OrderInvoicingAdapter` answers tax's `IInvoiceableOrderSource` (who bought
+ * what, at what price, billed where).
  *
- * Neither interface is imported here. Both are structural: orders is the
+ * None of the three interfaces is imported here. All are structural: orders is the
  * *provider* in both relationships, and a provider that imports its consumers'
  * type definitions has the dependency arrow backwards. Bootstrap is where the
  * two shapes are checked against each other, by assignment.
@@ -159,6 +161,57 @@ export class OrderRevenueAdapter {
             costOfGoods: unitCost ? unitCost.times(order.quantity).toFixed(2) : null,
             currency: order.currency,
             quantity: order.quantity,
+        };
+    }
+}
+
+/**
+ * Matches `IInvoiceableOrderSource` in @hitbox/tax.
+ *
+ * Kept separate from `OrderRevenueAdapter` because the two answer different
+ * questions from different callers: finance asks what the sale earned, tax asks
+ * what the document should say. Only this one exposes the buyer's name and
+ * billing address, so only the invoicing path ever loads them.
+ */
+export class OrderInvoicingAdapter {
+    constructor(private readonly orders: OrderWriteRepository) { }
+
+    async findById(orderId: string) {
+        const order = await this.orders.findInvoiceableOrder(orderId);
+        if (!order) return null;
+
+        const billing = order.orderAddresss[0] ?? null;
+
+        return {
+            orderId: order.id,
+            buyerId: order.buyerId,
+            organizationId: order.organizationId,
+            productId: order.productId,
+            skuId: order.skuId,
+            productName: order.product.name,
+            quantity: order.quantity,
+            unitPrice: order.unitPrice.toFixed(2),
+            amount: order.amount.toFixed(2),
+            currency: order.currency,
+            status: order.status,
+            placedAt: order.placedAt,
+            // The address snapshot's recipient name wins over the account's:
+            // it is what the customer typed for this purchase, and it is the
+            // name that belongs on their invoice.
+            customerName:
+                billing?.recipientName ?? order.buyer.fullName ?? order.buyer.email,
+            customerEmail: order.buyer.email,
+            billingAddress: billing
+                ? {
+                    lines: [billing.line1, billing.line2].filter(
+                        (line): line is string => Boolean(line),
+                    ),
+                    city: billing.city,
+                    state: billing.state,
+                    postalCode: billing.postalCode,
+                    countryCode: billing.countryCode,
+                }
+                : null,
         };
     }
 }

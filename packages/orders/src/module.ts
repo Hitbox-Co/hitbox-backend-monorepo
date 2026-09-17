@@ -12,6 +12,7 @@ import { OrderController } from './controller/order.controller';
 import type { OrderCallerResolver } from './controller/order.controller';
 import {
     OrderLedgerAdapter,
+    OrderInvoicingAdapter,
     OrderRevenueAdapter,
 } from './domain/order-ledger.adapter';
 import { OrderRepository } from './repository/order.repository';
@@ -55,6 +56,11 @@ export interface OrdersModule {
      * cost, which is everything a royalty accrual needs from an order.
      */
     revenue: OrderRevenueAdapter;
+    /**
+     * Tax's `IInvoiceableOrderSource`: who bought what, at what price, billed
+     * where — everything the customer invoice prints.
+     */
+    invoicing: OrderInvoicingAdapter;
 }
 
 export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
@@ -97,6 +103,7 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
     return {
         ledger: new OrderLedgerAdapter(writes),
         revenue: new OrderRevenueAdapter(writes),
+        invoicing: new OrderInvoicingAdapter(writes),
 
         createRouter(requireAuth) {
             const router = Router();

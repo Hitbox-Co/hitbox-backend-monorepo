@@ -36,6 +36,8 @@ model Organization {
   /// scope a rule applies to and the party it pays.
   royaltyLedgerEntrys   RoyaltyLedgerEntry[] @relation("RoyaltyLedgerEntry_payeeOrganization")
   royaltyPayouts        RoyaltyPayout[]
+  /// Invoices issued for this organization's drops — see packages/tax.
+  invoices              Invoice[]
 }
 
 /// Which kind of entity an Organization represents. HITBOX is the platform's

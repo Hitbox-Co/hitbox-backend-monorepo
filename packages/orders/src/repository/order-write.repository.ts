@@ -468,6 +468,50 @@ export class OrderWriteRepository {
         });
     }
 
+    /**
+     * Everything the tax module needs to raise the invoice for one order.
+     *
+     * A separate query from `findOrderRevenue` on purpose: an invoice needs the
+     * buyer's name, e-mail and **billing** address, which a royalty accrual has
+     * no business loading. Keeping them apart means the accrual path never
+     * pulls a customer's postal address into memory.
+     */
+    findInvoiceableOrder(orderId: string) {
+        return this.prisma.order.findUnique({
+            where: { id: orderId },
+            select: {
+                id: true,
+                buyerId: true,
+                status: true,
+                organizationId: true,
+                productId: true,
+                skuId: true,
+                quantity: true,
+                unitPrice: true,
+                amount: true,
+                currency: true,
+                placedAt: true,
+                product: { select: { name: true } },
+                buyer: { select: { fullName: true, email: true } },
+                orderAddresss: {
+                    // Billing, and only billing: the invoice states where the
+                    // customer is taxed, which is not necessarily where the
+                    // parcel went.
+                    where: { usage: 'BILLING' },
+                    select: {
+                        recipientName: true,
+                        line1: true,
+                        line2: true,
+                        city: true,
+                        state: true,
+                        postalCode: true,
+                        countryCode: true,
+                    },
+                },
+            },
+        });
+    }
+
     // ── helpers ─────────────────────────────────────────────────────────────
 
     /**

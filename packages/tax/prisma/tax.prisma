@@ -1,0 +1,506 @@
+// ============================================================================
+// TAX & INVOICING MODULE SCHEMA  (packages/tax/prisma/tax.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: TaxConfiguration, Invoice, InvoiceLineItem, InvoiceNumberSequence,
+//       TaxReturnFiling, ArtistTaxDocument, TaxAdjustmentEntry
+//
+// Statutory records, not accounting. The finance module owns what HitBox
+// *earned* (royalty ledger, payouts, revenue); this module owns what HitBox
+// must be able to *show a tax authority*: the invoice issued to the customer,
+// the rate it was issued at, the PDF that was sent, the artist's tax paperwork
+// and the return it was reported on.
+//
+// Two properties drive nearly every column here, and both come from the fact
+// that a tax authority may ask about a transaction years after it happened:
+//
+//   **Everything is snapshotted.** An Invoice copies the rate, the HSN code,
+//   the unit price and the supplier's own registration numbers onto itself. A
+//   later edit to TaxConfiguration, to the product, or to HitBox's own GSTIN
+//   must never change what an already-issued invoice says — that document has
+//   left the building and been filed on a GSTR-1 return.
+//
+//   **Nothing is deleted or edited.** An issued invoice moves to VOID or is
+//   superseded by a CORRECTED one (`supersedesInvoiceId`); a wrong tax figure
+//   is corrected by a TaxAdjustmentEntry that references the original. Same
+//   append-only rule the finance ledgers follow.
+//
+// See docs/tax/ for the design, the API surface and the compliance mapping
+// back to the HitBox Tax & Invoicing Compliance Guide v1.1.
+// ============================================================================
+
+/// The tax rate + classification code that applies to one product in one
+/// jurisdiction, versioned by an effective window.
+///
+/// Versioned rather than mutable for the same reason RoyaltyRule is: GST rates
+/// change by notification on a date, and re-deriving an old invoice has to
+/// reproduce the rate that was actually charged. `effectiveTo` null means "still
+/// current"; resolution is most-specific-first (product+state → product+country
+/// → country default) inside the service.
+///
+/// `hsnCode` is mandatory for India in practice — an invoice without one is not
+/// GST-compliant and the code is matched against GSTR-1 filings — but it is
+/// nullable at the column level because US rows have no equivalent.
+model TaxConfiguration {
+  id             String     @id @db.Uuid
+  /// Null means "the default for this jurisdiction", used when no
+  /// product-specific row exists. Products are the specific case.
+  productId      String?    @db.Uuid
+  product        Product?   @relation(fields: [productId], references: [id])
+  /// ISO 3166-1 alpha-2. 'IN' or 'US' today.
+  countryCode    String     @db.VarChar(2)
+  /// US only: the state whose rate this is ('CA'). Null for country-level rows
+  /// and for India, where GST is centrally rated.
+  stateCode      String?    @db.VarChar(2)
+  taxType        TaxType
+  /// Percentage, e.g. 12.000 for 12%. Zero is a legitimate value (exempt
+  /// supply that still has to appear on the invoice as 0%); use
+  /// `exemptionReason` to say why rather than omitting the row.
+  ///
+  /// Three decimal places, not two: US combined state+county+district rates
+  /// routinely carry three (California's 8.625%, New York's 8.875%), and
+  /// rounding one to 8.63% would print a rate on a statutory document that the
+  /// tax authority's own rate table does not contain.
+  taxRate        Decimal    @db.Decimal(6, 3)
+  /// India: HSN (goods) — '9706' for collectibles and memorabilia.
+  hsnCode        String?    @db.VarChar(20)
+  /// India: SAC (services) — '998361' for marketplace commission.
+  sacCode        String?    @db.VarChar(20)
+  exemptionReason String?   @db.VarChar(200)
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  status         TaxConfigurationStatus
+  createdById    String?    @db.Uuid
+  createdBy      User?      @relation("TaxConfigurationCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  /// One rate per (product, jurisdiction) taking effect on a given date — a
+  /// second row for the same day is a mistake, not a newer version.
+  @@unique([productId, countryCode, stateCode, effectiveFrom])
+  /// Rate resolution: "what applies in IN / US-CA right now".
+  @@index([countryCode, stateCode, effectiveFrom])
+  @@index([productId, effectiveFrom])
+  @@index([status, effectiveTo])
+}
+
+/// A customer invoice — the statutory document, and the row a GSTR-1 or a state
+/// sales-tax return is built from.
+///
+/// One invoice per order. `invoiceNumber` is unique, gap-free and sequential
+/// within a fiscal year (GST law requires exactly that), and is minted from
+/// InvoiceNumberSequence inside the same transaction that writes this row.
+///
+/// The supplier columns (`supplierGstin`, `supplierPan`, `supplierEin`,
+/// `supplierName`, `supplierAddress`) are copied onto every invoice rather than
+/// read from configuration at render time. They change — a registration is
+/// amended, an office moves — and an invoice must keep showing the details that
+/// were on the document the customer received.
+///
+/// `pdfStorageRef` is the S3 **key**, never a URL: signed-URL policy stays a
+/// runtime decision, exactly as `MediaAsset.storageRef` does. `pdfSha256` is
+/// what proves the object in the bucket is still the document that was issued.
+model Invoice {
+  id             String        @id @db.Uuid
+  /// e.g. 'INV-2026-27-IN-000123'. See domain/invoice-number.ts.
+  invoiceNumber  String        @unique @db.VarChar(50)
+  invoiceDate    DateTime
+  /// Fiscal year label the sequence was drawn from ('2026-27' for India,
+  /// '2026' for the US). Stored so a return can be assembled without
+  /// re-deriving the fiscal calendar from `invoiceDate`.
+  fiscalYear     String        @db.VarChar(10)
+
+  orderId        String        @unique @db.Uuid
+  order          Order         @relation(fields: [orderId], references: [id])
+  buyerId        String        @db.Uuid
+  buyer          User          @relation("InvoiceBuyer", fields: [buyerId], references: [id])
+  organizationId String?       @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  // ── Jurisdiction & money ──────────────────────────────────────────────────
+  countryCode    String        @db.VarChar(2)
+  stateCode      String?       @db.VarChar(2)
+  currency       Currency
+  /// Sum of line subtotals, before tax.
+  subtotal       Decimal       @db.Decimal(12, 2)
+  taxAmount      Decimal       @db.Decimal(12, 2)
+  totalAmount    Decimal       @db.Decimal(12, 2)
+  taxType        TaxType
+  /// The headline rate. Per-line rates live on InvoiceLineItem; this is the
+  /// single rate when (as today) every line on an invoice shares one.
+  /// Decimal(6,3) — see TaxConfiguration.taxRate.
+  taxRate        Decimal       @db.Decimal(6, 3)
+  /// India: the HSN the whole invoice was filed under, denormalised for the
+  /// HSN-wise summary GSTR-1 requires.
+  hsnCode        String?       @db.VarChar(20)
+
+  // ── Supplier snapshot (HitBox) ────────────────────────────────────────────
+  supplierName    String       @db.VarChar(200)
+  supplierAddress String
+  /// India: HitBox's own GSTIN. Mandatory on an Indian invoice.
+  supplierGstin   String?      @db.VarChar(20)
+  supplierPan     String?      @db.VarChar(20)
+  /// US: HitBox's EIN.
+  supplierEin     String?      @db.VarChar(20)
+
+  // ── Customer snapshot ─────────────────────────────────────────────────────
+  customerName    String       @db.VarChar(200)
+  customerEmail   String       @db.VarChar(320)
+  /// Frozen billing address as printed. Null for a purely digital order with no
+  /// billing address captured.
+  customerAddress String?
+  /// B2B only; optional for B2C, which is the normal case here.
+  customerGstin   String?      @db.VarChar(20)
+
+  // ── Pricing provenance ────────────────────────────────────────────────────
+  /// The unit sale price this invoice was priced at, snapshotted at issue.
+  /// Guide v1.1 §8.1: a later re-versioning of the drop's pricing must never
+  /// retroactively change an already-issued invoice.
+  salesPriceSnapshot Decimal?  @db.Decimal(12, 2)
+  /// Pointer to the `product_cost` version that priced it. Plain id with NO
+  /// foreign key: that table is introduced by the COGS/Sales-Price change and
+  /// does not exist in this schema yet, and an invoice must never be blocked
+  /// from being issued by a pricing table it does not own. Null until it lands.
+  productCostId      String?   @db.Uuid
+
+  // ── The document ──────────────────────────────────────────────────────────
+  /// S3 key under `tax-invoices/`, never a URL. Null between the row being
+  /// written and the PDF being rendered — the row is the source of truth, the
+  /// PDF is a projection of it and can always be re-rendered.
+  pdfStorageRef  String?       @db.VarChar(500)
+  /// SHA-256 of the rendered PDF bytes. Integrity evidence in an audit.
+  pdfSha256      String?       @db.VarChar(64)
+  pdfRenderedAt  DateTime?
+  /// When the invoice was e-mailed to the customer. Null = not sent yet.
+  deliveredAt    DateTime?
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  status         InvoiceStatus
+  /// Set when this invoice replaces an earlier one (status CORRECTED). The
+  /// superseded invoice is never deleted — both stay on the return trail.
+  supersedesInvoiceId String?  @db.Uuid
+  supersedes          Invoice? @relation("InvoiceCorrection", fields: [supersedesInvoiceId], references: [id])
+  supersededBy        Invoice[] @relation("InvoiceCorrection")
+  voidReason     String?
+  issuedAt       DateTime
+  notes          String?
+
+  // ── Audit ─────────────────────────────────────────────────────────────────
+  /// Null when the invoice was generated by the system on order settlement,
+  /// which is the normal path; set when a HitBox operator issued it by hand.
+  createdById    String?       @db.Uuid
+  createdBy      User?         @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  lineItems            InvoiceLineItem[]
+  taxAdjustmentEntrys  TaxAdjustmentEntry[]
+
+  /// The customer's own invoice list, newest first.
+  @@index([buyerId, invoiceDate])
+  /// Return assembly: every invoice issued in a jurisdiction in a period.
+  @@index([countryCode, stateCode, invoiceDate])
+  @@index([fiscalYear, countryCode])
+  @@index([status, invoiceDate])
+  @@index([organizationId, invoiceDate])
+}
+
+/// One line of an invoice. Separate table rather than JSON because GSTR-1 is
+/// filed with an HSN-wise breakdown — the tax authority reads lines, not
+/// invoices, and a JSON blob cannot be summed by HSN in SQL.
+///
+/// Every money column is a snapshot; nothing here is recomputed on read.
+model InvoiceLineItem {
+  id          String   @id @db.Uuid
+  invoiceId   String   @db.Uuid
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
+  /// Display order on the document, 1-based.
+  position    Int
+  /// As printed. Copied from the product at issue time, not joined at render
+  /// time — a renamed product must not rename an issued invoice's line.
+  description String   @db.VarChar(300)
+  /// Plain id, no FK: the line must survive a product being retired.
+  productId   String?  @db.Uuid
+  skuId       String?  @db.Uuid
+  /// India: mandatory per line. US: null.
+  hsnCode     String?  @db.VarChar(20)
+  sacCode     String?  @db.VarChar(20)
+  quantity    Int
+  unitPrice   Decimal  @db.Decimal(12, 2)
+  /// quantity × unitPrice, before tax.
+  lineSubtotal Decimal @db.Decimal(12, 2)
+  taxRate     Decimal  @db.Decimal(6, 3)
+  taxAmount   Decimal  @db.Decimal(12, 2)
+  lineTotal   Decimal  @db.Decimal(12, 2)
+  createdAt   DateTime
+
+  @@unique([invoiceId, position])
+  @@index([invoiceId])
+  /// The HSN-wise summary GSTR-1 asks for.
+  @@index([hsnCode])
+}
+
+/// The counter behind `Invoice.invoiceNumber`.
+///
+/// GST law requires invoice numbers to be unique, sequential and **gap-free**
+/// within a fiscal year, per series. A database sequence cannot provide that —
+/// `nextval` is non-transactional, so a rolled-back invoice burns a number and
+/// leaves a hole an auditor will ask about. This row is instead locked and
+/// incremented inside the same transaction that inserts the invoice: if the
+/// invoice rolls back, so does the number.
+///
+/// The cost is that invoice creation serialises per (series, fiscal year). At
+/// HitBox's volume that is nothing, and it is the correct trade — a gap in the
+/// series is a compliance finding, a few milliseconds of lock contention is not.
+model InvoiceNumberSequence {
+  id          String   @id @db.Uuid
+  /// Country whose series this is; each jurisdiction numbers independently.
+  countryCode String   @db.VarChar(2)
+  /// '2026-27' (India, Apr–Mar) or '2026' (US, calendar year).
+  fiscalYear  String   @db.VarChar(10)
+  /// Last number issued. The next invoice takes `lastNumber + 1`.
+  lastNumber  Int
+  updatedAt   DateTime
+
+  @@unique([countryCode, fiscalYear])
+}
+
+/// A tax return or statutory information filing, and its status.
+///
+/// Covers both the indirect-tax returns HitBox files on its own sales
+/// (GSTR-1, GSTR-3B, a US state sales-tax return) and the information returns
+/// it files about what it paid artists (Form 16A, 1099-NEC).
+///
+/// `payoutId` is the control that Guide v1.1 §8.3 turns on: Form 16A and
+/// 1099-NEC report *paid* royalty income, so a filing of either type must point
+/// at the payout that was actually approved and executed, never at a ledger
+/// accrual. It is a real FK to RoyaltyPayout — finance owns that table and a
+/// filing that references a payout which does not exist is a filing that cannot
+/// be substantiated.
+model TaxReturnFiling {
+  id             String        @id @db.Uuid
+  filingType     TaxFilingType
+  countryCode    String        @db.VarChar(2)
+  stateCode      String?       @db.VarChar(2)
+  periodStart    DateTime
+  periodEnd      DateTime
+
+  totalTaxableAmount Decimal?  @db.Decimal(14, 2)
+  totalTaxCollected  Decimal?  @db.Decimal(14, 2)
+  totalTaxDue        Decimal?  @db.Decimal(14, 2)
+  /// India: Input Tax Credit claimed against the period's output tax.
+  inputTaxCredit     Decimal?  @db.Decimal(14, 2)
+  currency           Currency?
+
+  /// Information returns only (FORM_16A / FORM_1099_NEC): whose income this
+  /// reports, and which approved payout substantiates it.
+  artistId       String?       @db.Uuid
+  artist         Artist?       @relation(fields: [artistId], references: [id])
+  payoutId       String?       @db.Uuid
+  payout         RoyaltyPayout? @relation(fields: [payoutId], references: [id])
+
+  status         TaxFilingStatus
+  filedAt        DateTime?
+  dueDate        DateTime?
+  /// The government's acknowledgement / ARN, once filed.
+  referenceNumber String?      @db.VarChar(100)
+  /// S3 key of the generated return or certificate PDF, when there is one
+  /// (Form 16A and 1099-NEC produce a document the artist receives).
+  documentStorageRef String?   @db.VarChar(500)
+  notes          String?
+
+  createdById    String?       @db.Uuid
+  createdBy      User?         @relation("TaxFilingCreatedBy", fields: [createdById], references: [id])
+  filedById      String?       @db.Uuid
+  filedBy        User?         @relation("TaxFilingFiledBy", fields: [filedById], references: [id])
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  /// One filing per return per period per jurisdiction. Information returns
+  /// carry an artist, so they are unique per artist as well.
+  @@unique([filingType, countryCode, stateCode, periodStart, artistId])
+  @@index([status, dueDate])
+  @@index([countryCode, filingType, periodStart])
+  @@index([artistId, filingType])
+}
+
+/// An artist's tax paperwork: W-9 (US), PAN and GST registration (India), and
+/// the copies of information returns HitBox has issued them.
+///
+/// `documentStorageRef` points at a **private** S3 key — these are the most
+/// sensitive documents the platform holds (an SSN sits on a W-9), so they never
+/// live under a public prefix and are only ever served through a short-lived
+/// presigned GET after a permission check.
+///
+/// `documentNumber` holds the PAN or GSTIN, which are business identifiers. It
+/// deliberately does **not** hold an SSN or EIN: the number on a W-9 stays
+/// inside the PDF, which is access-controlled as a whole.
+model ArtistTaxDocument {
+  id             String   @id @db.Uuid
+  artistId       String   @db.Uuid
+  artist         Artist   @relation(fields: [artistId], references: [id])
+  countryCode    String   @db.VarChar(2)
+  documentType   ArtistTaxDocumentType
+
+  documentStorageRef String? @db.VarChar(500)
+  /// SHA-256 of the stored file — the same integrity evidence an invoice keeps.
+  documentSha256 String?  @db.VarChar(64)
+  /// PAN / GSTIN / state tax id. Never an SSN — see the note above.
+  documentNumber String?  @db.VarChar(50)
+  /// Legal name as it appears on the form, which is not always the display name.
+  issuerName     String?  @db.VarChar(200)
+  issueDate      DateTime?
+  /// Null when the document does not expire (a W-9 is valid indefinitely).
+  expiresAt      DateTime?
+
+  status         ArtistTaxDocumentStatus
+  verifiedById   String?  @db.Uuid
+  verifiedBy     User?    @relation("ArtistTaxDocumentVerifiedBy", fields: [verifiedById], references: [id])
+  verifiedAt     DateTime?
+  /// US: set when no valid W-9 is on file, which forces 24% backup withholding
+  /// on the next payout. Denormalised onto the document row because the payout
+  /// path asks "is this artist withholding-exempt" and must not have to
+  /// interpret document status itself.
+  backupWithholdingApplied Boolean
+  backupWithholdingRate    Decimal? @db.Decimal(5, 2)
+  notes          String?
+
+  createdById    String?  @db.Uuid
+  createdBy      User?    @relation("ArtistTaxDocumentCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  /// One live document of each type per artist per country. A replacement
+  /// supersedes rather than duplicates — status ARCHIVED on the old row.
+  @@unique([artistId, documentType, countryCode, status])
+  @@index([artistId, status])
+  /// The expiry sweep that raises "this artist's GST registration lapses in 30
+  /// days" before a payout is blocked by it.
+  @@index([expiresAt])
+}
+
+/// A correction to an invoice's tax figure, posted rather than edited.
+///
+/// Mirrors the finance module's AdjustmentEntry exactly: the original invoice
+/// keeps its own row and its own numbers, and this table records what changed,
+/// why, and who approved it. A tax authority reading the trail sees both the
+/// document that was issued and the correction that followed.
+model TaxAdjustmentEntry {
+  id                 String   @id @db.Uuid
+  invoiceId          String   @db.Uuid
+  invoice            Invoice  @relation(fields: [invoiceId], references: [id])
+  adjustmentType     TaxAdjustmentType
+  reason             String
+  /// What the invoice said.
+  originalTaxAmount  Decimal  @db.Decimal(12, 2)
+  /// What it should have said.
+  adjustedTaxAmount  Decimal  @db.Decimal(12, 2)
+  /// adjustedTaxAmount − originalTaxAmount. Signed: negative is a refund of
+  /// tax over-collected. Stored rather than derived so the trail reads as a
+  /// ledger.
+  adjustmentAmount   Decimal  @db.Decimal(12, 2)
+  currency           Currency
+
+  status             TaxAdjustmentStatus
+  approvedById       String?  @db.Uuid
+  approvedBy         User?    @relation("TaxAdjustmentApprovedBy", fields: [approvedById], references: [id])
+  approvedAt         DateTime?
+  rejectionReason    String?
+
+  createdById        String?  @db.Uuid
+  createdBy          User?    @relation("TaxAdjustmentCreatedBy", fields: [createdById], references: [id])
+  createdAt          DateTime
+  updatedAt          DateTime
+
+  @@index([invoiceId])
+  @@index([status, approvedAt])
+}
+
+// ── Enums ───────────────────────────────────────────────────────────────────
+
+/// Which tax regime a rate belongs to. GST is India's single indirect tax;
+/// SALES_TAX is the US state-level tax. EXEMPT is a real classification, not
+/// the absence of one — an exempt supply still appears on the invoice.
+enum TaxType {
+  GST
+  SALES_TAX
+  EXEMPT
+}
+
+enum TaxConfigurationStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Invoice lifecycle. There is no DRAFT: an invoice row is written only once
+/// the order is settled, because issuing a number that may never be used would
+/// put a gap in the statutory series.
+enum InvoiceStatus {
+  /// Issued to the customer. The normal terminal state.
+  ISSUED
+  /// Cancelled. The number is retained and reported as void — never reused.
+  VOID
+  /// Replaced by a later invoice, which carries `supersedesInvoiceId`.
+  CORRECTED
+}
+
+/// The returns and certificates this module tracks.
+enum TaxFilingType {
+  /// India, monthly: outward supplies, with HSN-wise summary.
+  GSTR_1
+  /// India, monthly: summary return and tax payment.
+  GSTR_3B
+  /// India, quarterly: TDS certificate issued to an artist.
+  FORM_16A
+  /// US, annual: non-employee compensation reported to the IRS and the artist.
+  FORM_1099_NEC
+  /// US, per state, usually quarterly.
+  STATE_SALES_TAX
+}
+
+enum TaxFilingStatus {
+  PENDING
+  READY
+  FILED
+  ACCEPTED
+  REJECTED
+}
+
+enum ArtistTaxDocumentType {
+  /// US: Request for Taxpayer Identification Number.
+  W9
+  /// India: Permanent Account Number.
+  PAN
+  /// India: GST registration certificate.
+  GST_REGISTRATION
+  /// US: state tax registration.
+  STATE_TAX_ID
+  /// A copy of a 1099-NEC HitBox issued to this artist.
+  FORM_1099_NEC_ISSUED
+  /// A copy of a Form 16A TDS certificate HitBox issued to this artist.
+  FORM_16A_ISSUED
+}
+
+enum ArtistTaxDocumentStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+  /// Superseded by a newer document of the same type.
+  ARCHIVED
+}
+
+enum TaxAdjustmentType {
+  /// The rate or amount charged was wrong.
+  TAX_CORRECTION
+  /// Tax refunded because the sale was refunded.
+  REFUND
+  /// An exemption was established after the invoice was issued.
+  EXEMPTION_GRANTED
+}
+
+enum TaxAdjustmentStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+}
