@@ -9,6 +9,8 @@ import { ACCESS_CONTROL_MODULE } from './constants/access-control.constant';
 import { AuthzController } from './controller/authz.controller';
 import type { IGrantsInvalidator } from './domain/interfaces/grants-invalidator.interface';
 import { NOOP_GRANTS_INVALIDATOR } from './domain/interfaces/grants-invalidator.interface';
+import type { IIdentityInvitations } from './domain/interfaces/identity-invitations.interface';
+import { UNAVAILABLE_IDENTITY_INVITATIONS } from './domain/interfaces/identity-invitations.interface';
 import type { IPrincipalGrantsLookup } from './domain/interfaces/principal-grants.interface';
 import { createRequirePermission } from './middleware/require-permission.middleware';
 import type {
@@ -18,9 +20,12 @@ import type {
 import { PermissionRepository } from './repository/permission.repository';
 import { RoleAssignmentRepository } from './repository/role-assignment.repository';
 import { RoleRepository } from './repository/role.repository';
+import { StaffInvitationRepository } from './repository/staff-invitation.repository';
+import { UserDirectoryRepository } from './repository/user-directory.repository';
 import { PermissionService } from './service/permission.service';
 import { RoleAssignmentService } from './service/role-assignment.service';
 import { RoleService } from './service/role.service';
+import { StaffInvitationService } from './service/staff-invitation.service';
 
 export interface AccessControlModuleDeps {
     prisma: PrismaClient;
@@ -38,6 +43,16 @@ export interface AccessControlModuleDeps {
      * authorization decision without cache interference.
      */
     cache?: false | GrantsCacheOptions;
+    /**
+     * Sends staff invitations through the identity provider. Supplied by
+     * bootstrap from `@hitbox/auth`. Omitted, the invitation ROUTES still mount
+     * and still work for an address that already has an account — only the
+     * email path refuses, with a clear message, rather than silently going
+     * nowhere.
+     */
+    identityInvitations?: IIdentityInvitations;
+    /** How long a staff invitation stays claimable. Defaults to 72 hours. */
+    invitationTtlHours?: number;
 }
 
 export interface AccessControlModule {
@@ -55,6 +70,11 @@ export interface AccessControlModule {
     createSelfRouter(requireAuth: RequestHandler): Router;
     /** Mirrors the code catalog into the permissions table. */
     syncPermissionCatalog(): Promise<{ created: number; updated: number; deactivated: number }>;
+    /**
+     * Staff provisioning. Exposed for jobs and scripts: the expiry sweep, and
+     * seeding the first administrator on a fresh deployment.
+     */
+    invitations: StaffInvitationService;
     /**
      * Subscribes the in-process cache to cross-instance invalidation
      * broadcasts. Call once after bootstrap; no-ops when caching is disabled
@@ -104,6 +124,9 @@ export function createAccessControlModule(
         logger,
     });
     const permissionService = new PermissionService();
+    const invitationRepo = new StaffInvitationRepository(deps.prisma);
+    const userDirectory = new UserDirectoryRepository(deps.prisma);
+
     const assignmentService = new RoleAssignmentService({
         assignments: assignmentRepo,
         roles: roleRepo,
@@ -112,10 +135,43 @@ export function createAccessControlModule(
         logger,
     });
 
+    const invitationService = new StaffInvitationService({
+        invitations: invitationRepo,
+        roles: roleRepo,
+        assignments: assignmentService,
+        identity: deps.identityInvitations ?? UNAVAILABLE_IDENTITY_INVITATIONS,
+        users: userDirectory,
+        eventBus: deps.eventBus,
+        logger,
+        ttlHours: deps.invitationTtlHours ?? 72,
+    });
+
+    // Claim a pending invitation the moment the invited person's account
+    // exists. Subscribed to the USERS event, not the AUTH one, and that is
+    // load-bearing: the bus fires every subscriber of an event concurrently via
+    // setImmediate, so listening to the auth event would race the users
+    // module's insert and fail this assignment's foreign key intermittently.
+    // The users module publishes `users.account.provisioned` AFTER the row is
+    // committed, which is the only deterministic signal available.
+    deps.eventBus.subscribe<{ userId: string; email: string }>(
+        'users.account.provisioned',
+        async (payload) => {
+            try {
+                await invitationService.claimFor(payload);
+            } catch (error) {
+                logger.error(
+                    { err: error, userId: payload.userId },
+                    'staff invitation claim failed — the account exists without its role',
+                );
+            }
+        },
+    );
+
     const controller = new AuthzController(
         roleService,
         permissionService,
         assignmentService,
+        invitationService,
         guard,
     );
 
@@ -124,6 +180,7 @@ export function createAccessControlModule(
     return {
         guard,
         grants,
+        invitations: invitationService,
 
         createAdminRouter(requireAuth) {
             const router = Router();
@@ -206,6 +263,42 @@ export function createAccessControlModule(
                     }),
                 }),
                 controller.revokeRole,
+            );
+
+            // ── Staff invitations ────────────────────────────────────────────
+            //
+            // Gated on `employee-role-mgmt:assign` — the SAME capability that
+            // gates granting a role directly, because that is exactly what an
+            // invitation is: a role assignment that happens later. Making the
+            // deferred door weaker than the immediate one would be the whole
+            // control undone.
+            //
+            // The context resolver mirrors the direct assign route, so an
+            // ORG-scoped administrator may only invite into their own
+            // organization; a platform-wide invitation (organizationId null)
+            // needs a grant that reaches beyond one organization.
+            router.get(
+                '/invitations',
+                requirePermission('employee-role-mgmt:read'),
+                controller.listInvitations,
+            );
+            router.post(
+                '/invitations',
+                requirePermission('employee-role-mgmt:assign', {
+                    context: (req) => ({
+                        organizationId:
+                            (req.body as { organizationId?: string | null } | undefined)
+                                ?.organizationId ?? null,
+                    }),
+                }),
+                controller.inviteStaff,
+            );
+            // Withdrawing an invitation is revoking a grant that has not landed
+            // yet, so it takes the delete capability rather than assign.
+            router.post(
+                '/invitations/:invitationId/revoke',
+                requirePermission('employee-role-mgmt:delete'),
+                controller.revokeInvitation,
             );
 
             return router;

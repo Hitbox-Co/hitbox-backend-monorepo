@@ -106,7 +106,7 @@ to these rows.
 
 | Phase | Status |
 | --- | --- |
-| 1 — Foundation (tables, HSN codes, `invoice_master`) | ✅ schema written and validated; migration not yet run |
+| 1 — Foundation (tables, HSN codes, `invoice_master`) | ✅ schema written, validated and migrated |
 | 2 — Invoice generation (logic, PDF template, numbering) | ✅ · e-mail delivery ❌ |
 | 3 — Tax filing (`tax_return_filing`, GSTR-1 export, state report, dashboard) | 🟡 table + export data ✅; dashboard ⬜ (belongs in `@hitbox/dashboard`) |
 | 4 — Document management (`artist_tax_documents`, W-9 upload, expiry alerts) | ✅ table, registration, review, expiry sweep · alert delivery ⬜ (`@hitbox/notifications`) |

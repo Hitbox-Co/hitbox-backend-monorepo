@@ -160,7 +160,7 @@ number on every customer-facing PDF would be a fraud surface for no benefit.
 
 | | |
 | --- | --- |
-| Schema | ✅ merged and validated (`pnpm db:validate`) — **migration not yet run** |
+| Schema | ✅ merged, validated and **migrated** — `20260918000000_tax_invoicing_and_staff_invitations`, applied 2026-09-18 |
 | Invoice generation, numbering, PDF | ✅ built, 72 unit tests |
 | S3 storage | ✅ built and **verified against the live `hitbox-media-dev` bucket** — see [s3-storage.md §6](s3-storage.md#6-verification-run) |
 | Rates, artist documents, filings, adjustments | ✅ built |

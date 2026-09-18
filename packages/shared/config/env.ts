@@ -75,6 +75,21 @@ const envSchema = z.object({
      */
     MEDIA_S3_PUBLIC_BASE_URL: z.string().url().optional(),
 
+    /**
+     * Where Clerk sends an invited staff member after they accept — the admin
+     * dashboard's sign-up completion route. Optional: Clerk falls back to the
+     * instance's own configured URL, which is the right default for a single
+     * dashboard. Set it when the dashboard is on its own domain.
+     */
+    ADMIN_INVITATION_REDIRECT_URL: z.string().url().optional(),
+    /**
+     * How long a staff invitation stays claimable, in hours. Short by default:
+     * an invitation is a standing offer of privilege, and one that sits unused
+     * for a fortnight is more likely to be a stale mailbox than a colleague who
+     * has not got round to it.
+     */
+    ADMIN_INVITATION_TTL_HOURS: z.coerce.number().int().positive().default(72),
+
     // ── Tax & invoicing (optional) ──────────────────────────────────────────
     // HitBox's own identity as a supplier, per jurisdiction. Deployment
     // identity rather than business data: a staging deploy must not print a

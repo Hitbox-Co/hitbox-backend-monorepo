@@ -17,6 +17,13 @@ const logger = {
     info: jest.fn(), warn: jest.fn(), error: jest.fn(), debug: jest.fn(),
 } as unknown as Parameters<typeof UserService.prototype.constructor>[0]['logger'];
 
+/**
+ * A fake event bus. `syncFromClerk` publishes `users.account.provisioned` after
+ * the upsert, which is what lets @hitbox/access-control claim a pending staff
+ * invitation without racing this module's insert.
+ */
+const makeBus = () => ({ publish: jest.fn(async () => undefined), subscribe: jest.fn() });
+
 function row(overrides: Partial<User> = {}): User {
     return {
         id: '05acd508-fe94-4bc1-83f7-6a544583047b',
@@ -162,6 +169,7 @@ describe('updateProfileSchema', () => {
 describe('visibility on the public endpoint', () => {
     it('returns a PUBLIC profile', async () => {
         const service = new UserService({
+            eventBus: makeBus() as never,
             users: makeRepo(row({ profileVisibility: Visibility.PUBLIC })) as never,
             logger,
         });
@@ -172,6 +180,7 @@ describe('visibility on the public endpoint', () => {
         // 403 would confirm the id exists, which is enough to enumerate users
         // on an unauthenticated route.
         const service = new UserService({
+            eventBus: makeBus() as never,
             users: makeRepo(row({ profileVisibility: Visibility.PRIVATE })) as never,
             logger,
         });
@@ -183,6 +192,7 @@ describe('visibility on the public endpoint', () => {
 
     it('404s an archived profile', async () => {
         const service = new UserService({
+            eventBus: makeBus() as never,
             users: makeRepo(
                 row({ profileVisibility: Visibility.PUBLIC, archivedAt: new Date() }),
             ) as never,
@@ -193,6 +203,7 @@ describe('visibility on the public endpoint', () => {
 
     it('404s an archived row on getMe too', async () => {
         const service = new UserService({
+            eventBus: makeBus() as never,
             users: makeRepo(row({ archivedAt: new Date() })) as never,
             logger,
         });
@@ -208,7 +219,7 @@ describe('unique-constraint reporting', () => {
                 code: 'P2002', clientVersion: 'test', meta: { target },
             }),
         );
-        return new UserService({ users: repo as never, logger });
+        return new UserService({ users: repo as never, eventBus: makeBus() as never, logger });
     }
 
     it('names the handle when the handle collided', async () => {
@@ -229,14 +240,14 @@ describe('unique-constraint reporting', () => {
 describe('Clerk event handling', () => {
     it('soft-deletes by Clerk id on user.deleted', async () => {
         const repo = makeRepo(row());
-        const service = new UserService({ users: repo as never, logger });
+        const service = new UserService({ users: repo as never, eventBus: makeBus() as never, logger });
         await service.markDeleted({ clerkUserId: 'user_x' });
         expect(repo.softDeleteByClerkId).toHaveBeenCalledWith('user_x');
     });
 
     it('passes the Clerk payload straight to the repository to translate', async () => {
         const repo = makeRepo(row());
-        const service = new UserService({ users: repo as never, logger });
+        const service = new UserService({ users: repo as never, eventBus: makeBus() as never, logger });
         const payload = {
             clerkUserId: 'user_x', email: 'a@b.demo', emailVerified: true,
             username: 'handle_x', firstName: 'A', lastName: 'B', avatarUrl: null,
@@ -244,5 +255,29 @@ describe('Clerk event handling', () => {
         await service.syncFromClerk(payload);
         // The service does not reshape it — the repository owns the mapping.
         expect(repo.upsertFromClerk).toHaveBeenCalledWith(payload);
+    });
+
+    it('announces the account AFTER the row is written', async () => {
+        const repo = makeRepo(row());
+        const bus = makeBus();
+        const service = new UserService({ users: repo as never, eventBus: bus as never, logger });
+
+        await service.syncFromClerk({
+            clerkUserId: 'user_x', email: 'a@b.demo', emailVerified: true,
+            username: 'handle_x', firstName: 'A', lastName: 'B', avatarUrl: null,
+        });
+
+        // Load-bearing ordering, not a nicety: the bus fires every subscriber
+        // of an event concurrently, so anything that needs the User row to
+        // exist (today: claiming a staff invitation, whose RoleAssignment has a
+        // foreign key to it) must key off THIS event rather than the auth one.
+        const upsertAt = repo.upsertFromClerk.mock.invocationCallOrder[0] as number;
+        const publishAt = bus.publish.mock.invocationCallOrder[0] as number;
+        expect(upsertAt).toBeLessThan(publishAt);
+
+        expect(bus.publish).toHaveBeenCalledWith(
+            'users.account.provisioned',
+            expect.objectContaining({ email: 'admin@hitbox.demo' }),
+        );
     });
 });

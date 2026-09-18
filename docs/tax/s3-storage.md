@@ -190,8 +190,7 @@ environment; `tsx --env-file=.env` will load them from the repo root.)
 
 ## 7. Before first production use
 
-- [ ] **Run the migration.** The schema is merged and validates, but
-      `pnpm db:migrate` has not been run for these seven tables.
+- [x] ~~**Run the migration.**~~ Applied 2026-09-18 as `20260918000000_tax_invoicing_and_staff_invitations`.
 - [ ] **Confirm the bucket policy** still grants anonymous read on
       `drop-images/*` and `profile-images/*` only.
 - [ ] **Add lifecycle rules** on the three prefixes — 8 years for

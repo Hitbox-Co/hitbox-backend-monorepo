@@ -135,3 +135,18 @@ export type {
 // Seeding
 export { seedAccessControl } from './seed/seed-access-control';
 export type { SeedResult } from './seed/seed-access-control';
+
+// Staff provisioning — the invitation flow behind "create an admin user".
+export { StaffInvitationService } from './service/staff-invitation.service';
+export type {
+    InvitationResponse,
+    InviteOutcome,
+    InviteResult,
+    IUserDirectory,
+} from './service/staff-invitation.service';
+export type {
+    IIdentityInvitations,
+    SentInvitation,
+} from './domain/interfaces/identity-invitations.interface';
+export { UNAVAILABLE_IDENTITY_INVITATIONS } from './domain/interfaces/identity-invitations.interface';
+export { assertCanGrantRole, uncoveredPermissions } from './domain/grantable-roles';

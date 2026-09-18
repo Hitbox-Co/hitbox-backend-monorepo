@@ -109,8 +109,9 @@ model Role {
   isActive    Boolean
   createdAt   DateTime
 
-  rolePermissions RolePermission[]
-  roleAssignments RoleAssignment[]
+  rolePermissions  RolePermission[]
+  roleAssignments  RoleAssignment[]
+  staffInvitations StaffInvitation[]
 }
 
 /// One atomic capability: an action on a resource at a scope. The
@@ -173,6 +174,103 @@ model RoleAssignment {
   revokedAt    DateTime?
 
   @@unique([userId, roleId, scopeType, scopeId])
+}
+
+/// A pending invitation for someone to join HitBox staff with a named role.
+///
+/// This table exists because of one gap: a `User` row only comes into existence
+/// when Clerk fires `user.created`, which happens when a person signs up
+/// through the consumer app. Without this, making a colleague an administrator
+/// means asking them to register as a *buyer* first, then finding them and
+/// granting a role — so a system admin cannot provision anyone from the
+/// dashboard.
+///
+/// **The intended role lives here, not in the identity provider.** Clerk
+/// supports attaching arbitrary metadata to an invitation, and putting the role
+/// there would have been less code. It is the wrong place: authorization intent
+/// would sit outside the audit trail, outside this database, unreadable by the
+/// permission engine, and editable by anyone with access to the Clerk
+/// dashboard. The permission catalog is authoritative here, so the invitation
+/// is too. Clerk is told only "invite this email address".
+///
+/// A row is never deleted. A revoked or expired invitation keeps its row: "who
+/// tried to make whom an administrator, and what happened" is exactly the
+/// question an access review asks.
+model StaffInvitation {
+  id          String                @id @db.Uuid
+  /// Lower-cased at the service boundary, because this is matched against the
+  /// address Clerk reports back and address comparison must not depend on how
+  /// the inviter happened to type it.
+  email       String                @db.VarChar(320)
+  roleId      String                @db.Uuid
+  role        Role                  @relation(fields: [roleId], references: [id])
+  /// The scope the role will be granted at, decided and frozen at invite time
+  /// rather than at acceptance — the inviter's authority is checked against
+  /// these values, and acceptance must not be able to widen them.
+  scopeType   RoleScopeType
+  scopeId     String?               @db.Uuid
+  organization Organization?        @relation(fields: [scopeId], references: [id])
+
+  status      StaffInvitationStatus
+  /// Clerk's invitation id, for revoking it on their side too. Null until the
+  /// provider call succeeds, and null forever on the already-registered path
+  /// where no invitation is sent at all.
+  providerInvitationId String?      @db.VarChar(100)
+  /// Why the provider call failed, when it did. Kept so a FAILED invitation is
+  /// diagnosable without correlating logs.
+  providerError String?
+
+  invitedById String                @db.Uuid
+  invitedBy   User                  @relation("StaffInvitation_invitedBy", fields: [invitedById], references: [id])
+  invitedAt   DateTime
+  expiresAt   DateTime
+
+  /// Set when the invitation is claimed. `acceptedUserId` is the account that
+  /// claimed it, which is NOT knowable at invite time — that is the whole
+  /// reason this table exists.
+  acceptedAt     DateTime?
+  acceptedUserId String?             @db.Uuid
+  acceptedUser   User?               @relation("StaffInvitation_acceptedUser", fields: [acceptedUserId], references: [id])
+  /// The RoleAssignment this invitation produced. Plain id, no foreign key: an
+  /// assignment can be revoked and archived later, and the invitation trail
+  /// must survive that.
+  assignmentId   String?             @db.Uuid
+
+  revokedById String?                @db.Uuid
+  revokedBy   User?                  @relation("StaffInvitation_revokedBy", fields: [revokedById], references: [id])
+  revokedAt   DateTime?
+  revokeReason String?
+
+  createdAt   DateTime
+  updatedAt   DateTime
+
+  /// The claim path: "is anyone waiting to be granted a role for this address".
+  @@index([email, status])
+  /// The dashboard list, newest first, filterable by state.
+  @@index([status, invitedAt])
+  @@index([roleId])
+  @@index([scopeId])
+}
+
+/// Lifecycle of a StaffInvitation.
+///
+/// PENDING exists as a distinct state from SENT on purpose: the row is written
+/// BEFORE the provider is called, so a crash between the two leaves evidence
+/// rather than an invitation nobody knows was attempted. FAILED is the same
+/// idea for a provider call that returned an error.
+enum StaffInvitationStatus {
+  /// Row written; the provider has not been called yet.
+  PENDING
+  /// The provider accepted it and the email is out.
+  SENT
+  /// Claimed — the role has been granted and `assignmentId` is set.
+  ACCEPTED
+  /// Withdrawn by an administrator before it was claimed.
+  REVOKED
+  /// Passed `expiresAt` unclaimed.
+  EXPIRED
+  /// The provider refused to send it. `providerError` says why.
+  FAILED
 }
 
 /// The verbs a permission can grant.
@@ -1518,6 +1616,8 @@ model Organization {
   royaltyPayouts        RoyaltyPayout[]
   /// Invoices issued for this organization's drops — see packages/tax.
   invoices              Invoice[]
+  /// Pending staff invitations scoped to this organization.
+  staffInvitations      StaffInvitation[]
 }
 
 /// Which kind of entity an Organization represents. HITBOX is the platform's
@@ -2926,6 +3026,9 @@ model User {
   artistTaxDocument_verifiedBy ArtistTaxDocument[] @relation("ArtistTaxDocumentVerifiedBy")
   taxAdjustment_createdBy  TaxAdjustmentEntry[]    @relation("TaxAdjustmentCreatedBy")
   taxAdjustment_approvedBy TaxAdjustmentEntry[]    @relation("TaxAdjustmentApprovedBy")
+  staffInvitation_invitedBy    StaffInvitation[]   @relation("StaffInvitation_invitedBy")
+  staffInvitation_acceptedUser StaffInvitation[]   @relation("StaffInvitation_acceptedUser")
+  staffInvitation_revokedBy    StaffInvitation[]   @relation("StaffInvitation_revokedBy")
 }
 
 /// A user's reusable address book entry. Orders never point at this row for

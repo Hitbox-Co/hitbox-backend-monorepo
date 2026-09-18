@@ -5,7 +5,10 @@ import {
     createRoleSchema,
     listPermissionsQuerySchema,
     listRolesQuerySchema,
+    inviteStaffSchema,
+    listInvitationsQuerySchema,
     listTeamQuerySchema,
+    revokeInvitationSchema,
     revokeRoleQuerySchema,
     updateRoleSchema,
 } from '../dto/access-control.dto';
@@ -13,6 +16,7 @@ import type { PermissionGuard } from '../middleware/require-permission.middlewar
 import type { PermissionService } from '../service/permission.service';
 import type { RoleAssignmentService } from '../service/role-assignment.service';
 import type { RoleService } from '../service/role.service';
+import type { StaffInvitationService } from '../service/staff-invitation.service';
 
 /**
  * HTTP glue for authorization administration. Note there is exactly ONE set
@@ -24,6 +28,7 @@ export class AuthzController {
         private readonly roles: RoleService,
         private readonly permissions: PermissionService,
         private readonly assignments: RoleAssignmentService,
+        private readonly invitations: StaffInvitationService,
         private readonly guard: PermissionGuard,
     ) { }
 
@@ -103,11 +108,15 @@ export class AuthzController {
     /** POST /admin/authz/users/:userId/roles */
     assignRole: RequestHandler = asyncHandler(async (req, res) => {
         const dto = assignRoleSchema.parse(req.body);
+        // The granter's own permissions, for the no-escalation check. Read from
+        // their grant, never from the request.
+        const principal = await this.guard.describePrincipal(req);
         res.status(201).json({
             data: await this.assignments.assign({
                 userId: req.params.userId as string,
                 dto,
-                grantedById: this.guard.principalId(req),
+                grantedById: principal.userId,
+                granterPermissions: principal.permissions,
             }),
         });
     });
@@ -122,6 +131,58 @@ export class AuthzController {
             revokedById: this.guard.principalId(req),
         });
         res.status(204).send();
+    });
+
+    // ── Staff invitations ───────────────────────────────────────────────────
+
+    /**
+     * POST /admin/authz/invitations
+     *
+     * Invite an email address to hold a role. Two outcomes: the role is granted
+     * immediately (the address already has an account) or an invitation email
+     * goes out and the role is granted when they accept. The response says
+     * which, because the dashboard has to tell the operator what happened.
+     */
+    inviteStaff: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = inviteStaffSchema.parse(req.body);
+        // The inviter's own permission set — this is what the no-escalation
+        // check compares the role against. Read from the grant, never the body.
+        const principal = await this.guard.describePrincipal(req);
+        const result = await this.invitations.invite({
+            dto,
+            invitedById: principal.userId,
+            inviterPermissions: principal.permissions,
+        });
+        res.status(201).json({ data: result });
+    });
+
+    /** GET /admin/authz/invitations */
+    listInvitations: RequestHandler = asyncHandler(async (req, res) => {
+        const query = listInvitationsQuerySchema.parse(req.query);
+        const principal = await this.guard.describePrincipal(req);
+        const global = principal.permissions.includes('employee-role-mgmt:manage:global');
+        const organizationIds = global
+            ? null
+            : [
+                ...new Set(
+                    principal.roles
+                        .map((role) => role.organizationId)
+                        .filter((id): id is string => id !== null),
+                ),
+            ];
+        res.json(await this.invitations.list({ query, organizationIds }));
+    });
+
+    /** POST /admin/authz/invitations/:invitationId/revoke */
+    revokeInvitation: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = revokeInvitationSchema.parse(req.body);
+        res.json({
+            data: await this.invitations.revoke({
+                id: req.params.invitationId as string,
+                revokedById: this.guard.principalId(req),
+                reason: dto.reason,
+            }),
+        });
     });
 
     // ── Self ────────────────────────────────────────────────────────────────

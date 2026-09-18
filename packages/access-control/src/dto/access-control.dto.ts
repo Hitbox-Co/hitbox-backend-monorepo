@@ -121,3 +121,53 @@ export const revokeRoleQuerySchema = z.object({
     organizationId: z.string().uuid().optional(),
 });
 export type RevokeRoleQuery = z.infer<typeof revokeRoleQuerySchema>;
+
+// ── Staff invitations ───────────────────────────────────────────────────────
+
+/**
+ * Invite an email address to hold a role.
+ *
+ * Only an address and a role. Deliberately no name, no password, no profile:
+ * the person supplies all of that themselves when they accept, and HitBox never
+ * handles a credential. See docs/authorization/admin-provisioning.md.
+ */
+export const inviteStaffSchema = z
+    .object({
+        email: z.string().email().max(320),
+        roleId: z.string().uuid(),
+        scopeType: z.nativeEnum(RoleScopeType).optional(),
+        organizationId: z.string().uuid().nullish(),
+    })
+    .superRefine((dto, ctx) => {
+        if (dto.scopeType === RoleScopeType.ORGANIZATION && !dto.organizationId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['organizationId'],
+                message: 'organizationId is required for an ORG-scoped invitation',
+            });
+        }
+        if (dto.scopeType && dto.scopeType !== RoleScopeType.ORGANIZATION && dto.organizationId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['organizationId'],
+                message: `organizationId is only valid for ORG scope, not ${dto.scopeType}`,
+            });
+        }
+    });
+export type InviteStaffDto = z.infer<typeof inviteStaffSchema>;
+
+export const listInvitationsQuerySchema = z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    status: z
+        .enum(['PENDING', 'SENT', 'ACCEPTED', 'REVOKED', 'EXPIRED', 'FAILED'])
+        .optional(),
+    email: z.string().email().max(320).optional(),
+    roleId: z.string().uuid().optional(),
+});
+export type ListInvitationsQuery = z.infer<typeof listInvitationsQuerySchema>;
+
+export const revokeInvitationSchema = z.object({
+    reason: z.string().min(1).max(500),
+});
+export type RevokeInvitationDto = z.infer<typeof revokeInvitationSchema>;

@@ -38,6 +38,8 @@ model Organization {
   royaltyPayouts        RoyaltyPayout[]
   /// Invoices issued for this organization's drops — see packages/tax.
   invoices              Invoice[]
+  /// Pending staff invitations scoped to this organization.
+  staffInvitations      StaffInvitation[]
 }
 
 /// Which kind of entity an Organization represents. HITBOX is the platform's

@@ -84,6 +84,11 @@ export function bootstrap(): Bootstrapped {
         prisma,
         eventBus,
         resolvePrincipalId: (req) => req.auth?.accountId,
+        // Staff provisioning: access-control decides who gets which role, auth
+        // owns Clerk and does the emailing. Consumer declares the port, provider
+        // writes the adapter — see docs/authorization/admin-provisioning.md.
+        identityInvitations: authModule.invitations,
+        invitationTtlHours: env.ADMIN_INVITATION_TTL_HOURS,
     });
 
     // The dashboard reads the caller's grants through the guard's own

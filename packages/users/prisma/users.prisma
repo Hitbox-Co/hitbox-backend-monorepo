@@ -64,6 +64,9 @@ model User {
   artistTaxDocument_verifiedBy ArtistTaxDocument[] @relation("ArtistTaxDocumentVerifiedBy")
   taxAdjustment_createdBy  TaxAdjustmentEntry[]    @relation("TaxAdjustmentCreatedBy")
   taxAdjustment_approvedBy TaxAdjustmentEntry[]    @relation("TaxAdjustmentApprovedBy")
+  staffInvitation_invitedBy    StaffInvitation[]   @relation("StaffInvitation_invitedBy")
+  staffInvitation_acceptedUser StaffInvitation[]   @relation("StaffInvitation_acceptedUser")
+  staffInvitation_revokedBy    StaffInvitation[]   @relation("StaffInvitation_revokedBy")
 }
 
 /// A user's reusable address book entry. Orders never point at this row for

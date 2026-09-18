@@ -14,6 +14,8 @@ export {
 export type { AuthEventName } from './constants/auth.constant';
 
 // Domain
+export { ClerkInvitationsAdapter } from './domain/clerk-invitations.adapter';
+export type { ClerkInvitationsAdapterConfig } from './domain/clerk-invitations.adapter';
 export { AccountStatus } from './domain/enums/account-status.enum';
 export { UserRole, isUserRole } from './domain/enums/user-role.enum';
 export type {

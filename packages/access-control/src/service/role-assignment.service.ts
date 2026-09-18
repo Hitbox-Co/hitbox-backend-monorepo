@@ -7,6 +7,7 @@ import {
     ACCESS_CONTROL_ERROR_CODES,
     ACCESS_CONTROL_EVENTS,
 } from '../constants/access-control.constant';
+import { assertCanGrantRole } from '../domain/grantable-roles';
 import type { IGrantsInvalidator } from '../domain/interfaces/grants-invalidator.interface';
 import type { AssignRoleDto, ListTeamQuery } from '../dto/access-control.dto';
 import type { RoleRepository } from '../repository/role.repository';
@@ -133,6 +134,18 @@ export class RoleAssignmentService {
         dto: AssignRoleDto;
         /** The administrator performing the grant, from req.auth. */
         grantedById: string;
+        /**
+         * The granter's own effective permission keys, for the no-escalation
+         * check. Supplied by the controller on every operator-initiated grant.
+         *
+         * Omitted only by callers that have already made the check at the point
+         * the decision was taken — today that is the staff-invitation claim,
+         * which verified the inviter's authority when the invitation was
+         * created. Re-checking there would instead test whoever the inviter has
+         * since become, and would fail a legitimate claim because the inviter
+         * changed jobs in the meantime.
+         */
+        granterPermissions?: string[] | undefined;
     }): Promise<AssignmentResponse> {
         const role = await this.deps.roles.findById(input.dto.roleId);
         if (!role) {
@@ -143,6 +156,19 @@ export class RoleAssignmentService {
                 `${role.name} is deactivated and cannot be assigned`,
                 ACCESS_CONTROL_ERROR_CODES.ROLE_NOT_FOUND,
             );
+        }
+
+        // No privilege escalation: you cannot grant a permission you do not
+        // hold. The route guard proves the caller may assign roles *somewhere*;
+        // it cannot see which permissions the role being assigned carries, and
+        // that is the difference between "can manage their own team" and "can
+        // mint themselves a platform administrator".
+        if (input.granterPermissions) {
+            assertCanGrantRole({
+                granterPermissions: input.granterPermissions,
+                roleName: role.name,
+                rolePermissions: role.rolePermissions.map((rp) => rp.permission.key),
+            });
         }
 
         // Fall back to the role's natural scope so a caller does not have to

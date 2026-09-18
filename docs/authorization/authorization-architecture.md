@@ -52,7 +52,7 @@ Two rules do most of the work:
 | Engine | `packages/access-control/src/engine/authorization-engine.ts` | 1 pure function |
 | Guard | `packages/access-control/src/middleware/require-permission.middleware.ts` | `requirePermission` / `authorize` |
 | Grant cache | `packages/access-control/src/cache/` | 3 layers + per-request memo |
-| Admin API | `/api/v1/admin/authz/*` | 9 endpoints |
+| Admin API | `/api/v1/admin/authz/*` | 12 endpoints |
 | Self API | `/api/v1/authz/me` | 1 endpoint |
 | Tests | `packages/access-control/tests/` | 265 across 7 suites |
 
@@ -394,6 +394,12 @@ One generic set of endpoints for all authorization administration — no screen 
 | `GET` | `/api/v1/admin/authz/users/:userId/roles` | `employee-role-mgmt:read` |
 | `POST` | `/api/v1/admin/authz/users/:userId/roles` | `employee-role-mgmt:assign` |
 | `DELETE` | `/api/v1/admin/authz/users/:userId/roles/:roleId` | `employee-role-mgmt:delete` |
+| `GET` | `/api/v1/admin/authz/invitations` | `employee-role-mgmt:read` |
+| `POST` | `/api/v1/admin/authz/invitations` | `employee-role-mgmt:assign` |
+| `POST` | `/api/v1/admin/authz/invitations/:invitationId/revoke` | `employee-role-mgmt:delete` |
+
+Provisioning a *new* member of staff — someone who has no HitBox account yet —
+is the invitation flow: see [admin-provisioning.md](admin-provisioning.md).
 
 Defining roles takes `manage`; granting them takes `assign` — defining is strictly stronger.
 A Brand Admin holds `employee-role-mgmt:assign:organization`, so the same POST endpoint lets them

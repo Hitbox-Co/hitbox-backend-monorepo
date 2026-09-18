@@ -28,7 +28,7 @@ export function createUsersModule(deps: UsersModuleDeps): UsersModule {
     const logger = createModuleLogger(USERS_MODULE);
 
     const users = new UserRepository(deps.prisma);
-    const service = new UserService({ users, logger });
+    const service = new UserService({ users, eventBus: deps.eventBus, logger });
     registerAuthEventSubscriptions({ eventBus: deps.eventBus, service, logger });
 
     return {

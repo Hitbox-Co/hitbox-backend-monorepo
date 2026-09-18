@@ -1,15 +1,18 @@
 import { Prisma, Visibility } from '@hitbox/database';
 import type { User } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
+import type { IEventBus } from '@hitbox/shared';
 import type { UserDeletedPayload, UserRegisteredPayload } from '@hitbox/auth';
 import type { Logger } from 'pino';
-import { USERS_ERROR_CODES } from '../constants/users.constant';
+import { USERS_ERROR_CODES, USERS_EVENTS } from '../constants/users.constant';
+import type { AccountProvisionedPayload } from '../events/users-event.payloads';
 import { toMe, toPublicUser } from '../dto/user.dto';
 import type { MeDto, PublicUserDto, UpdateProfileDto } from '../dto/user.dto';
 import type { UserRepository } from '../repository/user.repository';
 
 interface UserServiceDeps {
     users: UserRepository;
+    eventBus: IEventBus;
     logger: Logger;
 }
 
@@ -76,6 +79,15 @@ export class UserService {
         this.deps.logger.info(
             { userId: user.id, clerkId: payload.clerkUserId },
             'user synced from clerk',
+        );
+
+        // Published AFTER the row is committed, which is the whole point: the
+        // bus fires subscribers concurrently, so anything that needs the User
+        // row to exist must key off this rather than off the auth event that
+        // triggered us. See USERS_EVENTS.
+        await this.deps.eventBus.publish<AccountProvisionedPayload>(
+            USERS_EVENTS.ACCOUNT_PROVISIONED,
+            { userId: user.id, email: user.email, clerkUserId: payload.clerkUserId },
         );
     }
 

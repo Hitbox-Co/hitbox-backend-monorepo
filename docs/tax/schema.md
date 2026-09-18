@@ -225,18 +225,18 @@ Prisma needs the other side of every relation declared in the owning partial:
 
 ## Migration
 
-**Not yet run.** The schema merges and validates:
+**Applied** on 2026-09-18 as `20260918000000_tax_invoicing_and_staff_invitations`, together with access-control's
+`StaffInvitation` table.
 
 ```bash
 pnpm db:merge && pnpm db:validate   # → The schema at prisma\schema.prisma is valid 🚀
+pnpm --filter @hitbox/database db:deploy
 ```
 
-To apply it:
+The migration is **purely additive** — 10 `CREATE TYPE`s, 8 `CREATE TABLE`s,
+their foreign keys and indexes, and not a single `DROP` or column change on an
+existing table. The back-relations listed above are relation fields, which add
+no columns, so no existing table is touched at all.
 
-```bash
-pnpm db:migrate
-```
-
-The only change to an existing table is the set of back-relations above, which
-are relation fields and add no columns — so the migration is seven `CREATE
-TABLE`s plus the enums, and is additive.
+`prisma migrate diff` against the live database now reports an empty migration,
+which is drift-free by definition.

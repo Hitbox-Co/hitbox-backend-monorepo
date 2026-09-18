@@ -413,6 +413,9 @@ One generic set of endpoints. There is no per-role admin screen — you build
 | `GET` | `/api/v1/admin/authz/users/:userId/roles` | `employee-role-mgmt:read` |
 | `POST` | `/api/v1/admin/authz/users/:userId/roles` | `employee-role-mgmt:assign` |
 | `DELETE` | `/api/v1/admin/authz/users/:userId/roles/:roleId` | `employee-role-mgmt:delete` |
+| `GET` | `/api/v1/admin/authz/invitations` | `employee-role-mgmt:read` |
+| `POST` | `/api/v1/admin/authz/invitations` | `employee-role-mgmt:assign` |
+| `POST` | `/api/v1/admin/authz/invitations/:invitationId/revoke` | `employee-role-mgmt:delete` |
 
 ### `GET /admin/authz/permissions?shape=grouped` (default)
 
