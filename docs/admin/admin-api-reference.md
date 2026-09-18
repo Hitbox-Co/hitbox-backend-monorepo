@@ -537,7 +537,7 @@ File bytes never pass through the API.
 **The asset is servable as soon as the PUT returns 200.** There is no scanner
 and no processing delay in this deployment — do not build a "processing" state
 or poll for `virusScanStatus: "CLEAN"`. New assets are created `SKIPPED`, which
-is servable. See [media/s3-configuration.md §8](../media/s3-configuration.md).
+is servable. See [media/s3-configuration.md 8](../media/s3-configuration.md).
 
 #### `POST /admin/media/upload-url`
 
@@ -686,7 +686,7 @@ the dashboard column above: a Drop Manager sees every unit but no NFC tag UID,
 a Brand Admin sees their own units but no owner, Support sees real tags and
 masked buyers, and the Order Manager, Content Manager and Finance Admin are
 refused outright. The full matrix, with the reasoning and the two catalog gaps
-it exposes, is in [sku-api.md §6](sku-api.md).
+it exposes, is in [sku-api.md 6](sku-api.md).
 
 > `HITBOX_DB_ADMIN` does not exist in this system. Database administration is a
 > cloud/IAM concern, outside application authorization.
@@ -731,7 +731,7 @@ Worth knowing before you build against them:
 2. **Media S3 is unverified.** The registry logic, permission checks, key
    convention and public/private routing are tested; the presign calls have
    never run against a live bucket. Expect to smoke-test step 2 of the upload
-   flow first — see [media/s3-configuration.md §11](../media/s3-configuration.md).
+   flow first — see [media/s3-configuration.md 11](../media/s3-configuration.md).
 3. **There is no virus scanning.** No SQS, no scan worker, no scan callback.
    Assets are created `SKIPPED` and are servable immediately. The
    `virusScanStatus` field and its filter survive for existing rows and for a

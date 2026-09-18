@@ -16,7 +16,7 @@ against. The script touches no database.
 | | India (GST) | United States (sales tax) |
 | --- | --- | --- |
 | File | [`INV-2026-27-IN-001234.pdf`](examples/INV-2026-27-IN-001234.pdf) | [`INV-2026-US-001234.pdf`](examples/INV-2026-US-001234.pdf) |
-| Guide reference | §1.1, §1.4 | §2.1, §2.3 |
+| Guide reference | 1.1, 1.4 | 2.1, 2.3 |
 | Sale price | ₹2,000.00 | $25.00 |
 | Rate | GST **12%** | Sales tax **8.625%** |
 | Tax | ₹240.00 | $2.16 |
@@ -48,7 +48,7 @@ B2C case stated.
 against. Columns are weighted, not equal, so a long invoice number does not wrap
 while the currency code sits in white space.
 
-**Line table.** `HSN/SAC 9706`, mandatory per §1.3 and validated twice (the DTO
+**Line table.** `HSN/SAC 9706`, mandatory per 1.3 and validated twice (the DTO
 rejects an Indian rate without a code; the renderer refuses a line without one).
 Columns: unit price, taxable value, GST %, GST amount.
 
@@ -64,7 +64,7 @@ foreign to whoever reads it.
 **Totals.** The tax line is named for its regime: `GST @ 12%`.
 
 **Signature box.** "Authorised signatory — digitally issued, no physical
-signature required", covering §1.4's signature/stamp requirement.
+signature required", covering 1.4's signature/stamp requirement.
 
 **Footer.** Invoice number, "computer-generated… valid without a signature",
 support address, and `Page 1 of 1` on every page.
@@ -84,7 +84,7 @@ no statutory heading to use.
 as missing data. The renderer builds a different column set per jurisdiction
 rather than blanking cells.
 
-**EIN instead of GSTIN/PAN**, and its absence does not block issue — §2.3 makes
+**EIN instead of GSTIN/PAN**, and its absence does not block issue — 2.3 makes
 these best practice rather than law.
 
 **`Tax jurisdiction: CA, US`** instead of "place of supply".

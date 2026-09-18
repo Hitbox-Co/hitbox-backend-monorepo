@@ -44,7 +44,7 @@ POST /api/v1/admin/authz/invitations/:invitationId/revoke
 ```
 
 One new table, `StaffInvitation`, and one new event,
-`users.account.provisioned`. Full API detail in §6.
+`users.account.provisioned`. Full API detail in 6.
 
 ### The happy path, end to end
 
@@ -230,7 +230,7 @@ themselves, and sign in with more power than they started with. Two API calls.
 So `assertCanGrantRole` (`domain/grantable-roles.ts`) enforces: **you cannot
 grant a permission you do not hold.** It compares *permission sets*, never role
 names or seniority — there is no role hierarchy in this system and inventing one
-here would contradict §15 of the architecture.
+here would contradict 15 of the architecture.
 
 The rule has three clauses, and the second two exist because the strict version
 produced false negatives on the real catalog:
@@ -427,5 +427,5 @@ runs anyway.
 - **No notification to the invited person from HitBox** — Clerk sends the only
   email. A branded "welcome to the team" message belongs in
   `@hitbox/notifications` and would subscribe to the invitation events.
-- **No auto-revocation** when the inviter's own grants are withdrawn — see §5.
+- **No auto-revocation** when the inviter's own grants are withdrawn — see 5.
 - **No UI.** This is the API the dashboard calls.

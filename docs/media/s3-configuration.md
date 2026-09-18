@@ -34,7 +34,7 @@
 ```
 
 **There is no SQS queue, no scan worker and no scan callback in this
-deployment.** See §8 for what that means and what was left in place.
+deployment.** See 8 for what that means and what was left in place.
 
 The backend never proxies file bytes. A 500 MB `EXCLUSIVE_CONTENT` upload
 never touches a Railway dyno — only the ~1 KB presign request does.
@@ -54,7 +54,7 @@ never touches a Railway dyno — only the ~1 KB presign request does.
 
 ⚠ **`MEDIA_S3_ENDPOINT` must not be set in production.** It redirects both the
 presigner and every public URL away from S3, and turns on path-style
-addressing. It exists for MinIO (§10) and nothing else.
+addressing. It exists for MinIO (10) and nothing else.
 
 Credentials are deliberately **not** part of `packages/shared/config/env.ts`.
 The AWS SDK resolves them from the process environment itself, so no code in
@@ -79,7 +79,7 @@ AWS_SECRET_ACCESS_KEY=...
 
 Rotate the key pair on a schedule and whenever someone with dashboard access
 leaves. Railway has no equivalent of an EC2 instance role, so a long-lived IAM
-user key is the only option here — which makes §5's least privilege the thing
+user key is the only option here — which makes 5's least privilege the thing
 that limits the blast radius if it leaks.
 
 ---
@@ -115,11 +115,11 @@ aws s3api put-public-access-block --bucket hitbox-media-prod \
 |---|---|---|
 | `BlockPublicAcls` | `true` | ACLs are disabled; nothing should ever try |
 | `IgnorePublicAcls` | `true` | Same |
-| `BlockPublicPolicy` | **`false`** | Otherwise the §4 policy is rejected outright |
+| `BlockPublicPolicy` | **`false`** | Otherwise the 4 policy is rejected outright |
 | `RestrictPublicBuckets` | **`false`** | Otherwise the policy is accepted but anonymous reads still fail |
 
 Turning the last two off does **not** make the bucket public. It makes a
-*policy* able to grant public access — and the policy in §4 grants it on
+*policy* able to grant public access — and the policy in 4 grants it on
 exactly two prefixes. Everything else stays private because nothing grants it.
 
 ### ACLs disabled (Bucket Owner Enforced)
@@ -198,7 +198,7 @@ Notes that matter:
 - `AllowedHeaders` must include **`content-type`**, because the signature binds
   it — the browser sends it and the preflight must permit it.
 - Include **`content-length`** too. The API always binds the exact length into
-  the signature (§9). A browser sets that header itself from the request body
+  the signature (9). A browser sets that header itself from the request body
   and will not list it in the preflight, but allowing it costs nothing and
   covers non-browser clients that set it explicitly.
 - `ExposeHeaders: ["ETag"]` lets the client read the upload's ETag, which is
@@ -268,8 +268,8 @@ public reads, so an `http://` fetch of a drop image is refused too.
 
 | Tempting | Why it breaks or misleads |
 |---|---|
-| Deny `PutObject` without `x-amz-server-side-encryption` | Breaks every presigned upload (§2) |
-| `s3:content-length-range` condition | Not a valid condition key for `PutObject` in a bucket policy — it exists only in presigned **POST** policy documents. Size is handled in §9. |
+| Deny `PutObject` without `x-amz-server-side-encryption` | Breaks every presigned upload (2) |
+| `s3:content-length-range` condition | Not a valid condition key for `PutObject` in a bucket policy — it exists only in presigned **POST** policy documents. Size is handled in 9. |
 | Anonymous read on the whole bucket | Publishes `legal-documents/` and `exclusive-content/`. The prefix scoping is the entire point of the key layout |
 | Per-organization prefix rules | The app resolves an asset's owning organization from the owner record and scopes on it. A policy cannot see that, and a second half-correct copy of the rule is worse than none. |
 
@@ -364,7 +364,7 @@ user-supplied string never reaches an S3 key. Only the extension survives, and
 only if it matches `^[a-z0-9]{1,8}$`.
 
 Folder-first-by-type exists precisely so the things below can differ per
-prefix: **public vs private** (§4), lifecycle policy, and CDN routing. That is
+prefix: **public vs private** (4), lifecycle policy, and CDN routing. That is
 the payoff.
 
 ```bash
@@ -575,7 +575,7 @@ mc anonymous set download local/hitbox-media-dev/profile-images
 mc admin config set local api cors_allow_origin="http://localhost:3000"
 ```
 
-The two `mc anonymous set download` lines are MinIO's equivalent of the §4
+The two `mc anonymous set download` lines are MinIO's equivalent of the 4
 public-read statement — without them, public URLs 403 locally while working in
 production, which is a confusing way to spend an afternoon.
 
@@ -602,10 +602,10 @@ aws s3api get-bucket-encryption --bucket hitbox-media-prod
 # 5. CORS lists your real origin, PUT/GET/HEAD, content-type + content-length
 aws s3api get-bucket-cors --bucket hitbox-media-prod
 
-# 6. Bucket policy — expect exactly the two statements from §4
+# 6. Bucket policy — expect exactly the two statements from 4
 aws s3api get-bucket-policy --bucket hitbox-media-prod --output text | jq .
 
-# 7. Lifecycle — expect the four rules from §6
+# 7. Lifecycle — expect the four rules from 6
 aws s3api get-bucket-lifecycle-configuration --bucket hitbox-media-prod
 ```
 
@@ -683,8 +683,8 @@ curl -s https://<railway-app>/api/v1/admin/media/<assetId>/url \
 **Troubleshooting.** `403 SignatureDoesNotMatch` on step 13 is almost always a
 `Content-Type` differing from the one declared in step 11, or a body whose
 length differs from `sizeBytes`. If it fails only in a browser, it is CORS
-(§3). If step 14 returns 403, re-check `BlockPublicPolicy`/
-`RestrictPublicBuckets` are **false** (§2) before suspecting the policy.
+(3). If step 14 returns 403, re-check `BlockPublicPolicy`/
+`RestrictPublicBuckets` are **false** (2) before suspecting the policy.
 
 ---
 
@@ -695,6 +695,6 @@ public-vs-private routing and soft delete in `@hitbox/media` are covered by
 tests (36 of them, `packages/media/tests/media.test.ts`).
 
 **The presigning calls have never run against a live bucket** — this
-environment has no AWS credentials — so treat §11 as the first real exercise of
+environment has no AWS credentials — so treat 11 as the first real exercise of
 that path rather than a regression check. Steps 13, 14 and 16 are the three
 that have never been executed and matter most.

@@ -23,7 +23,7 @@ drifted schema, which is not what you want here since the migration already
 exists).
 
 Remember the golden rule from [../hitbox-architecture.md](../hitbox-architecture.md)
-§8: **never edit `schema.prisma`**. It is generated from the per-module
+8: **never edit `schema.prisma`**. It is generated from the per-module
 partials by `merge-schema.mjs`. Every change below was made in a module's own
 `prisma/*.prisma` file.
 

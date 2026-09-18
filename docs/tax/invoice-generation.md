@@ -162,7 +162,7 @@ appears in no state rate table and cannot be reconciled against one.
 
 The two worked examples from the compliance guide, both pinned by tests:
 
-| | India (§1.1, §1.4) | United States (§2.1, §2.3) |
+| | India (1.1, 1.4) | United States (2.1, 2.3) |
 | --- | --- | --- |
 | Sale price | ₹2,000.00 | $25.00 |
 | Rate | GST 12% | Sales tax 8.625% |
@@ -203,7 +203,7 @@ Everything that could later change:
 | Snapshot | Why |
 | --- | --- |
 | `taxRate`, `hsnCode` | The rate table is versioned; an issued invoice must keep saying what it said |
-| `unitPrice`, `salesPriceSnapshot` | Guide §8.1 — a later re-versioning of the drop's pricing must never retroactively change an issued invoice |
+| `unitPrice`, `salesPriceSnapshot` | Guide 8.1 — a later re-versioning of the drop's pricing must never retroactively change an issued invoice |
 | `supplierName/Address/Gstin/Pan/Ein` | Registrations get amended and offices move |
 | `customerName/Email/Address` | The address book entry may be edited or deleted |
 | Line `description` | A renamed product must not rename an issued invoice's line |
@@ -255,7 +255,7 @@ as type rather than being part of the image.
 
 ### The mandatory-field gate
 
-§1.4 of the compliance guide lists eight mandatory fields for an Indian GST
+1.4 of the compliance guide lists eight mandatory fields for an Indian GST
 invoice. `assertRenderable` checks them **before a single byte is drawn**,
 because a PDF missing a GSTIN is not a deficient invoice — it is not an invoice,
 and discovering that at filing time is much worse than at issue:
@@ -319,4 +319,4 @@ pnpm --filter @hitbox/tax demo:invoice
 Renders the two reference invoices to `docs/tax/examples/`. Add `--upload` (with
 `MEDIA_S3_BUCKET` and AWS credentials in the environment) to also put them in
 S3 — which doubles as the bucket smoke test, see
-[s3-storage.md §6](s3-storage.md#6-verification-run).
+[s3-storage.md 6](s3-storage.md#6-verification-run).

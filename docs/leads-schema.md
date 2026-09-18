@@ -9,7 +9,7 @@ route namespace (`/app/web/v1/*`), separate package (`@hitbox/leads`), separate 
 Phase 1 is lead capture only: **four public forms, and nothing else.** No admin dashboard, no
 notes/activity/export audit trail, no admin auth/RBAC — those were deliberately cut from the
 initial build (they had zero consumers) and will be added back only when an actual admin panel
-needs them; see [repo-structure.md](repo-structure.md) §"Adding an admin panel." No users,
+needs them; see [repo-structure.md](repo-structure.md) "Adding an admin panel." No users,
 collectibles, collections, orders, scans or claims either — those live in the mobile platform's
 own package set, not here.
 
@@ -42,7 +42,7 @@ the actual form components.
 
 The original schema draft was written for the forms Phase 1 *will* have; the forms that exist
 today are narrower. Six categories of mismatch were identified and are resolved as follows.
-Anything not resolved is listed in §6, exactly as originally flagged.
+Anything not resolved is listed in 6, exactly as originally flagged.
 
 ### 2.1 Non-null columns with no source in any current form
 
@@ -85,7 +85,7 @@ this schema is updated, it survives in `rawPayload`, not just what's listed in t
 
 **The `interests` trap**, resolved exactly as specified: `formData.getAll(key)` gives an array for
 2+ ticks, a bare string for exactly one, and omits the key for none.
-`normalizeToStringArray` handles all three. On a **repeat** waitlist signup (see §6.2), an absent
+`normalizeToStringArray` handles all three. On a **repeat** waitlist signup (see 6.2), an absent
 `interests` key is passed through as `undefined`, not `[]` — this matters: a footer-variant
 resignup must not silently erase interests recorded by an earlier full-page signup.
 
@@ -113,14 +113,14 @@ standard 5-value set (`unreviewed`, `low`, `medium`, `high`, `urgent`) was chose
 default; it is a low-consequence, easily-renamed-later choice, not a structural one.
 
 No admin dashboard exists yet to consume any of this — see
-[repo-structure.md](repo-structure.md) §"Adding the next website" for where one would plug in.
+[repo-structure.md](repo-structure.md) "Adding the next website" for where one would plug in.
 
 ### 2.6 Attribution / request context
 
 Implemented as specified: `utmSource`/`utmMedium`/`utmCampaign`/`utmContent`/`utmTerm` and
 `sourcePage` are accepted as optional request fields (the frontend doesn't send them yet — nothing
 changes on this side once it does). `ipHash` is a **salted SHA-256** hash (`IP_HASH_SALT` env var,
-soft-fails to a dev-only fallback with a warning if unset — see §5) — the raw address is never
+soft-fails to a dev-only fallback with a warning if unset — see 5) — the raw address is never
 persisted. `userAgentSummary` is a coarse `"Browser / OS"` string
 (`packages/leads/src/utils/user-agent-summary.ts`), not the full UA string.
 
@@ -134,7 +134,7 @@ populated in a real deployment — legal/product action, not a code change.
 
 See `packages/leads/prisma/schema.prisma` for the authoritative field list — every field there
 carries an inline comment explaining any deviation from the original draft. Model-to-endpoint
-mapping is in §1; full request/response JSON shapes are in
+mapping is in 1; full request/response JSON shapes are in
 [web-api-integration.md](web-api-integration.md).
 
 Four models, one per public form: `WaitlistSubscriber`, `ContactSubmission`, `ArtistLead`,
@@ -203,7 +203,7 @@ product/ops decision, not just a schema change:
 5. **Privacy policy copy** — must be updated to mention `ipHash`/`userAgentSummary` collection
    before a real deployment starts populating them.
 6. **Admin dashboard** — doesn't exist, and its supporting tables (`LeadNote`, `LeadActivity`,
-   `AdminProfile`, `ExportLog`) were removed from the schema rather than left unused (see §3).
+   `AdminProfile`, `ExportLog`) were removed from the schema rather than left unused (see 3).
    `LeadStatus`/`LeadPriority` triage and waitlist status management have no UI either. See
-   [repo-structure.md](repo-structure.md) §"Adding the next website" for how to bring the admin
+   [repo-structure.md](repo-structure.md) "Adding the next website" for how to bring the admin
    tables back when this is actually being built.

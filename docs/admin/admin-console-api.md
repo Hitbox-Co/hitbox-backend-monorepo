@@ -54,7 +54,7 @@ const canSee = (cap: string) => permissions.includes(cap);
 | Media | `assets-documents-upload:read` |
 | Provenance | `nfc-tag-claim:read` or `collectible-instance:read` |
 | Audit log | `audit-log:read` |
-| Publish drop | `release-approval:manage` — see §14 for what is still missing |
+| Publish drop | `release-approval:manage` — see 14 for what is still missing |
 | Roles | `employee-role-mgmt:read` |
 | Team | `employee-role-mgmt:read` |
 
@@ -129,7 +129,7 @@ a `422 INVALID_RANGE`.
 | 401 | `UNAUTHENTICATED` | Session expired — re-auth (see [authentication.md](authentication.md)) |
 | 403 | `AUTHZ_FORBIDDEN` | Hide the screen; this should not happen if the sidebar was built from `/authz/me` |
 | 403 | `SCOPE_MISMATCH` | The `organizationId` filter is outside the caller's reach |
-| 404 | — | Also returned for out-of-scope records, deliberately (see §11) |
+| 404 | — | Also returned for out-of-scope records, deliberately (see 11) |
 | 422 | `VALIDATION_ERROR` | Field-level problems in `details` |
 | 503 | `STORAGE_UNAVAILABLE` | Media only — no bucket configured on this deploy |
 
@@ -145,7 +145,7 @@ GET /api/v1/admin/dashboard?period=month
 ```
 
 **One call renders the entire screen.** Do not fan out to the sub-endpoints for
-the dashboard — they exist for the dedicated screens in §2–§13.
+the dashboard — they exist for the dedicated screens in 2–13.
 
 | Param | Type | Notes |
 |---|---|---|
@@ -169,11 +169,11 @@ the dashboard — they exist for the dedicated screens in §2–§13.
 | Refunds strip (p17) | `refunds` | `amount` only with `payment-royalty:read` |
 | Markets bar chart (p17) | `markets[]` | |
 | Drops status pills (p17) | `products` | `draft`, `submitted`, `inReview`, `approved`, `rejected`, `published`, `active`, `ended`, `archived` |
-| Inventory preview table (p17) | `products.inventory` | **Capped at 10.** Full list is §7 |
+| Inventory preview table (p17) | `products.inventory` | **Capped at 10.** Full list is 7 |
 | Provenance panel (p17) | `provenance` | |
 | Catalogue panel (p17) | `content`, `artists`, `organizations` | |
 | Payment gateways (p17/18) | `paymentGatewayConfig[]` | |
-| Recent activity (p18) | `activity[]` | **Latest 20.** "Full audit log →" goes to §12 |
+| Recent activity (p18) | `activity[]` | **Latest 20.** "Full audit log →" goes to 12 |
 
 ### Response
 
@@ -315,7 +315,7 @@ right is the same array, sorted by `orders` descending — no second call.
 
 > **Managing markets** (create / edit / archive, country mappings, the default
 > market) is `/api/v1/admin/markets` — see
-> [admin-write-apis.md §1](admin-write-apis.md). Writes require a
+> [admin-write-apis.md 1](admin-write-apis.md). Writes require a
 > platform-wide grant; this reporting endpoint does not.
 
 > `revenue` is keyed by the market's own currency, so each row carries exactly
@@ -356,7 +356,7 @@ Requires `order:read`. Envelope: `{ page, limit, total, items[] }`.
 > the buyer's **email** and the product's **code** at the database instead of
 > returning bare ids, adds a full single-order detail with its SKU unit
 > allocation, and exposes the status-change endpoint. See
-> [admin-write-apis.md §2](admin-write-apis.md). Prefer it for this screen;
+> [admin-write-apis.md 2](admin-write-apis.md). Prefer it for this screen;
 > the dashboard sub-endpoint below stays for the aggregate view.
 
 ### The two fields that vary by permission
@@ -442,7 +442,7 @@ makes the cards usable as a filter control.
 
 > **Gap:** the design's table shows a product name (*"Halcyon Bomber"*) and a
 > seller id. The API returns `skuId` only. You need a second lookup per row, or
-> ask for the endpoint to be widened — see §15.
+> ask for the endpoint to be widened — see 15.
 
 ---
 
@@ -497,7 +497,7 @@ the same inventory shape the dashboard previews:
 **The detail screen** is `GET /api/v1/admin/products/:id` — the catalog
 record plus performance aggregates plus a paginated page of serialized SKU
 units, in one call. Catalog CRUD is `POST`/`PATCH`/`DELETE` on the same base.
-Both in [admin-write-apis.md §3](admin-write-apis.md).
+Both in [admin-write-apis.md 3](admin-write-apis.md).
 
 > ⚠ **The write routes moved.** `POST`/`PATCH`/`DELETE /api/v1/products`
 > previously sat behind `requireAuth` alone — any signed-in buyer could create
@@ -537,7 +537,7 @@ Requires `drop:read`. Envelope: `{ page, limit, total, activeVendors, items[] }`
 > `Received` / `Delayed` / `In transit`), Ordered, Received and Expected. The
 > API returns `quantity`, `receivedAt` and a vendor name — there is **no
 > product name, no status enum, and no ordered-vs-received split**. This screen
-> cannot be built as designed against the current endpoint. See §15.
+> cannot be built as designed against the current endpoint. See 15.
 
 ---
 
@@ -622,7 +622,7 @@ GET /api/v1/admin/media?assetType=DROP_IMAGE&page=1&limit=50
 ```
 
 Requires `assets-documents-upload:read`. Full upload flow, size caps, CORS and
-bucket setup: [admin-api-reference.md §6](admin-api-reference.md) and
+bucket setup: [admin-api-reference.md 6](admin-api-reference.md) and
 [media/s3-configuration.md](../media/s3-configuration.md).
 
 ```jsonc
@@ -669,7 +669,7 @@ them.
 
 `?archived=live` (default) | `archived` | `all`. The recycle-bin view is
 `?archived=archived`; archived rows carry a non-null `archivedAt`. See
-[admin-write-apis.md §5](admin-write-apis.md).
+[admin-write-apis.md 5](admin-write-apis.md).
 
 ### Public vs private URLs
 
@@ -747,7 +747,7 @@ The three KPI cards are `summary.cases`, which — like resale's `counts` — is
 unfiltered.
 
 > This screen is **read-only** today. There is no endpoint to open, assign,
-> escalate or resolve a case. See §15.
+> escalate or resolve a case. See 15.
 
 ---
 
@@ -764,7 +764,7 @@ Requires `audit-log:read`. Envelope: `{ page, limit, total, items[] }`.
 | Param | Values |
 |---|---|
 | `severity` | `INFO` `WARNING` `CRITICAL` |
-| `period`, `from`, `to` | as §0 |
+| `period`, `from`, `to` | as 0 |
 
 ```json
 { "eventId": "e91a…", "occurredAt": "2026-09-10T14:02:00.000Z",
@@ -791,7 +791,7 @@ whole point of the audit log: it must remain truthful about who held what at
 the time. The design's *"System Admin · u-780f21…"* line is
 `actorRoleSnapshot` + `actorId`.
 
-The Dashboard's "Recent activity" panel (§1) is the same data capped at 20; its
+The Dashboard's "Recent activity" panel (1) is the same data capped at 20; its
 "Full audit log →" link lands here.
 
 ---
@@ -803,8 +803,8 @@ The Dashboard's "Recent activity" panel (§1) is the same data capped at 20; its
 `packages/releases` **now exists**: the review queue, approval detail with full
 history, amend, and the approve/reject decision are all implemented at
 `/api/v1/admin/releases` — see
-[admin-write-apis.md §4](admin-write-apis.md). Product creation and editing
-are at `/api/v1/admin/products` (§3 there).
+[admin-write-apis.md 4](admin-write-apis.md). Product creation and editing
+are at `/api/v1/admin/products` (3 there).
 
 What is still missing is the **publish step itself** and the wizard's media and
 pricing joins.
@@ -813,17 +813,17 @@ What exists today, and what it does not cover:
 
 | Design element | Status |
 |---|---|
-| "Awaiting Launch 20 / Active on Market 12" stats | ✅ `products` section of §1 (`approved`, `active`) |
+| "Awaiting Launch 20 / Active on Market 12" stats | ✅ `products` section of 1 (`approved`, `active`) |
 | "Ready Queue" / "Live Drops" tabs | ✅ `GET /admin/dashboard/products?status=…` |
 | Compliance sign-off "100% Verified" | ✅ `GET /admin/releases?latestOnly=true` |
 | Step 1 — Drop identification & brand | ✅ `POST /api/v1/admin/products` |
 | Step 1b — edition size / serialized units | ✅ `POST /admin/products` with a `skus` block, or `POST /admin/products/:productId/skus` — [sku-api.md](sku-api.md) |
-| Step 2 — Artwork & media upload | ✅ `POST /admin/media/upload-url` then `POST /admin/products/:id/images` — multi-image gallery with ordering and a primary flag ([product-upload-api.md §3](product-upload-api.md)) |
+| Step 2 — Artwork & media upload | ✅ `POST /admin/media/upload-url` then `POST /admin/products/:id/images` — multi-image gallery with ordering and a primary flag ([product-upload-api.md 3](product-upload-api.md)) |
 | Live marketplace preview — price | ⚠️ price lives in `ProductPrice`; **no endpoint to set it** |
 | Submit for review | ✅ `POST /api/v1/admin/releases` |
 | Approve / reject | ✅ `POST /api/v1/admin/releases/:id/decision` |
 | "Deploy New Drop" / publish action | ❌ **nothing** — no `APPROVED → PUBLISHED/ACTIVE` transition |
-| NFC tag claims "Enabled" toggle | ⚠️ tags are bound at mint time via `tagIds` ([sku-api.md §3](sku-api.md)); there is no per-drop toggle and no way to bind a tag to an already-minted unit |
+| NFC tag claims "Enabled" toggle | ⚠️ tags are bound at mint time via `tagIds` ([sku-api.md 3](sku-api.md)); there is no per-drop toggle and no way to bind a tag to an already-minted unit |
 
 **Two endpoints still missing before this screen is buildable end to end:**
 
@@ -832,7 +832,7 @@ What exists today, and what it does not cover:
    with `releaseStart`/`releaseEnd`
 
 The image join (previously listed here) is **built** — see
-[product-upload-api.md §3](product-upload-api.md). Both remaining endpoints are
+[product-upload-api.md 3](product-upload-api.md). Both remaining endpoints are
 small additions to `products`. Everything else on the wizard is live.
 
 ---
@@ -854,7 +854,7 @@ Read routes require `employee-role-mgmt:read`; **all writes require
 `employee-role-mgmt:manage` at `:global`** — defining a role is strictly
 stronger than assigning one (so `:assign` is not enough), and a role definition
 applies platform-wide (so an organization-scoped grant is not enough either).
-Full contract in [admin-write-apis.md §6](admin-write-apis.md).
+Full contract in [admin-write-apis.md 6](admin-write-apis.md).
 
 `GET /admin/authz/roles` already returns each role's **full permission list**;
 no second call is needed to render its capabilities.
@@ -939,7 +939,7 @@ email or handle, case-insensitively.
 staff (roles whose `entityGroup` is `hitbox_seller_org`). Pass
 `internalOnly=false` to include brand and artist role-holders. Each role now
 also carries `entityGroup` and `isSystem`. Full contract, including assign and
-revoke, in [admin-write-apis.md §7](admin-write-apis.md).
+revoke, in [admin-write-apis.md 7](admin-write-apis.md).
 
 One row per person, with roles nested. A person can hold several roles at once
 (the design shows *Ana Duarte — System Admin, Support*); their effective
@@ -1006,15 +1006,15 @@ designed.
 
 | # | Screen | Gap | Severity |
 |---|---|---|---|
-| 1 | Publish drop (§14) | ~~Entire backend missing~~ → **review workflow now built**; product-image join, price upsert and the publish transition remain | Major |
-| 2 | Media (§11) | Design assumes a virus scanner; none exists | **Redesign needed** |
-| 3 | Supply (§8) | No product name, status enum, or ordered/received split | **Blocker for this layout** |
-| 4 | Provenance (§12) | Read-only — no open/assign/resolve actions | Major |
-| 5 | Resale (§5) | Items carry `skuId` only, no product name or seller | Major |
-| 6 | Products (§7) | No design page supplied — the API now exists | Needs design |
-| 7 | View as (§17) | No backend support | Needs a decision |
-| 8 | Demand signals (§9) | `follows` counts artist follows, not product watchers | Label carefully |
-| 9 | Content (§10) | No sub-endpoint; "unlocks per bundle" target is invented | Minor |
+| 1 | Publish drop (14) | ~~Entire backend missing~~ → **review workflow now built**; product-image join, price upsert and the publish transition remain | Major |
+| 2 | Media (11) | Design assumes a virus scanner; none exists | **Redesign needed** |
+| 3 | Supply (8) | No product name, status enum, or ordered/received split | **Blocker for this layout** |
+| 4 | Provenance (12) | Read-only — no open/assign/resolve actions | Major |
+| 5 | Resale (5) | Items carry `skuId` only, no product name or seller | Major |
+| 6 | Products (7) | No design page supplied — the API now exists | Needs design |
+| 7 | View as (17) | No backend support | Needs a decision |
+| 8 | Demand signals (9) | `follows` counts artist follows, not product watchers | Label carefully |
+| 9 | Content (10) | No sub-endpoint; "unlocks per bundle" target is invented | Minor |
 
 **Closed since the first draft:** Markets CRUD, order detail + status changes,
 product detail + CRUD, the release approval workflow, the media archive view,

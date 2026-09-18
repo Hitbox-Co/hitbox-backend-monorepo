@@ -38,7 +38,7 @@ Two rules do most of the work:
    `if (user.role === 'HITBOX_ORDER_MANAGER')`. There are no `/content-manager/*` or
    `/finance-admin/*` namespaces, and there never should be — `POST /api/v1/content` is one
    endpoint that any role holding `content-unlock:create` can call.
-2. **A role holds permissions from exactly one domain.** Enforced in three places (see §4), not
+2. **A role holds permissions from exactly one domain.** Enforced in three places (see 4), not
    just documented.
 
 ---
@@ -105,7 +105,7 @@ Precise GPS is deliberately not expressible: `general-location:read:masked` exis
 `MANAGE` expands to `CREATE + READ + UPDATE + DELETE` — within one resource and one scope only.
 That is what lets Brand Admin hold `drop:manage:organization` without also listing `drop:read`.
 
-It is **not** role inheritance (§15 of the brief): no role gains another role's permissions, and
+It is **not** role inheritance (15 of the brief): no role gains another role's permissions, and
 `MANAGE` does not imply `REFUND`, `APPROVE`, `OVERRIDE`, `EXPORT` or `PUBLISH`. Those stay
 explicit because they are the dangerous ones.
 
@@ -224,7 +224,7 @@ not to this application's authorization system.
 
 2. requirePermission('order:refund')          ← the route names a CAPABILITY
       resolvePrincipalId(req)  ──▶ accountId        (no principal ⇒ 401, a wiring bug)
-      findGrantsByUserId(accountId)             <- L1 -> L2 -> Postgres (see §7)
+      findGrantsByUserId(accountId)             <- L1 -> L2 -> Postgres (see 7)
           RoleAssignment (revokedAt: null)
             → Role       (isActive)
               → RolePermission
@@ -358,7 +358,7 @@ There is no configuration in which a cache failure grants access that Postgres w
 | Redis entirely down | <= 15 s |
 
 Note this is staleness of *cached grants*, not of the Clerk session — revoking a role does not
-invalidate a session, it removes what that session may do (see §13, open item 5).
+invalidate a session, it removes what that session may do (see 13, open item 5).
 
 ### Operating it
 
@@ -494,11 +494,11 @@ role's permissions changes what the tests see.
 
 | Suite | Covers |
 |---|---|
-| `domain-isolation.test.ts` | The §5 boundary: technical roles cannot refund/read orders/read finance/read PII/assign roles; business roles cannot deploy/configure/debug/restart; System Admin is not a technical bypass; stacking never crosses domains |
+| `domain-isolation.test.ts` | The 5 boundary: technical roles cannot refund/read orders/read finance/read PII/assign roles; business roles cannot deploy/configure/debug/restart; System Admin is not a technical bypass; stacking never crosses domains |
 | `role-catalog.test.ts` | Each of the 12 roles holds **exactly** its intended permission set (exact sets, not `toContain`); `HITBOX_DB_ADMIN` absent; the Brand Admin ↔ Employee delta; Support vs Order Manager masking; Finance Admin's withheld capabilities |
 | `authorization-engine.test.ts` | Default deny; MANAGE expansion and its limits; organization isolation both ways; own-record scoping; visibility precedence; multi-role union without escalation; field allowlist passthrough |
 | `require-permission.test.ts` | 403 on missing capability, 401 on missing principal, boot-time throw on a malformed guard, per-request principal memoisation, `authorize()` after load, `/authz/me` shape |
-| `permission-catalog.test.ts` | Catalog integrity, canonical keys, unique triples, scope decomposition, key parsing and aliases, §12 grouping, and that invented permission strings are rejected |
+| `permission-catalog.test.ts` | Catalog integrity, canonical keys, unique triples, scope decomposition, key parsing and aliases, 12 grouping, and that invented permission strings are rejected |
 | `role.service.test.ts` | Cross-domain writes rejected both directions; system roles immutable and undeletable; delete blocked while assigned; assignment scope defaults and duplicate/revoke handling; that assign/revoke evict precisely and role edits flush, while rejected writes evict nothing |
 | `grants-cache.test.ts` | L1 TTL expiry and LRU bounding; the L1->L2->source walk and upward back-fill; per-user keying; empty-grant caching; precise vs. epoch invalidation; pub/sub eviction across instances and self-echo suppression; degradation with no Redis, on read failure, and on failed eviction (including the L2 distrust window) |
 
@@ -584,7 +584,7 @@ resource a compile error.
 3. **No audit rows written yet.** Role create/update/delete/assign/revoke publish events on the
    bus and log structured lines, but nothing subscribes to write `AuditEvent`. The audit module
    owns those tables; wiring a subscriber is a small, separate change.
-4. **Cache tuning is unmeasured.** The three-layer cache is in place (§7), but its TTLs
+4. **Cache tuning is unmeasured.** The three-layer cache is in place (7), but its TTLs
    (15 s L1 / 60 s L2) are chosen for safety rather than from observed traffic — watch
    `cacheStats()` under load and adjust. One case is knowingly unaddressed: a cold multi-instance
    deployment can stampede, since N instances missing the same key all query Postgres. A per-key

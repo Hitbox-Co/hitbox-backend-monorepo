@@ -602,7 +602,7 @@ GET /api/v1/admin/media?archived=archived&page=1&limit=50
 | `all` | Both |
 
 Response shape is unchanged (see
-[admin-console-api.md §11](admin-console-api.md)); archived rows carry a
+[admin-console-api.md 11](admin-console-api.md)); archived rows carry a
 non-null `archivedAt`.
 
 **`live` is the default deliberately.** The media browser shows what is in use,
@@ -822,8 +822,8 @@ instantly.
 - [ ] Default the media browser to `archived=live`
 - [ ] Mint editions over 1000 units in batches — the inline `skus.count` cap is 1000
 - [ ] Test optional SKU blocks with `'tag' in sku`, never against a role name
-- [ ] Render an absent SKU block as *nothing* — absent ≠ `null` ([sku-api.md §6](sku-api.md))
-- [ ] Bind tags through the manifest endpoint, not at mint time, for any real edition ([sku-api.md §3a](sku-api.md))
+- [ ] Render an absent SKU block as *nothing* — absent ≠ `null` ([sku-api.md 6](sku-api.md))
+- [ ] Bind tags through the manifest endpoint, not at mint time, for any real edition ([sku-api.md 3a](sku-api.md))
 - [ ] Always send `Content-Type: application/json` — its absence now returns `400 BODY_REQUIRED`
 - [ ] Call `PUT /admin/products/:id/images` after a reorder; re-render from its response
 - [ ] Show `isSystem: true` roles as read-only

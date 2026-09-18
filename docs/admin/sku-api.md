@@ -45,7 +45,7 @@ present, mints the edition **in the same transaction** — so the request either
 produces a drop with N units or produces nothing at all.
 
 **Capability:** `drop:manage` at `GLOBAL` scope (`globalOnly`). See
-[admin-write-apis.md §0](admin-write-apis.md).
+[admin-write-apis.md 0](admin-write-apis.md).
 
 ### Request
 
@@ -82,10 +82,10 @@ Content-Type: application/json
 | `groupCode` | 4 digits | the **group suffix**; the server prefixes 8 random digits |
 | `status` | `DropStatus` | defaults to `DRAFT`; the releases module drives the rest |
 | `skus.count` | int 1–1000 | omit the whole block to create a catalog entry with no units |
-| `images[]` | ≤24 entries | attaches uploaded assets as the gallery — [product-upload-api.md §3](product-upload-api.md) |
+| `images[]` | ≤24 entries | attaches uploaded assets as the gallery — [product-upload-api.md 3](product-upload-api.md) |
 
 The full field table, and what the body may look like on the wire, are in
-[product-upload-api.md §2](product-upload-api.md).
+[product-upload-api.md 2](product-upload-api.md).
 
 `vertical`, `category` and `rarity` are free-form strings, not enums — the
 columns are `String?` and a fixed list kept only in TypeScript would be a
@@ -96,11 +96,11 @@ second source of truth that drifts.
 Binding a physical NFC tag requires `nfc-tag-claim:manage`. This route checks
 `drop:manage`. A payload that bound tags here would let a caller write to the
 one table the platform's authenticity guarantee rests on without ever holding
-the capability that governs it. Bind tags through §3a, which checks for it.
+the capability that governs it. Bind tags through 3a, which checks for it.
 
 There is no `skus.variantId` either: a drop being created has no variants yet,
 so any id supplied would necessarily belong to a *different* product — and the
-foreign key would accept it. Mint per variant through §3.
+foreign key would accept it. Mint per variant through 3.
 
 ### Response `201`
 
@@ -136,7 +136,7 @@ The `skus` key is **absent** when no `skus` block was sent. It is not `null`.
 
 This insert runs inside the transaction that also creates the `Product`, and a
 transaction writing 10,000 rows holds locks long enough to matter. Larger
-editions are minted in batches through §3 — the same code path without a
+editions are minted in batches through 3 — the same code path without a
 product write attached.
 
 ---
@@ -234,7 +234,7 @@ second.
 
 ### Path A — tags in hand at mint time (small batches)
 
-Pass `tagIds` alongside `count`, exactly as long as `count` (§3). Fine for 10
+Pass `tagIds` alongside `count`, exactly as long as `count` (3). Fine for 10
 units. For 500 it means a 500-element array in one request body, and it is
 impossible past 1000 because that is the batch cap.
 
@@ -345,7 +345,7 @@ re-tagged after repair.
 { "tagId": "04A39B2C5D6E99", "replace": true, "provisioningBatchId": "BATCH-2026-10-02" }
 ```
 
-Returns the full unit detail, shaped for your grants (§6).
+Returns the full unit detail, shaped for your grants (6).
 
 ### Tracking progress
 
@@ -379,7 +379,7 @@ A digits-only `search` term is matched against the serial number as well as the
 code, because an operator holding the physical item reads "#14" off the card,
 not `123456780042-000014`.
 
-**Response** — this is a **System Admin** view; see §6 for what other roles get:
+**Response** — this is a **System Admin** view; see 6 for what other roles get:
 
 ```json
 {
@@ -499,7 +499,7 @@ claim someone else can make. It is not selected from the database at all.
 
 ### `GET /api/v1/admin/skus`
 
-The same list shape as §4, across every drop. Carries no product in its path,
+The same list shape as 4, across every drop. Carries no product in its path,
 so there is no organization to check against and **only a grant with global
 breadth matches** — organization-scoped callers get `403` here and reach their
 units through `/admin/products/:productId/skus` instead.
@@ -656,13 +656,13 @@ exists, which is itself a fact about another brand's catalog.
 ## 8. Integration notes
 
 **Minting a 5,000-unit edition.** Create the drop with `totalSupply: 5000` and
-no `skus` block, then call §3 five times with `count: 1000`. Each call reports
+no `skus` block, then call 3 five times with `count: 1000`. Each call reports
 its own `firstSerial`/`lastSerial`; poll `/skus/summary` for progress. Do not
 run the batches in parallel — they will collide on the serial range, and while
 the retry handles it correctly, serialised calls are faster.
 
 **Binding tags to already-minted units** is the normal path for any edition
-past a handful — mint bare, then apply the vendor manifest. See §3a.
+past a handful — mint bare, then apply the vendor manifest. See 3a.
 
 **Rendering an inventory table.** Read `/skus/summary` for the header counts and
 `/skus?page=…` for the rows — the summary is a single grouped query and is much
@@ -679,7 +679,7 @@ name will be wrong the moment an operator defines a new role.
 
 | Gap | Note |
 |---|---|
-| Change a tag's lifecycle state | No endpoint sets `LOST` / `REVOKED` / `DISPUTED`, which means the re-tag path in §3a rule 5 cannot currently be unblocked for a claimed unit. This is the most useful next addition |
+| Change a tag's lifecycle state | No endpoint sets `LOST` / `REVOKED` / `DISPUTED`, which means the re-tag path in 3a rule 5 cannot currently be unblocked for a claimed unit. This is the most useful next addition |
 | Block / unblock resale on a unit | `resaleBlocked` + `resaleBlockedReason` are readable and set to `false` at mint; nothing writes them |
 | Archive a unit | `Sku.archivedAt` is readable and filterable; nothing sets it |
 | Transfer ownership administratively | ownership moves only through the claims module today |

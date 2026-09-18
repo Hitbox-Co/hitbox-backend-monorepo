@@ -34,12 +34,12 @@ wrong:
 
 | Principle | Mechanism | Where |
 | --- | --- | --- |
-| **Immutability** — no record deletion; corrections via adjustment entries | `AdjustmentEntry` is a table; ledger rows are never updated except for status; a reversal writes a new row pointing at the original | [royalty-lifecycle.md §reversal](royalty-lifecycle.md#reversal-and-clawback) |
-| **Idempotency** — webhooks guard against duplicate processing | The provider's event id is the PRIMARY KEY of `PaymentWebhookEvent`, so the *insert* is the check; `RoyaltyLedgerEntry.accrualKey` and `FinanceLedgerEntry.postingKey` do the same for accruals and postings | [payments-and-webhooks.md §idempotency](payments-and-webhooks.md#idempotency-three-layers) |
-| **Decoupled payment & ownership** — payment creates an order; ownership at NFC claim | Royalty accrues on the `claims.product.claimed` event, never on settlement; `Order.claimId` records when the two met | [royalty-lifecycle.md §why the claim](royalty-lifecycle.md#why-accrual-happens-at-the-claim) |
+| **Immutability** — no record deletion; corrections via adjustment entries | `AdjustmentEntry` is a table; ledger rows are never updated except for status; a reversal writes a new row pointing at the original | [royalty-lifecycle.md reversal](royalty-lifecycle.md#reversal-and-clawback) |
+| **Idempotency** — webhooks guard against duplicate processing | The provider's event id is the PRIMARY KEY of `PaymentWebhookEvent`, so the *insert* is the check; `RoyaltyLedgerEntry.accrualKey` and `FinanceLedgerEntry.postingKey` do the same for accruals and postings | [payments-and-webhooks.md idempotency](payments-and-webhooks.md#idempotency-three-layers) |
+| **Decoupled payment & ownership** — payment creates an order; ownership at NFC claim | Royalty accrues on the `claims.product.claimed` event, never on settlement; `Order.claimId` records when the two met | [royalty-lifecycle.md why the claim](royalty-lifecycle.md#why-accrual-happens-at-the-claim) |
 | **Role-based access** — RBAC enforces view/edit per role | Every read narrows by the *scope of the grant* (`own` / `organization` / `global`), resolved from the caller's permissions, never from a query parameter | [rbac-and-audit.md](rbac-and-audit.md) |
-| **Audit trail** — every action logged with actor, timestamp, before/after | Written through the existing `@hitbox/audit` recorder; eight new event types registered | [rbac-and-audit.md §audit](rbac-and-audit.md#what-lands-in-the-audit-trail) |
-| **Regional pricing** — fixed per market (USD / INR) | `ProductPrice` is per (product, variant, market); checkout refuses a market with no price row rather than converting | [payments-and-webhooks.md §pricing](payments-and-webhooks.md#regional-pricing) |
+| **Audit trail** — every action logged with actor, timestamp, before/after | Written through the existing `@hitbox/audit` recorder; eight new event types registered | [rbac-and-audit.md audit](rbac-and-audit.md#what-lands-in-the-audit-trail) |
+| **Regional pricing** — fixed per market (USD / INR) | `ProductPrice` is per (product, variant, market); checkout refuses a market with no price row rather than converting | [payments-and-webhooks.md pricing](payments-and-webhooks.md#regional-pricing) |
 
 ## The one-paragraph version
 

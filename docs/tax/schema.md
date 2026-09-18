@@ -79,7 +79,7 @@ invoice must keep showing the details the customer received.
 `customerGstin`. Same reasoning; the address book entry may be edited or deleted.
 
 **Pricing provenance** — `salesPriceSnapshot` is the unit price the invoice was
-raised at (guide §8.1). `productCostId` is a plain `Uuid` with **no foreign
+raised at (guide 8.1). `productCostId` is a plain `Uuid` with **no foreign
 key**: the versioned `product_cost` table does not exist in this schema yet, and
 an invoice must never be blocked from being issued by a pricing table it does
 not own.
@@ -136,7 +136,7 @@ Covers two different things that happen to share a shape:
 - **Information returns about an artist** — `FORM_16A`, `FORM_1099_NEC`. These
   carry `artistId` and `payoutId`.
 
-`payoutId` is a **real FK to `RoyaltyPayout`**, and it is the control §8.3 of the
+`payoutId` is a **real FK to `RoyaltyPayout`**, and it is the control 8.3 of the
 guide turns on: Form 16A and 1099-NEC report *paid* royalty income, so a filing
 of either type must point at a payout that was approved and executed, never at a
 ledger accrual. A filing referencing a payout that does not exist is a filing

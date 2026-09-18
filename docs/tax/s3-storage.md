@@ -175,7 +175,7 @@ This exercises the real path end to end — the same `S3DocumentStorage`, the sa
 key convention, the same checksum binding and the same presigner the service
 uses. A successful run proves the bucket, the region, the credentials and the
 prefix are wired correctly. Re-running it reproduced both digests exactly, which
-is the determinism claim in §5 demonstrated rather than asserted.
+is the determinism claim in 5 demonstrated rather than asserted.
 
 To repeat it:
 

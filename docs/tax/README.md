@@ -15,7 +15,7 @@ actually got built.
 | [api-reference.md](api-reference.md) | **Every endpoint, its access level, and the artist / admin split** |
 | [s3-storage.md](s3-storage.md) | Bucket layout, IAM, lifecycle, encryption, and the verification run |
 | [schema.md](schema.md) | The seven tables this module owns and why each column exists |
-| [compliance-mapping.md](compliance-mapping.md) | Guide § → what was built, and what was deliberately not |
+| [compliance-mapping.md](compliance-mapping.md) | Guide  → what was built, and what was deliberately not |
 | [demo-invoice.md](demo-invoice.md) | The two reference invoices, annotated |
 | [examples/](examples/) | The rendered reference PDFs themselves |
 
@@ -51,7 +51,7 @@ when the NFC tag is tapped, because HitBox has not earned anything until the
 buyer holds the item. Tax cannot wait for that: tax is due on the *supply*, and
 an order paid in March and claimed in April belongs on March's GSTR-1. This is
 the one place the two modules deliberately diverge — see
-[invoice-generation.md §2](invoice-generation.md#2-when-an-invoice-is-issued).
+[invoice-generation.md 2](invoice-generation.md#2-when-an-invoice-is-issued).
 
 **Invoice numbers are gap-free, and that costs a lock.** GST law requires a
 unique, sequential, gap-free series per fiscal year. A Postgres `SEQUENCE`
@@ -77,7 +77,7 @@ follow.
 a document, a GSTR-1 export is a report — the access-control catalog already has
 all three. Inventing `tax:*` would mean a new `ResourceType` enum value, a
 migration, and a second place where "who may see money" is decided. See
-[api-reference.md §2](api-reference.md#2-the-capabilities-and-why-these-ones).
+[api-reference.md 2](api-reference.md#2-the-capabilities-and-why-these-ones).
 
 ---
 
@@ -123,7 +123,7 @@ The four ports, and who fills them in `apps/backend/src/bootstrap.ts`:
 | `IDocumentStorage` | `S3DocumentStorage` | Put these bytes; give me a short-lived read link. |
 
 Consumer declares the port, provider writes the adapter, bootstrap connects
-them — the pattern from [hitbox-architecture.md §6](../hitbox-architecture.md).
+them — the pattern from [hitbox-architecture.md 6](../hitbox-architecture.md).
 Tax reads no other module's tables.
 
 ---
@@ -162,14 +162,14 @@ number on every customer-facing PDF would be a fraud surface for no benefit.
 | --- | --- |
 | Schema | ✅ merged, validated and **migrated** — `20260918000000_tax_invoicing_and_staff_invitations`, applied 2026-09-18 |
 | Invoice generation, numbering, PDF | ✅ built, 72 unit tests |
-| S3 storage | ✅ built and **verified against the live `hitbox-media-dev` bucket** — see [s3-storage.md §6](s3-storage.md#6-verification-run) |
+| S3 storage | ✅ built and **verified against the live `hitbox-media-dev` bucket** — see [s3-storage.md 6](s3-storage.md#6-verification-run) |
 | Rates, artist documents, filings, adjustments | ✅ built |
 | Buyer + admin APIs | ✅ built and mounted |
 | GSTR-1 / sales-tax / 1099 / 16A **data** | ✅ built (the figures a return is filed from) |
 | Direct filing to the GST portal / IRS FIRE | ❌ not built — returns are filed by hand and their acknowledgement recorded |
 | Form 16A / 1099-NEC **PDF** generation | ❌ not built — the figures and the payout link exist; the certificate document does not |
 | Invoice e-mail delivery | ❌ not built — `Invoice.deliveredAt` exists for it |
-| `product_cost` linkage | ⏳ column exists, nullable, no FK — see [compliance-mapping.md §8](compliance-mapping.md#8-the-2026-09-15-business-logic-changes) |
+| `product_cost` linkage | ⏳ column exists, nullable, no FK — see [compliance-mapping.md 8](compliance-mapping.md#8-the-2026-09-15-business-logic-changes) |
 
 Before first production use, run the migration and complete the checklist in
-[s3-storage.md §7](s3-storage.md#7-before-first-production-use).
+[s3-storage.md 7](s3-storage.md#7-before-first-production-use).

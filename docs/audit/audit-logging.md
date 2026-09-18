@@ -2,7 +2,7 @@
 
 > What gets recorded, which events count as sensitive, and how long any of it is kept.
 >
-> Companion reading: [database-architecture.md](../database-architecture.md) §3.5 (why the trail has no
+> Companion reading: [database-architecture.md](../database-architecture.md) 3.5 (why the trail has no
 > foreign keys), [authorization/](../authorization/authorization-architecture.md) (the capabilities that
 > guard the read API).
 
@@ -43,7 +43,7 @@ A caller says `record('order.refund', …)` and cannot forget it's sensitive, or
 | Tests | `packages/audit/tests/` — 98 across 5 suites |
 
 **Not wired yet.** Nothing outside this package imports `@hitbox/audit`, so no business action writes
-a trail today. The events are registered; the call sites are still to come. See §10.
+a trail today. The events are registered; the call sites are still to come. See 10.
 
 ---
 
@@ -89,7 +89,7 @@ That's the old `sensitive` flag one-for-one — refunds, deletions, suspensions,
 
 - The row is **written** CRITICAL — the caller can't forget or override it.
 - It's **kept 7 years** instead of 3 years or 90 days. That's the cost side of the decision.
-- It lands in the **"review the list, not the count"** alert (§8).
+- It lands in the **"review the list, not the count"** alert (8).
 
 ### A denied sensitive action is not sensitive
 
@@ -146,14 +146,14 @@ pruning without losing uniqueness.
 | `actorRoleSnapshot` | Roles *at the time*, so a later role change can't rewrite history |
 | `organizationId`, `resourceType`, `resourceId` | **Not** foreign keys |
 | `actionResult` | `SUCCESS` / `FAILURE` / `DENIED` — a refusal and an error are different things |
-| `severity` | From the catalog at write time (§3) |
+| `severity` | From the catalog at write time (3) |
 | `beforeState` / `afterState` | Json. Absent is SQL `NULL`, not JSON `null` |
 | `correlationId` | **Required.** Joins one request's events together |
 | `ledgerReferenceId` | For provenance actions, the `BlockchainLedger` row produced |
 | `insertedAt` | Always the write time. The gap from `occurredAt` shows clock skew and late writes |
 
 No foreign keys, deliberately: the trail must outlive the records it describes, and must never be the
-reason a delete fails. See [database-architecture.md](../database-architecture.md) §3.5.
+reason a delete fails. See [database-architecture.md](../database-architecture.md) 3.5.
 
 Mount `correlationId()` **before** authentication — a DENIED result is one of the most useful things
 in the trail, and it happens before the request has an identity.
@@ -185,7 +185,7 @@ actually handed over — which is what a review asks.
 | `PATCH /admin/audit/retention/:severity` | `audit-log:manage` |
 
 Filters: `eventType`, `actorId`, `organizationId`, `resourceType`, `resourceId`, `actionResult`,
-`severity`, `correlationId`, `from`, `to`, `limit` (max 200), `cursor`. Each maps to an index (§9).
+`severity`, `correlationId`, `from`, `to`, `limit` (max 200), `cursor`. Each maps to an index (9).
 
 **Paging is keyset, not OFFSET.** The cursor is `(occurredAt, eventId)` — the primary key's own
 ordering — so a page boundary holds even while rows are being appended. OFFSET shifts under
@@ -245,7 +245,7 @@ Two things the schema can't enforce, so they're **operational prerequisites**:
 "actionResult" = 'FAILURE' AND "ledgerReferenceId" IS NOT NULL  -- ownership state may be stale
 ```
 
-The first and third don't overlap: role denials are `WARNING` (§3), so they stay out of the CRITICAL
+The first and third don't overlap: role denials are `WARNING` (3), so they stay out of the CRITICAL
 list. That's the point — CRITICAL stays short enough to read, denials get caught by rate instead.
 
 ---
@@ -263,7 +263,7 @@ second event of a burst sharing an actor or correlation id.
 | `(occurredAt)` | Time ranges, the pruner's sweep |
 | `(actionResult, occurredAt)` | Denial alerts, retention queries |
 | `(correlationId)` | Reassembling one request |
-| `(eventType, occurredAt)` | Every alert in §8 |
+| `(eventType, occurredAt)` | Every alert in 8 |
 
 The last one wasn't in the original list. Every alert filters on `eventType` and Postgres doesn't
 index a foreign key on its own.
@@ -308,7 +308,7 @@ unaudited platform looks exactly like one where nothing happened.
    reads a tenant's trail, who exports, who shortens a window are policy calls. Add them to
    `role-catalog.ts` and re-run `pnpm db:seed:authz`.
 3. **No step-up mechanism exists**, so export can't be mounted. A real gap, not just plumbing.
-4. **Partitioning and the UPDATE/DELETE revoke aren't done** (§7).
+4. **Partitioning and the UPDATE/DELETE revoke aren't done** (7).
 5. **The keyset SQL isn't tested** — it needs a live Postgres. The services above it are covered.
 6. **Only 13 of 20 CRITICAL events are pinned by test.**
 7. **No rate limit on `/events`.** A reader can page the whole trail 200 rows at a time, and each

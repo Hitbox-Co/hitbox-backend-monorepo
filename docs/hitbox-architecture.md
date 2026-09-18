@@ -206,7 +206,7 @@ export function bootstrap(): Router {
 Order matters and is deliberate:
 
 1. **users** is created first — it needs nothing from other modules.
-2. **auth** receives `usersModule.accountLookup` (the `IAccountLookup` **port** — see §6).
+2. **auth** receives `usersModule.accountLookup` (the `IAccountLookup` **port** — see 6).
 3. **discover** and **marketplace** receive their catalog ports from products.
 4. **artist** is created before **collections**, which receives `artistModule.collectionStats` (the `IArtistCollectionStats` port).
 5. Every router that needs authentication is built with `authModule.requireAuth`.
@@ -426,7 +426,7 @@ Error envelope — everything non-2xx has this exact shape:
 
 Using `orders` as the example:
 
-1. `packages/orders/` with the standard folder skeleton (§3) and a `package.json` copied from products (library — no dev/start scripts, `main: ./src/index.ts`).
+1. `packages/orders/` with the standard folder skeleton (3) and a `package.json` copied from products (library — no dev/start scripts, `main: ./src/index.ts`).
 2. Models in `packages/orders/prisma/orders.prisma`; shared enums go in `enums.prisma`.
 3. `pnpm db:migrate` — merge picks the new partial up automatically.
 4. Implement `repository → service → controller`, DTOs in `dto/`, error codes + event names in `constants/`.

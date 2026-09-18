@@ -10,7 +10,7 @@ Legend: ✅ implemented · 🟡 partial · ❌ not built · ⬜ out of this modu
 
 ## Part 1 — India
 
-| § | Requirement | Status | Where |
+|  | Requirement | Status | Where |
 | --- | --- | --- | --- |
 | 1.1 | GST 12% on physical collectibles, 18% premium, digital 0–5% | ✅ | `TaxConfiguration`, seeded per product/jurisdiction. Rates are data, not code — `GST_RATE_COLLECTIBLES` etc. are the documented defaults. |
 | 1.1 | `GST = Sale Price × rate`; ₹2,000 @ 12% = ₹240, total ₹2,240 | ✅ | `domain/money.ts` `taxOn()`, pinned by `money.test.ts` |
@@ -18,7 +18,7 @@ Legend: ✅ implemented · 🟡 partial · ❌ not built · ⬜ out of this modu
 | 1.2 | Form 16A issued quarterly, reconciling to *approved, paid* payouts | 🟡 | Figures + payout gate ✅ (`TaxFilingService`, `TaxReturnFiling.payoutId`). Certificate **PDF** ❌. |
 | 1.3 | HSN 9706 for collectibles; SAC 998361 marketplace, 998999 digital | ✅ | `HSN_COLLECTIBLES`, `SAC_MARKETPLACE_SERVICE`, `SAC_DIGITAL_CONTENT`; stored per rate row and per invoice line |
 | 1.3 | Every GST invoice **must** carry an HSN/SAC code | ✅ | Enforced twice: the DTO rejects an Indian rate without one, and the renderer refuses to draw an Indian invoice whose line lacks one |
-| 1.4 | Invoice issued before or at the time of supply | ✅ | Issued on `payments.order.settled` — see [invoice-generation.md §2](invoice-generation.md#2-when-an-invoice-is-issued) |
+| 1.4 | Invoice issued before or at the time of supply | ✅ | Issued on `payments.order.settled` — see [invoice-generation.md 2](invoice-generation.md#2-when-an-invoice-is-issued) |
 | 1.4 | Unique, sequential invoice number per fiscal year | ✅ | `InvoiceNumberSequence`, gap-free by transaction |
 | 1.4 | All eight mandatory fields | ✅ | `assertRenderable()` refuses to draw a deficient Indian invoice |
 | 1.4 | Unit price from the versioned sales price, never COGS | 🟡 | `salesPriceSnapshot` ✅ and COGS never reaches the document ✅; `productCostId` is a nullable column awaiting the `product_cost` table |
@@ -29,7 +29,7 @@ Legend: ✅ implemented · 🟡 partial · ❌ not built · ⬜ out of this modu
 
 ## Part 2 — United States
 
-| § | Requirement | Status | Where |
+|  | Requirement | Status | Where |
 | --- | --- | --- | --- |
 | 2.1 | State sales tax by nexus; $25 @ 8.625% = $2.16, total $27.16 | ✅ | `TaxConfiguration` per `(country, state)`, pinned by test |
 | 2.1 | Rates vary by county | ✅ | `Decimal(6,3)` — see below |
@@ -38,7 +38,7 @@ Legend: ✅ implemented · 🟡 partial · ❌ not built · ⬜ out of this modu
 | 2.2 | 24% backup withholding when no W-9 | ✅ | `US_BACKUP_WITHHOLDING_RATE`, denormalised onto the document row |
 | 2.2 | Workflow steps 1–7 (onboarding → IRS filing) | 🟡 | Steps 1–4 ✅ (collect, track, verify, compute). Steps 5–7 (mail, FIRE, Form 1096) ❌ — done by hand. |
 | 2.3 | US invoice best-practice fields | ✅ | Same renderer; no HSN column, EIN instead of GSTIN |
-| 2.3 | Unit price from the sales-price snapshot | 🟡 | As §1.4 |
+| 2.3 | Unit price from the sales-price snapshot | 🟡 | As 1.4 |
 | 2.4 | Multi-state nexus registration and filing cadence | 🟡 | `TaxReturnFiling` models a `STATE_SALES_TAX` return per state per quarter; the registration register itself is not modelled |
 
 ---
@@ -54,15 +54,15 @@ with three deliberate differences.
 | `invoice_master` | `Invoice` | Split: line detail moved to `InvoiceLineItem` — see below |
 | — | `InvoiceLineItem` | **Added.** GSTR-1 is filed with an HSN-wise breakdown; a JSON blob cannot be summed by HSN in SQL |
 | — | `InvoiceNumberSequence` | **Added.** The guide requires a gap-free series but does not say how; a Postgres sequence cannot provide one |
-| `tax_return_filing` | `TaxReturnFiling` | `payout_approval_queue_id` → `payoutId`, a real FK to the existing `RoyaltyPayout` — see §8 |
+| `tax_return_filing` | `TaxReturnFiling` | `payout_approval_queue_id` → `payoutId`, a real FK to the existing `RoyaltyPayout` — see 8 |
 | `artist_tax_documents` | `ArtistTaxDocument` | Adds `backupWithholdingApplied/Rate`, which the guide puts on `artist_tax_compliance` |
 | `tax_adjustment_entry` | `TaxAdjustmentEntry` | As specified |
-| `artist_tax_compliance` (§3.6 extension) | ❌ not extended | See below |
+| `artist_tax_compliance` (3.6 extension) | ❌ not extended | See below |
 
 ### `Decimal(5,2)` → `Decimal(6,3)` on every rate
 
 The guide specifies `NUMERIC(5,2)`. That cannot hold 8.625% — the exact figure
-the guide itself uses in its own §2.1 worked example. US combined
+the guide itself uses in its own 2.1 worked example. US combined
 state+county+district rates routinely carry a third decimal (California 8.625%,
 New York City 8.875%), and storing 8.63% would print a rate on a statutory
 document that the tax authority's own rate table does not contain. The tax
@@ -70,14 +70,14 @@ document that the tax authority's own rate table does not contain. The tax
 
 ### Line items split out of `invoice_master`
 
-The guide's §4.1 step 4 describes line items but §3.2 gives `invoice_master` a
+The guide's 4.1 step 4 describes line items but 3.2 gives `invoice_master` a
 single `hsn_code` and no line table. GSTR-1 table 12 is an HSN-wise summary of
 **lines**, so the breakdown has to be queryable. `Invoice.hsnCode` is kept as a
 denormalised header value for the common single-code invoice.
 
 ### `artist_tax_compliance` not extended
 
-§3.6 proposes adding GSTIN, PAN, W-9 URL, state tax id and withholding flags to
+3.6 proposes adding GSTIN, PAN, W-9 URL, state tax id and withholding flags to
 an existing `artist_tax_compliance` table. **There is no such table in this
 schema.** Rather than create one to extend it, the same facts live on
 `ArtistTaxDocument`, one row per document, which is a better fit anyway: it
@@ -123,7 +123,7 @@ The three ratified changes, and how each lands here.
 
 The invoice's tax base is `salesPriceSnapshot`, copied at issue so a later
 re-versioning of the drop's pricing never retroactively changes an already-issued
-invoice — exactly what §8.1 asks for.
+invoice — exactly what 8.1 asks for.
 
 **COGS never reaches the invoice.** There is no COGS field anywhere in this
 module's document model, and the port tax declares over orders
@@ -144,7 +144,7 @@ module consumes the *result* — the payout amount — and never the rate.
 
 ### 3. Quarterly payout approval workflow
 
-This is the change with the most consequence for tax, and §8.3 says so: *"every
+This is the change with the most consequence for tax, and 8.3 says so: *"every
 'accrued royalties' example in Parts 1–2 that predates 2026-09-15 should now be
 read as 'approved, paid royalties'."*
 
@@ -165,7 +165,7 @@ Implemented as a hard gate rather than a convention:
 - A payout still pending or rejected at a filing deadline is simply absent from
   `findPaidForArtist`, so it is excluded from the filing and carries forward.
 
-### The separation-of-duties control §8 asks for
+### The separation-of-duties control 8 asks for
 
 The guide recommends adding this "as an explicit control point when Phase 3 (Tax
 Filing) is implemented". It is implemented now, in two places:
@@ -176,7 +176,7 @@ Filing) is implemented". It is implemented now, in two places:
   takes `payment-royalty:override`, a different capability from the `manage` that
   raises one.
 
-### The three new RBAC permissions (§8, "New RBAC dependency")
+### The three new RBAC permissions (8, "New RBAC dependency")
 
 `drop.create_with_cogs_sales_price`, `artist.set_royalty_rate` and
 `payout.approve_and_execute` are ⬜ **not this module's** — they belong to the

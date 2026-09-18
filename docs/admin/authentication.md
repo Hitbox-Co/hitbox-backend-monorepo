@@ -24,7 +24,7 @@ Two consequences worth internalising before you write any code:
    backend has no `/auth/login`.
 2. **A valid Clerk session is not authorization.** It gets you past
    `requireAuth` and nothing more. Every admin route additionally checks a
-   capability the user holds through a role assignment — see §5.
+   capability the user holds through a role assignment — see 5.
 
 ---
 
@@ -144,7 +144,7 @@ req.auth = {
 |---|---|
 | `AUTH_UNAUTHENTICATED` | Redirect to Clerk sign-in |
 | `AUTH_INVALID_TOKEN` | Call `getToken({ skipCache: true })` and retry **once**; if it fails again, sign out |
-| `AUTH_ACCOUNT_NOT_FOUND` | Show "your account is still being provisioned" — the webhook has not landed yet (§4). Do **not** loop |
+| `AUTH_ACCOUNT_NOT_FOUND` | Show "your account is still being provisioned" — the webhook has not landed yet (4). Do **not** loop |
 | `AUTH_ACCOUNT_SUSPENDED` | Terminal. Show a support contact, sign out |
 | `AUTH_EMAIL_UNVERIFIED` | Send them back to Clerk's verification flow |
 

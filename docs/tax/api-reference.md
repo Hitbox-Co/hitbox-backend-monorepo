@@ -155,7 +155,7 @@ that number stays inside the W-9 PDF, which is access-controlled as a whole.
 ## 4. Separation of duties
 
 Three rules where holding the right capability is still not enough. All three
-come from the control point §8 of the compliance guide asks for.
+come from the control point 8 of the compliance guide asks for.
 
 | Rule | Where | Why |
 | --- | --- | --- |
@@ -310,7 +310,7 @@ S3 was unreachable — the row is the statutory record, the PDF is a projection.
 
 ### 5.4 Artist tax documents — W-9, PAN, GSTIN
 
-The rule this surface exists to enforce (guide §2.2): **HitBox must have a valid
+The rule this surface exists to enforce (guide 2.2): **HitBox must have a valid
 W-9 on file before the first payment to a US artist, and without one the IRS
 requires 24% backup withholding.** A document's verification state decides how
 much money the artist receives.
@@ -391,7 +391,7 @@ exist, belong to the named artist, and be `PAID`:
 > APPROVED. It becomes reportable once the transfer executes, and carries
 > forward to the next cycle until then. — `TAX_PAYOUT_NOT_REPORTABLE`
 
-Plus the separation-of-duties check in §4. Due dates are derived, not supplied:
+Plus the separation-of-duties check in 4. Due dates are derived, not supplied:
 GSTR-1 the 11th of the following month, GSTR-3B the 20th, 1099-NEC 31 January,
 Form 16A 31 March.
 
@@ -452,7 +452,7 @@ whether the $600 threshold is met.
 ```
 
 An artist calling this for another artist's id is refused. This method never
-reads the royalty ledger — see [compliance-mapping.md §8](compliance-mapping.md#8-the-2026-09-15-business-logic-changes).
+reads the royalty ledger — see [compliance-mapping.md 8](compliance-mapping.md#8-the-2026-09-15-business-logic-changes).
 
 #### `GET /admin/tax/reports/form-16a` — `payment-royalty:read`
 
@@ -475,7 +475,7 @@ a tax authority is never self-service, even for the operator who spotted it.
 
 `{ "decision": "APPROVE", "reason": "Rate confirmed at 9% with the consultant" }`
 
-Refused if the caller raised it (§4). **The invoice row is not rewritten** — the
+Refused if the caller raised it (4). **The invoice row is not rewritten** — the
 issued document stays as issued, and this entry is the correction. A tax
 authority reading the trail sees both what was filed and what changed.
 

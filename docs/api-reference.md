@@ -557,7 +557,7 @@ list `DRAFT` / `IN_REVIEW` drops through the same endpoint. `price_asc` /
 
 `images` are fully-resolved public URLs. Product artwork lives under the
 publicly readable `drop-images/` prefix, so these are permanent and render
-directly — see [media/s3-configuration.md §7](media/s3-configuration.md).
+directly — see [media/s3-configuration.md 7](media/s3-configuration.md).
 `price` is the base price (no variant) in the **default market**, or `null`.
 
 ### `GET /api/v1/products/:id`

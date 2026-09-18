@@ -32,7 +32,7 @@ dashed one from claims to finance, which is an **event**. Nothing points back.
 | `IFinanceAuditRecorder` / `IPaymentsAuditRecorder` | finance / payments | `AuditRecorderService` (audit) | Write the compliance trail |
 
 This is the pattern from [../hitbox-architecture.md](../hitbox-architecture.md)
-§6, and it is applied here for the same reason: when payments becomes its own
+6, and it is applied here for the same reason: when payments becomes its own
 service, `OrderLedgerAdapter` is reimplemented as an HTTP client and bootstrap
 swaps it in. Nothing inside payments changes.
 

@@ -99,7 +99,7 @@ a missing `Content-Type: application/json` header. It now says so.
 
 **Capability:** `drop:manage` at `GLOBAL` scope. Today `HITBOX_SYSTEM_ADMIN`
 and `HITBOX_DROP_MANAGER` hold it — see
-[admin-write-apis.md §0](admin-write-apis.md).
+[admin-write-apis.md 0](admin-write-apis.md).
 
 ```http
 POST /api/v1/admin/products
@@ -299,7 +299,7 @@ cascaded, and guessing wrong on every reorder.
 | `404` | `PRODUCTS_IMAGE_NOT_FOUND` | no such placement on this drop |
 | `409` | `PRODUCTS_IMAGE_DUPLICATE` | asset already in this gallery |
 | `409` | `PRODUCTS_CODE_TAKEN` | five consecutive `groupCode` collisions |
-| `422` | `VALIDATION_ERROR` | schema failure — see §1 |
+| `422` | `VALIDATION_ERROR` | schema failure — see 1 |
 
 `PRODUCTS_IMAGE_ASSET_INVALID` reports **every** bad asset at once, so a
 twelve-image gallery does not need twelve submissions to surface twelve

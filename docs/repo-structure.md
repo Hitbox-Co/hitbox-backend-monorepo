@@ -68,7 +68,7 @@ app.use('/app/web/v1', createRateLimiter({ prefix: 'web', windowMs: 60_000, max:
 ```
 
 The website's budget is deliberately tighter (20/min vs. the mobile API's 100/min) — these are
-unauthenticated public forms with no CAPTCHA yet (see [leads-schema.md](leads-schema.md) §6.4).
+unauthenticated public forms with no CAPTCHA yet (see [leads-schema.md](leads-schema.md) 6.4).
 `createRateLimiter`'s `prefix` option keeps the two budgets on separate Redis keys so they never
 share or interfere with each other, even though they're now one process.
 
@@ -123,7 +123,7 @@ needing its own env vars.
 
 Not built yet — intentionally. An earlier schema draft included `LeadNote`, `LeadActivity`,
 `AdminProfile`, and `ExportLog` for exactly this, but they were **removed** rather than left as
-unused scaffolding (see [leads-schema.md](leads-schema.md) §3) — there was no admin app to write
+unused scaffolding (see [leads-schema.md](leads-schema.md) 3) — there was no admin app to write
 or read them, and speculative tables just rot. Bring them back at the point one is actually being
 built, not before:
 
