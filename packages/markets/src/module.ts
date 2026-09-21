@@ -9,6 +9,7 @@ import {
 } from './constants/markets.constant';
 import { MarketController } from './controller/market.controller';
 import { MarketRepository } from './repository/market.repository';
+import type { MarketRef } from './repository/market.repository';
 import { MarketService } from './service/market.service';
 
 /**
@@ -33,6 +34,18 @@ export interface MarketsModuleDeps {
 
 export interface MarketsModule {
     createRouter(requireAuth: RequestHandler): Router;
+    /**
+     * Market lookup for modules that reference markets in their own tables —
+     * today product pricing. Markets owns the table, so markets answers "does
+     * this market exist, is it live, and what currency does it settle in"
+     * rather than letting a consumer query it directly.
+     */
+    markets: IMarketLookup;
+}
+
+/** The provider side of products' `IMarketLookup` port. */
+export interface IMarketLookup {
+    findManyByIdsOrCodes(ids: string[], codes: string[]): Promise<MarketRef[]>;
 }
 
 export function createMarketsModule(deps: MarketsModuleDeps): MarketsModule {
@@ -42,6 +55,10 @@ export function createMarketsModule(deps: MarketsModuleDeps): MarketsModule {
     const controller = new MarketController(service);
 
     return {
+        markets: {
+            findManyByIdsOrCodes: (ids, codes) => markets.findManyByIdsOrCodes(ids, codes),
+        },
+
         createRouter(requireAuth) {
             const router = Router();
             router.use(requireAuth);

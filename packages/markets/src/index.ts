@@ -14,10 +14,12 @@
 
 export { createMarketsModule } from './module';
 export type {
+    IMarketLookup,
     MarketsModule,
     MarketsModuleDeps,
     MarketsPermissionGuard,
 } from './module';
+export type { MarketRef } from './repository/market.repository';
 
 export {
     MARKET_READ_CAPABILITY,

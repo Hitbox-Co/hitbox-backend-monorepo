@@ -16,6 +16,7 @@ import { MarketplaceListingAdapter } from './domain/marketplace-listing.adapter'
 import { ProductDiscoveryAdapter } from './domain/product-discovery.adapter';
 import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
 import type { IMediaAssets } from './domain/interfaces/media-assets.interface';
+import type { IMarketLookup } from './domain/interfaces/market-lookup.interface';
 import type { ISkuMinting } from './domain/interfaces/sku-minting.interface';
 import { ProductRepository } from './repository/product.repository';
 import { ProductService } from './service/product.service';
@@ -47,6 +48,15 @@ export interface ProductsModuleDeps {
      * rather than writing joins nobody checked.
      */
     mediaAssets?: IMediaAssets | undefined;
+    /**
+     * Resolves the markets a price refers to. Provided by @hitbox/markets,
+     * which owns the `Market` table and its settlement currency.
+     *
+     * Optional: omit it and pricing is refused with a clear error. Since at
+     * least one price is required to create a drop, a deployment without this
+     * cannot create products at all — which is the honest outcome.
+     */
+    markets?: IMarketLookup | undefined;
     /**
      * Required only to build the admin router. The public catalog router is
      * read-only and needs no authorization.
@@ -86,6 +96,7 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
         mediaUrls: deps.mediaUrls,
         skuMinting: deps.skuMinting,
         mediaAssets: deps.mediaAssets,
+        markets: deps.markets,
     });
 
     return {
@@ -146,6 +157,29 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
                 '/:id',
                 guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
                 controller.archive,
+            );
+
+            // Market pricing. Reading takes the same capability as the detail
+            // screen; writing is catalog administration like any other edit.
+            router.get(
+                '/:id/prices',
+                guard.requirePermission(PRODUCT_READ_CAPABILITY),
+                controller.listPrices,
+            );
+            router.put(
+                '/:id/prices',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.setPrices,
+            );
+            router.patch(
+                '/:id/prices/:priceId',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.updatePrice,
+            );
+            router.delete(
+                '/:id/prices/:priceId',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.removePrice,
             );
 
             // Gallery. Reading takes the same capability as the detail screen;

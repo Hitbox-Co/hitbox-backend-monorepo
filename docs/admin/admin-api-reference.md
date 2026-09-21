@@ -11,8 +11,9 @@
 > one section per screen, with the design-to-field mapping and the known gaps.
 > The administrative **write** surface (markets, orders, products, releases,
 > roles, team) is in [admin-write-apis.md](admin-write-apis.md).
-> Product upload, request-format rules (and `422` troubleshooting), and the
-> image gallery: [product-upload-api.md](product-upload-api.md).
+> Product upload, request-format rules (and `422` troubleshooting), market
+> pricing, and the image gallery:
+> [product-upload-api.md](product-upload-api.md).
 > Minting SKU units, NFC tag manifests, and per-role unit visibility:
 > [sku-api.md](sku-api.md).
 > Session handling and the Clerk flow are in

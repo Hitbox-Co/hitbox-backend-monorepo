@@ -15,8 +15,11 @@ export {
     createProductSchema,
     listProductsQuerySchema,
     productImageInputSchema,
+    productPriceInputSchema,
     replaceProductImagesSchema,
+    setProductPricesSchema,
     updateProductImageSchema,
+    updateProductPriceSchema,
     updateProductSchema,
 } from './dto/product.dto';
 export type {
@@ -26,9 +29,13 @@ export type {
     PaginatedResult,
     ProductImageInput,
     ProductImageResponse,
+    ProductPriceInput,
+    ProductPriceResponse,
     ReplaceProductImagesDto,
+    SetProductPricesDto,
     UpdateProductDto,
     UpdateProductImageDto,
+    UpdateProductPriceDto,
 } from './dto/product.dto';
 
 // Service type (for other modules that receive it via DI)
@@ -46,6 +53,13 @@ export type {
     IMediaAssets,
     MediaAssetRef,
 } from './domain/interfaces/media-assets.interface';
+
+// Port: bootstrap injects @hitbox/markets, which owns Market, so a price can
+// be validated and can inherit its market's settlement currency.
+export type {
+    IMarketLookup,
+    MarketRef,
+} from './domain/interfaces/market-lookup.interface';
 
 // Port: bootstrap injects @hitbox/skus so a drop and its serialized edition
 // are created in one transaction. Products never writes the Sku table itself.

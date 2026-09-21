@@ -15,6 +15,13 @@ export const PRODUCTS_ERROR_CODES = {
     /** The same asset was attached to this product twice. */
     IMAGE_DUPLICATE: 'PRODUCTS_IMAGE_DUPLICATE',
     IMAGE_NOT_FOUND: 'PRODUCTS_IMAGE_NOT_FOUND',
+    /** A `prices` block arrived but no market-lookup provider is wired in. */
+    MARKETS_UNAVAILABLE: 'PRODUCTS_MARKETS_UNAVAILABLE',
+    /** One or more markets do not exist, are archived, or are inactive. */
+    PRICE_MARKET_INVALID: 'PRODUCTS_PRICE_MARKET_INVALID',
+    /** Refused: removing the last price would leave the drop unsellable. */
+    PRICE_REQUIRED: 'PRODUCTS_PRICE_REQUIRED',
+    PRICE_NOT_FOUND: 'PRODUCTS_PRICE_NOT_FOUND',
 } as const;
 
 /**
@@ -79,6 +86,15 @@ export const PRODUCT_IMAGE_MAX = 24;
  * broken image forever.
  */
 export const PRODUCT_IMAGE_ASSET_TYPES = ['DROP_IMAGE'] as const;
+
+/**
+ * Price points per drop.
+ *
+ * One per (market, variant) pair. A drop selling in 3 markets with 8 variants
+ * is 24 rows before the base prices, so the cap is generous — it exists to
+ * stop a runaway payload, not to constrain real pricing.
+ */
+export const PRODUCT_PRICE_MAX = 200;
 
 
 // ── Redis cache (cache-aside; see cache/product-cache.ts) ──────────────────

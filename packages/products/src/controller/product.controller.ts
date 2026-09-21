@@ -6,7 +6,9 @@ import {
     listProductsQuerySchema,
     productDetailQuerySchema,
     replaceProductImagesSchema,
+    setProductPricesSchema,
     updateProductImageSchema,
+    updateProductPriceSchema,
     updateProductSchema,
 } from '../dto/product.dto';
 import type { ProductService } from '../service/product.service';
@@ -73,6 +75,45 @@ export class ProductController {
     archive: RequestHandler = asyncHandler(async (req, res) => {
         await this.service.archive(req.params.id as string);
         res.status(204).send();
+    });
+
+    // ── Prices ──────────────────────────────────────────────────────────
+    //
+    // Like the gallery, every mutation returns the WHOLE price list: a drop's
+    // pricing is read as a table, and a response carrying one row leaves the
+    // client re-fetching to render the change it just made.
+
+    /** GET /admin/products/:id/prices */
+    listPrices: RequestHandler = asyncHandler(async (req, res) => {
+        res.json({ data: await this.service.listPrices(req.params.id as string) });
+    });
+
+    /** PUT /admin/products/:id/prices — replace the price list */
+    setPrices: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = setProductPricesSchema.parse(req.body);
+        res.json({ data: await this.service.setPrices(req.params.id as string, dto) });
+    });
+
+    /** PATCH /admin/products/:id/prices/:priceId */
+    updatePrice: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = updateProductPriceSchema.parse(req.body);
+        res.json({
+            data: await this.service.updatePrice(
+                req.params.id as string,
+                req.params.priceId as string,
+                dto,
+            ),
+        });
+    });
+
+    /** DELETE /admin/products/:id/prices/:priceId */
+    removePrice: RequestHandler = asyncHandler(async (req, res) => {
+        res.json({
+            data: await this.service.removePrice(
+                req.params.id as string,
+                req.params.priceId as string,
+            ),
+        });
     });
 
     // ── Gallery ─────────────────────────────────────────────────────────

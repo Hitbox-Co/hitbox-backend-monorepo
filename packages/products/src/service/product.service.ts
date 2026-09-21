@@ -16,19 +16,26 @@ import type {
     SkuMintOutcome,
 } from '../domain/interfaces/sku-minting.interface';
 import type { IMediaAssets } from '../domain/interfaces/media-assets.interface';
+import type { IMarketLookup } from '../domain/interfaces/market-lookup.interface';
 import type {
     AttachProductImagesDto,
     CreateProductDto,
     ListProductsQuery,
     PaginatedResult,
     ProductImageResponse,
+    ProductPriceInput,
+    ProductPriceResponse,
     ReplaceProductImagesDto,
+    SetProductPricesDto,
     UpdateProductDto,
     UpdateProductImageDto,
+    UpdateProductPriceDto,
 } from '../dto/product.dto';
 import type {
     NormalisedImage,
+    NormalisedPrice,
     ProductImageRow,
+    ProductPriceRow,
     ProductListingRow,
     ProductPerformance,
     ProductRepository,
@@ -52,6 +59,14 @@ interface ProductServiceDeps {
      * gallery rows pointing at assets nobody validated.
      */
     mediaAssets?: IMediaAssets | undefined;
+    /**
+     * Resolves the markets a price refers to, and the currency each settles
+     * in. Provided by @hitbox/markets, which owns the `Market` table.
+     *
+     * Optional: without it, pricing is refused rather than writing rows
+     * pointing at markets nobody validated.
+     */
+    markets?: IMarketLookup | undefined;
 }
 
 /**
@@ -199,6 +214,7 @@ export class ProductService {
             organizationId,
             skus,
             images,
+            prices,
             ...fields
         } = dto;
 
@@ -225,6 +241,12 @@ export class ProductService {
         if (images?.length) {
             await this.assertUsableAssets(null, images.map((image) => image.assetId));
         }
+
+        // Markets are resolved before the product is written too, and for the
+        // same reason: a mistyped market code should not roll back a drop that
+        // was otherwise correct. `productId` is null because the drop does not
+        // exist yet — which also means no variant prices are possible here.
+        const priceEntries = await this.resolvePrices(null, prices);
 
         // Random 8-digit prefix + 4-digit group suffix; retry on the (rare)
         // unique-constraint collision instead of pre-checking.
@@ -254,8 +276,15 @@ export class ProductService {
                 },
                     // Runs inside the product's own transaction; a failure in
                     // either the mint or the gallery rolls the drop back too.
-                    skus || images?.length
-                        ? async (tx, created) => {
+                    async (tx, created) => {
+                            // Prices first: they are required, so a failure
+                            // here should abort before any units are minted.
+                            await this.deps.products.writePrices(
+                                created.id,
+                                priceEntries,
+                                'upsert',
+                                tx,
+                            );
                             if (skus) {
                                 minted = await this.deps.skuMinting!.mintWithin(tx, {
                                     productId: created.id,
@@ -284,8 +313,7 @@ export class ProductService {
                                     tx,
                                 );
                             }
-                        }
-                        : undefined,
+                        },
                 );
                 await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_CREATED, {
                     productId: product.id,
@@ -326,6 +354,181 @@ export class ProductService {
         await this.requireById(id);
         await this.deps.products.archive(id);
         await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_ARCHIVED, { productId: id });
+    }
+
+    // ── Prices ──────────────────────────────────────────────────────────
+
+    async listPrices(productId: string): Promise<ProductPriceResponse[]> {
+        await this.requireById(productId);
+        return (await this.deps.products.listPrices(productId)).map(toPriceResponse);
+    }
+
+    /**
+     * `PUT /admin/products/:id/prices` — replace the price list.
+     *
+     * Replace rather than merge: a pricing table is edited as a whole, and
+     * "these are the prices now" is the only statement that can express
+     * *removing* a market. The schema requires at least one entry, so this can
+     * never leave a drop unsellable.
+     */
+    async setPrices(
+        productId: string,
+        dto: SetProductPricesDto,
+    ): Promise<ProductPriceResponse[]> {
+        await this.requireById(productId);
+        const entries = await this.resolvePrices(productId, dto.prices);
+        const rows = await this.deps.products.writePrices(productId, entries, 'replace');
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, { productId });
+        return rows.map(toPriceResponse);
+    }
+
+    /** `PATCH /admin/products/:id/prices/:priceId` — edit one price point. */
+    async updatePrice(
+        productId: string,
+        priceId: string,
+        dto: UpdateProductPriceDto,
+    ): Promise<ProductPriceResponse[]> {
+        await this.requireById(productId);
+        const existing = await this.deps.products.findPrice(productId, priceId);
+        if (!existing) {
+            throw AppError.notFound(
+                'Price point not found on this product',
+                PRODUCTS_ERROR_CODES.PRICE_NOT_FOUND,
+            );
+        }
+
+        // The free/amount pair has to stay coherent across a partial edit: the
+        // schema can only see the fields that arrived, so flipping isFree on a
+        // priced row (or off a free one) is checked against the stored row.
+        const isFree = dto.isFree ?? existing.isFree;
+        const amount = dto.amount ?? (dto.isFree === true ? null : existing.amount?.toString() ?? null);
+        if (!isFree && amount === null) {
+            throw AppError.badRequest(
+                'A priced entry needs an amount; send `isFree: true` to make it free instead.',
+                PRODUCTS_ERROR_CODES.PRICE_MARKET_INVALID,
+            );
+        }
+
+        const rows = await this.deps.products.updatePrice(productId, priceId, {
+            isFree,
+            amount: isFree ? null : amount,
+            ...(dto.costOfGoods !== undefined ? { costOfGoods: dto.costOfGoods } : {}),
+            ...(dto.status !== undefined ? { status: dto.status } : {}),
+        });
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, { productId });
+        return rows.map(toPriceResponse);
+    }
+
+    /** `DELETE /admin/products/:id/prices/:priceId` */
+    async removePrice(productId: string, priceId: string): Promise<ProductPriceResponse[]> {
+        await this.requireById(productId);
+        const existing = await this.deps.products.findPrice(productId, priceId);
+        if (!existing) {
+            throw AppError.notFound(
+                'Price point not found on this product',
+                PRODUCTS_ERROR_CODES.PRICE_NOT_FOUND,
+            );
+        }
+
+        // The compulsory-pricing rule has to hold after a delete too, or it is
+        // only enforced on the path people happen to use first.
+        if ((await this.deps.products.countPrices(productId)) <= 1) {
+            throw AppError.conflict(
+                'This is the drop\'s only price. A drop must keep at least one market price — ' +
+                'add another market first, or disable this one with `status: "DISABLED"`.',
+                PRODUCTS_ERROR_CODES.PRICE_REQUIRED,
+            );
+        }
+
+        const rows = await this.deps.products.deletePrice(productId, priceId);
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, { productId });
+        return rows.map(toPriceResponse);
+    }
+
+    /**
+     * Turns price input into rows, resolving each market and refusing the ones
+     * that would produce a price nobody can buy at.
+     *
+     * Every problem is reported at once — a pricing table is filled in for
+     * several markets in one sitting, and one error per submission is a poor
+     * way to find three typos.
+     */
+    private async resolvePrices(
+        productId: string | null,
+        prices: ProductPriceInput[],
+    ): Promise<NormalisedPrice[]> {
+        if (!this.deps.markets) {
+            throw AppError.badRequest(
+                'This deployment cannot resolve markets, so prices cannot be set.',
+                PRODUCTS_ERROR_CODES.MARKETS_UNAVAILABLE,
+            );
+        }
+
+        const ids = prices
+            .map((price) => price.marketId)
+            .filter((value): value is string => value !== undefined);
+        const codes = prices
+            .map((price) => price.marketCode)
+            .filter((value): value is string => value !== undefined);
+
+        const found = await this.deps.markets.findManyByIdsOrCodes(ids, codes);
+        const byId = new Map(found.map((market) => [market.id, market]));
+        // Codes are matched case-insensitively: markets store them upper-cased
+        // and an operator typing "in" means India.
+        const byCode = new Map(found.map((market) => [market.code.toUpperCase(), market]));
+
+        // Variant prices can only reference this product's own variants. On
+        // create there are none, so any variantId is necessarily another
+        // product's — and the foreign key would accept it.
+        const ownVariantIds = productId
+            ? new Set(await this.deps.products.variantIdsOf(productId))
+            : new Set<string>();
+
+        const problems: string[] = [];
+        const entries: NormalisedPrice[] = [];
+
+        for (const price of prices) {
+            const label = price.marketCode ?? price.marketId ?? '(no market)';
+            const market = price.marketId
+                ? byId.get(price.marketId)
+                : byCode.get(price.marketCode!.toUpperCase());
+
+            if (!market) {
+                problems.push(`${label}: no such market`);
+                continue;
+            }
+            if (market.archivedAt) {
+                problems.push(`${market.code}: market is archived`);
+                continue;
+            }
+            if (!market.isActive) {
+                problems.push(`${market.code}: market is inactive`);
+                continue;
+            }
+            if (price.variantId && !ownVariantIds.has(price.variantId)) {
+                problems.push(
+                    `${market.code}: variant ${price.variantId} does not belong to this product`,
+                );
+                continue;
+            }
+
+            entries.push({
+                marketId: market.id,
+                variantId: price.variantId ?? null,
+                amount: price.isFree ? null : (price.amount ?? null),
+                isFree: price.isFree,
+                costOfGoods: price.costOfGoods ?? null,
+                status: price.status,
+            });
+        }
+
+        if (problems.length > 0) {
+            throw AppError.badRequest(
+                `Cannot price: ${problems.join('; ')}`,
+                PRODUCTS_ERROR_CODES.PRICE_MARKET_INVALID,
+            );
+        }
+        return entries;
     }
 
     // ── Gallery ─────────────────────────────────────────────────────────
@@ -656,6 +859,31 @@ function toSkuUnit(sku: SkuUnitRow) {
         lastTapCounter: sku.lastTapCounter,
         isActive: sku.isActive,
         createdAt: sku.createdAt.toISOString(),
+    };
+}
+
+/**
+ * One price point as the API returns it.
+ *
+ * `currency` comes from the joined market, never from the price row — the row
+ * has no currency column, precisely so a price cannot disagree with the
+ * market it is quoted in. `amount` is a decimal string for the same reason
+ * money always is here: a float would round it.
+ */
+function toPriceResponse(row: ProductPriceRow): ProductPriceResponse {
+    return {
+        priceId: row.id,
+        marketId: row.marketId,
+        marketCode: row.market.code,
+        marketName: row.market.name,
+        currency: row.market.currency,
+        amount: row.isFree ? '0' : (row.amount?.toString() ?? null),
+        isFree: row.isFree,
+        costOfGoods: row.costOfGoods?.toString() ?? null,
+        status: row.status,
+        variantId: row.variantId,
+        createdAt: row.createdAt.toISOString(),
+        updatedAt: row.updatedAt.toISOString(),
     };
 }
 

@@ -173,6 +173,16 @@ export function bootstrap(): Bootstrapped {
         resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
     });
 
+    /**
+     * Markets. Built BEFORE products because products consumes its lookup
+     * port: a `ProductPrice` names a market and inherits that market's
+     * settlement currency, so the catalog cannot validate a price without it.
+     */
+    const marketsModule = createMarketsModule({
+        prisma,
+        guard: accessControlModule.guard,
+    });
+
     const productsModule = createProductsModule({
         prisma,
         eventBus,
@@ -184,6 +194,10 @@ export function bootstrap(): Bootstrapped {
         // Undefined on a deploy with no bucket — image attachment is then
         // refused with a clear error instead of writing unvalidated joins.
         mediaAssets: mediaModule?.assets,
+        // Markets owns Market, so markets answers "does this market exist, is
+        // it live, and what currency does it settle in?" before the catalog
+        // writes a price against it.
+        markets: marketsModule.markets,
     });
 
     /**
@@ -214,11 +228,6 @@ export function bootstrap(): Bootstrapped {
             canOverride: principal.permissions.includes('release-approval:override:global'),
         };
     };
-
-    const marketsModule = createMarketsModule({
-        prisma,
-        guard: accessControlModule.guard,
-    });
 
     const ordersModule = createOrdersModule({
         prisma,

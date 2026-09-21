@@ -65,6 +65,8 @@ role check here.
 | SKU **NFC tag binding** | `nfc-tag-claim:manage` | no — checked in addition to the mint gate |
 | Product gallery read | `drop:read` | no |
 | Product gallery attach / replace / remove | `drop:manage` | **yes** |
+| Product price read | `drop:read` | no |
+| Product price set / update / delete | `drop:manage` | **yes** |
 | Release read | `release-approval:read` | no |
 | Release submit / amend / decide | `release-approval:manage` | no |
 | Release **reverse a decision** | `release-approval:override:global` | implicit |
@@ -405,6 +407,18 @@ Body as documented in [api-reference.md](../api-reference.md) — `name`,
 
 → `201 { "data": ProductResponse }`. The 12-digit `groupCode` is generated
 server-side: 8 random digits + your 4-digit suffix, retried on collision.
+
+**`prices` is required — at least one market price.** A drop with no price is
+not purchasable in any market, so the API refuses to create one:
+
+```json
+{ "name": "Neon Drift", "prices": [ { "marketCode": "IN", "amount": "1999.00" } ] }
+```
+
+⚠️ **Breaking change** — a create that previously omitted `prices` now returns
+`422`. Full contract, including per-market pricing, the deliberate absence of a
+`currency` field, and `PUT/PATCH/DELETE /admin/products/:id/prices`:
+[product-upload-api.md 3](product-upload-api.md).
 
 **Optional `skus` block — mint the edition in the same request:**
 
@@ -796,6 +810,10 @@ instantly.
 | `PRODUCTS_IMAGE_ASSET_INVALID` | 400 | products |
 | `PRODUCTS_IMAGE_DUPLICATE` | 409 | products |
 | `PRODUCTS_IMAGE_NOT_FOUND` | 404 | products |
+| `PRODUCTS_MARKETS_UNAVAILABLE` | 400 | products |
+| `PRODUCTS_PRICE_MARKET_INVALID` | 400 | products |
+| `PRODUCTS_PRICE_REQUIRED` | 409 | products |
+| `PRODUCTS_PRICE_NOT_FOUND` | 404 | products |
 | `BODY_REQUIRED` | 400 | shared — no JSON body was parsed |
 | `PRODUCTS_MINTING_UNAVAILABLE` | 400 | products |
 | `PRODUCTS_SUPPLY_EXCEEDED` | 400 | products |
@@ -826,6 +844,9 @@ instantly.
 - [ ] Bind tags through the manifest endpoint, not at mint time, for any real edition ([sku-api.md 3a](sku-api.md))
 - [ ] Always send `Content-Type: application/json` — its absence now returns `400 BODY_REQUIRED`
 - [ ] Call `PUT /admin/products/:id/images` after a reorder; re-render from its response
+- [ ] Add a `prices` block to every existing create call — it is now required
+- [ ] Never send `currency` on a price; it comes from the market
+- [ ] Send money as decimal strings, never floats
 - [ ] Show `isSystem: true` roles as read-only
 - [ ] Default the Team list to `internalOnly=true`
 - [ ] Refetch the team after assigning a role; grants are cached briefly

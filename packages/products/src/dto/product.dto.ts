@@ -1,10 +1,11 @@
 import { z } from 'zod';
-import { ComplianceStatus, DropStatus } from '@hitbox/database';
+import { ComplianceStatus, DropStatus, ProductPriceStatus } from '@hitbox/database';
 import {
     DEFAULT_PRODUCT_GROUP_CODE,
     PRODUCT_CODE_GROUP_LENGTH,
     PRODUCT_CODE_UNIQUE_LENGTH,
     PRODUCT_IMAGE_MAX,
+    PRODUCT_PRICE_MAX,
     SKU_INLINE_MINT_MAX,
 } from '../constants/products.constant';
 
@@ -208,6 +209,135 @@ export interface ProductImageResponse {
     createdAt: string;
 }
 
+// ── Product prices ──────────────────────────────────────────────────────
+
+/**
+ * A money amount, as `Decimal(12, 2)` accepts it.
+ *
+ * Accepts a number or a numeric string and **keeps it as a string** all the
+ * way to Prisma. A price that round-trips through a JavaScript float is a
+ * price that can arrive as `1999.9999999999998`, and `Decimal(12, 2)` would
+ * silently round it — on the column that decides what a buyer is charged.
+ */
+const money = z
+    .union([z.string(), z.number()])
+    .transform((value) => String(value).trim())
+    .pipe(
+        z
+            .string()
+            .regex(/^\d{1,10}(\.\d{1,2})?$/, 'Up to 10 digits and 2 decimal places, not negative'),
+    );
+
+/**
+ * One price point: an amount, in one market, optionally for one variant.
+ *
+ * **There is no `currency` field, deliberately.** The currency is the
+ * market's (`Market.currency`). Accepting one here would let a drop be priced
+ * in GBP inside a market that settles in INR, and no constraint in the schema
+ * would catch it. The response tells you which currency you got.
+ */
+export const productPriceInputSchema = z
+    .object({
+        /** Identify the market by id… */
+        marketId: z.string().uuid().optional(),
+        /** …or by its short code (`IN`, `US`). Exactly one of the two. */
+        marketCode: z.string().trim().min(2).max(12).optional(),
+        /**
+         * The amount, as a decimal string. Required unless `isFree`.
+         * Omit for a free drop; sending both is a contradiction and refused.
+         */
+        amount: money.optional(),
+        isFree: bool.default(false),
+        /** Unit cost, so finance can compute margin without re-deriving it. */
+        costOfGoods: money.optional(),
+        /** `DISABLED` stages a price without making it live. */
+        status: upperEnum(ProductPriceStatus).default(ProductPriceStatus.ACTIVE),
+        /**
+         * Price a specific variant instead of the product as a whole.
+         * Omit for the base price, which is what a market-less feed shows.
+         */
+        variantId: z.string().uuid().optional(),
+    })
+    .strict()
+    .refine((value) => (value.marketId === undefined) !== (value.marketCode === undefined), {
+        message: 'Provide exactly one of marketId or marketCode',
+        path: ['marketId'],
+    })
+    .refine((value) => value.isFree || value.amount !== undefined, {
+        message: 'amount is required unless isFree is true',
+        path: ['amount'],
+    })
+    .refine((value) => !value.isFree || value.amount === undefined, {
+        message: 'A free price cannot also carry an amount',
+        path: ['amount'],
+    });
+export type ProductPriceInput = z.infer<typeof productPriceInputSchema>;
+
+/**
+ * The `prices` array, with the two rules that make a price list coherent.
+ *
+ * `min(1)` is the compulsory-pricing rule: a drop with no price is not
+ * sellable in any market, and creating one is almost always a half-finished
+ * form rather than an intention.
+ */
+const priceList = z
+    .array(productPriceInputSchema)
+    .min(1, 'At least one market price is required')
+    .max(PRODUCT_PRICE_MAX)
+    .superRefine((prices, ctx) => {
+        // The DB has @@unique([productId, variantId, marketId]); two rows for
+        // the same pair would fail there with a constraint error naming
+        // nothing useful. Catch it here where the index is known.
+        const seen = new Set<string>();
+        for (const [index, price] of prices.entries()) {
+            const key = `${price.marketId ?? price.marketCode}::${price.variantId ?? ''}`;
+            if (seen.has(key)) {
+                ctx.addIssue({
+                    code: z.ZodIssueCode.custom,
+                    path: [index],
+                    message: 'Duplicate price for this market and variant',
+                });
+            }
+            seen.add(key);
+        }
+    });
+
+/** `PUT /admin/products/:id/prices` — replace the whole price list. */
+export const setProductPricesSchema = z.object({ prices: priceList }).strict();
+export type SetProductPricesDto = z.infer<typeof setProductPricesSchema>;
+
+/** `PATCH /admin/products/:id/prices/:priceId` — edit one price point. */
+export const updateProductPriceSchema = z
+    .object({
+        amount: money.optional(),
+        isFree: bool.optional(),
+        costOfGoods: money.nullish(),
+        status: upperEnum(ProductPriceStatus).optional(),
+    })
+    .strict()
+    .refine((value) => !(value.isFree === true && value.amount !== undefined), {
+        message: 'A free price cannot also carry an amount',
+        path: ['amount'],
+    });
+export type UpdateProductPriceDto = z.infer<typeof updateProductPriceSchema>;
+
+export interface ProductPriceResponse {
+    priceId: string;
+    marketId: string;
+    marketCode: string;
+    marketName: string;
+    /** Inherited from the market — never supplied by the client. */
+    currency: string;
+    /** Decimal string. `"0"` when free, `null` when unpriced. */
+    amount: string | null;
+    isFree: boolean;
+    costOfGoods: string | null;
+    status: string;
+    variantId: string | null;
+    createdAt: string;
+    updatedAt: string;
+}
+
 // ── Mutations ───────────────────────────────────────────────────────────
 
 export const createProductSchema = z.object({
@@ -293,6 +423,18 @@ export const createProductSchema = z.object({
      * `ProductImage`, in the same transaction as the product itself.
      */
     images: z.array(productImageInputSchema).max(PRODUCT_IMAGE_MAX).optional(),
+    /**
+     * Market pricing. **Required — at least one market price.**
+     *
+     * A drop with no price is not purchasable anywhere: the storefront reads
+     * `ProductPrice` for the buyer's market, and with no row there is nothing
+     * to show and nothing to charge. Every previous route to that state was a
+     * half-finished form, so the API refuses to create one.
+     *
+     * One entry per market the drop sells in; the currency of each comes from
+     * the market, not from here.
+     */
+    prices: priceList,
 });
 
 export type CreateProductDto = z.infer<typeof createProductSchema>;
@@ -302,12 +444,20 @@ export type CreateProductDto = z.infer<typeof createProductSchema>;
  * once at creation. `complianceStatus` is omitted too — it is written by the
  * releases module's reviewer, not by a catalog edit.
  *
- * `skus` is omitted because minting is not an edit. Units are physical objects
- * with owners and provenance; "PATCH the product to say 600 now" has no
- * meaning once 500 exist. Mint through the skus endpoint, which appends.
+ * `skus`, `images` and `prices` are omitted because none of them is a scalar
+ * edit, and letting them through this schema would pass them straight into
+ * `product.update()` as if they were columns:
+ *
+ *   - **skus** — minting is not an edit. Units are physical objects with
+ *     owners and provenance; "PATCH the product to say 600 now" has no meaning
+ *     once 500 exist. Mint through the skus endpoint, which appends.
+ *   - **images** — the gallery has cross-row invariants (contiguous order,
+ *     exactly one primary). `PUT /admin/products/:id/images` owns it.
+ *   - **prices** — repricing needs each market resolved and validated.
+ *     `PUT /admin/products/:id/prices` owns it.
  */
 export const updateProductSchema = createProductSchema
-    .omit({ groupCode: true, skus: true })
+    .omit({ groupCode: true, skus: true, images: true, prices: true })
     .partial()
     .strict();
 
@@ -325,4 +475,4 @@ export interface PaginatedResult<T> {
     };
 }
 
-export { ComplianceStatus, DropStatus };
+export { ComplianceStatus, DropStatus, ProductPriceStatus };

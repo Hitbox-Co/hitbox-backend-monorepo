@@ -71,9 +71,13 @@ Content-Type: application/json
   "isAgeSpecific": false,
   "groupCode": "0042",
 
+  "prices": [{ "marketCode": "IN", "amount": "1999.00" }],
   "skus": { "count": 500 }
 }
 ```
+
+`prices` is **required** — at least one market price, or the create is a
+`422`. See [product-upload-api.md 3](product-upload-api.md).
 
 | Field | Type | Notes |
 |---|---|---|
@@ -82,7 +86,8 @@ Content-Type: application/json
 | `groupCode` | 4 digits | the **group suffix**; the server prefixes 8 random digits |
 | `status` | `DropStatus` | defaults to `DRAFT`; the releases module drives the rest |
 | `skus.count` | int 1–1000 | omit the whole block to create a catalog entry with no units |
-| `images[]` | ≤24 entries | attaches uploaded assets as the gallery — [product-upload-api.md 3](product-upload-api.md) |
+| `prices[]` | 1–200 entries | **required** — one price per market |
+| `images[]` | ≤24 entries | attaches uploaded assets as the gallery — [product-upload-api.md 4](product-upload-api.md) |
 
 The full field table, and what the body may look like on the wire, are in
 [product-upload-api.md 2](product-upload-api.md).

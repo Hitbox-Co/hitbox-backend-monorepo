@@ -9,6 +9,17 @@ const marketInclude = {
 
 export type MarketRow = Prisma.MarketGetPayload<{ include: typeof marketInclude }>;
 
+/** What other modules are told about a market they are referencing. */
+export interface MarketRef {
+    id: string;
+    code: string;
+    name: string;
+    currency: Currency;
+    isActive: boolean;
+    isDefault: boolean;
+    archivedAt: Date | null;
+}
+
 /** The only place in this module that touches Prisma. */
 export class MarketRepository {
     constructor(private readonly prisma: PrismaClient) { }
@@ -44,6 +55,35 @@ export class MarketRepository {
 
     findByCode(code: string): Promise<MarketRow | null> {
         return this.prisma.market.findUnique({ where: { code }, include: marketInclude });
+    }
+
+    /**
+     * Bulk lookup for other modules that reference markets in their own tables
+     * (today: product pricing, through the `IMarketLookup` port).
+     *
+     * Resolves by id **or** code in one query, because an operator setting a
+     * price thinks in codes (`IN`, `US`) while a UI holds ids, and both should
+     * cost the same single round trip. The caller needs every bad reference
+     * reported together rather than failing on the first.
+     */
+    findManyByIdsOrCodes(ids: string[], codes: string[]): Promise<MarketRef[]> {
+        const or: Prisma.MarketWhereInput[] = [];
+        if (ids.length > 0) or.push({ id: { in: ids } });
+        if (codes.length > 0) or.push({ code: { in: codes } });
+        if (or.length === 0) return Promise.resolve([]);
+
+        return this.prisma.market.findMany({
+            where: { OR: or },
+            select: {
+                id: true,
+                code: true,
+                name: true,
+                currency: true,
+                isActive: true,
+                isDefault: true,
+                archivedAt: true,
+            },
+        });
     }
 
     /** Which markets already own these countries, if any. */

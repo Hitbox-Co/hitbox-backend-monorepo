@@ -14,8 +14,9 @@
 > [admin-write-apis.md](admin-write-apis.md). This document covers the
 > read/reporting surface.
 >
-> **Product upload** — creating a drop, the accepted request formats, and the
-> image gallery — is in [product-upload-api.md](product-upload-api.md).
+> **Product upload** — creating a drop, the accepted request formats, market
+> pricing, and the image gallery — is in
+> [product-upload-api.md](product-upload-api.md).
 > **Serialized units and NFC tags** — minting, tag manifests, and the per-role
 > field visibility matrix — are in [sku-api.md](sku-api.md).
 
@@ -819,21 +820,20 @@ What exists today, and what it does not cover:
 | Step 1 — Drop identification & brand | ✅ `POST /api/v1/admin/products` |
 | Step 1b — edition size / serialized units | ✅ `POST /admin/products` with a `skus` block, or `POST /admin/products/:productId/skus` — [sku-api.md](sku-api.md) |
 | Step 2 — Artwork & media upload | ✅ `POST /admin/media/upload-url` then `POST /admin/products/:id/images` — multi-image gallery with ordering and a primary flag ([product-upload-api.md 3](product-upload-api.md)) |
-| Live marketplace preview — price | ⚠️ price lives in `ProductPrice`; **no endpoint to set it** |
+| Live marketplace preview — price | ✅ `prices[]` on create (at least one required) and `PUT /admin/products/:id/prices` — one row per market ([product-upload-api.md 3](product-upload-api.md)) |
 | Submit for review | ✅ `POST /api/v1/admin/releases` |
 | Approve / reject | ✅ `POST /api/v1/admin/releases/:id/decision` |
 | "Deploy New Drop" / publish action | ❌ **nothing** — no `APPROVED → PUBLISHED/ACTIVE` transition |
 | NFC tag claims "Enabled" toggle | ⚠️ tags are bound at mint time via `tagIds` ([sku-api.md 3](sku-api.md)); there is no per-drop toggle and no way to bind a tag to an already-minted unit |
 
-**Two endpoints still missing before this screen is buildable end to end:**
+**One endpoint still missing before this screen is buildable end to end:**
 
-1. `PUT /admin/products/:id/prices` — upsert a `ProductPrice` per market
-2. `POST /admin/products/:id/publish` — `APPROVED` → `PUBLISHED`/`ACTIVE`
+1. `POST /admin/products/:id/publish` — `APPROVED` → `PUBLISHED`/`ACTIVE`
    with `releaseStart`/`releaseEnd`
 
-The image join (previously listed here) is **built** — see
-[product-upload-api.md 3](product-upload-api.md). Both remaining endpoints are
-small additions to `products`. Everything else on the wizard is live.
+The image join and the per-market price upsert (both previously listed here)
+are **built** — see [product-upload-api.md](product-upload-api.md) 3 and 4.
+Everything else on the wizard is live.
 
 ---
 

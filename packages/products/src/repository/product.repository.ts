@@ -86,6 +86,34 @@ export type ProductImageRow = Prisma.ProductImageGetPayload<{
     select: typeof productImageSelect;
 }>;
 
+/** One price point, with the market it settles in. */
+const productPriceSelect = {
+    id: true,
+    marketId: true,
+    variantId: true,
+    amount: true,
+    isFree: true,
+    costOfGoods: true,
+    status: true,
+    createdAt: true,
+    updatedAt: true,
+    market: { select: { code: true, name: true, currency: true } },
+} satisfies Prisma.ProductPriceSelect;
+
+export type ProductPriceRow = Prisma.ProductPriceGetPayload<{
+    select: typeof productPriceSelect;
+}>;
+
+/** A price after the service has resolved its market and validated it. */
+export interface NormalisedPrice {
+    marketId: string;
+    variantId: string | null;
+    amount: string | null;
+    isFree: boolean;
+    costOfGoods: string | null;
+    status: ProductPriceStatus;
+}
+
 /** A gallery entry after the service has resolved order and the primary flag. */
 export interface NormalisedImage {
     assetId: string;
@@ -562,6 +590,152 @@ export class ProductRepository {
         await this.prisma.$transaction(run);
         await Promise.all([this.cache.invalidateEntity(productId), this.cache.invalidateLists()]);
         return this.listImages(productId);
+    }
+
+    // ── Prices ──────────────────────────────────────────────────────────
+
+    listPrices(productId: string): Promise<ProductPriceRow[]> {
+        return this.prisma.productPrice.findMany({
+            where: { productId },
+            select: productPriceSelect,
+            // Base prices (variantId null) before variant overrides, then by
+            // market code — the order a pricing table reads in.
+            orderBy: [{ variantId: 'asc' }, { market: { code: 'asc' } }],
+        });
+    }
+
+    findPrice(productId: string, priceId: string): Promise<ProductPriceRow | null> {
+        return this.prisma.productPrice.findFirst({
+            where: { id: priceId, productId },
+            select: productPriceSelect,
+        });
+    }
+
+    /**
+     * Writes the price list for one product.
+     *
+     * `mode: 'replace'` deletes price points not in `entries`. Deletion rather
+     * than soft-archive because `@@unique([productId, variantId, marketId])`
+     * spans every row: a soft-archived price would permanently block that
+     * market from ever being priced again, and unlike a gallery placement a
+     * price point carries no history worth keeping — an *order* snapshots what
+     * it charged at purchase time, so nothing downstream reads back through
+     * this row.
+     */
+    async writePrices(
+        productId: string,
+        entries: NormalisedPrice[],
+        mode: 'upsert' | 'replace',
+        tx?: Prisma.TransactionClient,
+    ): Promise<ProductPriceRow[]> {
+        const run = async (client: Prisma.TransactionClient) => {
+            const now = new Date();
+
+            if (mode === 'replace') {
+                const keep = entries.map((entry) => ({
+                    marketId: entry.marketId,
+                    variantId: entry.variantId,
+                }));
+                await client.productPrice.deleteMany({
+                    where: {
+                        productId,
+                        ...(keep.length > 0 ? { NOT: { OR: keep } } : {}),
+                    },
+                });
+            }
+
+            // Matched by hand rather than through `upsert`, because
+            // `@@unique([productId, variantId, marketId])` cannot be used as a
+            // lookup key here: `variantId` is nullable, and in Postgres NULLs
+            // never collide in a unique index. So the constraint does NOT
+            // actually prevent two *base* prices (variantId NULL) for the same
+            // market, and Prisma will not accept null in the compound key
+            // either. Reading the current rows and keying on
+            // `marketId::variantId` handles both cases and is the only place
+            // that uniqueness is genuinely enforced — which is why the service
+            // rejects duplicates in the payload before we get here.
+            const current = await client.productPrice.findMany({
+                where: { productId },
+                select: { id: true, marketId: true, variantId: true },
+            });
+            const existing = new Map(
+                current.map((row) => [`${row.marketId}::${row.variantId ?? ''}`, row.id]),
+            );
+
+            for (const entry of entries) {
+                const key = `${entry.marketId}::${entry.variantId ?? ''}`;
+                const id = existing.get(key);
+                const values = {
+                    amount: entry.amount,
+                    isFree: entry.isFree,
+                    costOfGoods: entry.costOfGoods,
+                    status: entry.status,
+                    updatedAt: now,
+                };
+
+                if (id) {
+                    await client.productPrice.update({ where: { id }, data: values });
+                } else {
+                    await client.productPrice.create({
+                        data: {
+                            id: randomUUID(),
+                            productId,
+                            variantId: entry.variantId,
+                            marketId: entry.marketId,
+                            createdAt: now,
+                            ...values,
+                        },
+                    });
+                }
+            }
+        };
+
+        // Read back through the same client — a caller-supplied `tx` has not
+        // committed, so `this.prisma` would see none of these rows.
+        if (tx) {
+            await run(tx);
+            return tx.productPrice.findMany({
+                where: { productId },
+                select: productPriceSelect,
+                orderBy: [{ variantId: 'asc' }, { market: { code: 'asc' } }],
+            });
+        }
+
+        await this.prisma.$transaction(run);
+        await Promise.all([this.cache.invalidateEntity(productId), this.cache.invalidateLists()]);
+        return this.listPrices(productId);
+    }
+
+    async updatePrice(
+        productId: string,
+        priceId: string,
+        data: Prisma.ProductPriceUpdateInput,
+    ): Promise<ProductPriceRow[]> {
+        await this.prisma.productPrice.update({
+            where: { id: priceId },
+            data: { ...data, updatedAt: new Date() },
+        });
+        await Promise.all([this.cache.invalidateEntity(productId), this.cache.invalidateLists()]);
+        return this.listPrices(productId);
+    }
+
+    async deletePrice(productId: string, priceId: string): Promise<ProductPriceRow[]> {
+        await this.prisma.productPrice.delete({ where: { id: priceId } });
+        await Promise.all([this.cache.invalidateEntity(productId), this.cache.invalidateLists()]);
+        return this.listPrices(productId);
+    }
+
+    countPrices(productId: string): Promise<number> {
+        return this.prisma.productPrice.count({ where: { productId } });
+    }
+
+    /** Which variant ids actually belong to this product. */
+    async variantIdsOf(productId: string): Promise<string[]> {
+        const rows = await this.prisma.productVariant.findMany({
+            where: { productId },
+            select: { id: true },
+        });
+        return rows.map((row) => row.id);
     }
 
     /** Soft-removes one placement. The `MediaAsset` itself is untouched. */

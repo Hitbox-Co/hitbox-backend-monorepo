@@ -1,7 +1,7 @@
 # Product Upload & Images API
 
-> Creating a drop, what the request body may actually look like, and managing
-> its image gallery.
+> Creating a drop, what the request body may actually look like, market
+> pricing, and the image gallery.
 >
 > Serialized units and NFC tags: [sku-api.md](sku-api.md).
 > Session handling and the Clerk flow: [authentication.md](authentication.md).
@@ -124,6 +124,11 @@ Content-Type: application/json
 
   "skus": { "count": 500 },
 
+  "prices": [
+    { "marketCode": "IN", "amount": "1999.00", "costOfGoods": "640.00" },
+    { "marketCode": "US", "amount": "24.99" }
+  ],
+
   "images": [
     { "assetId": "aaaa1111-…", "isPrimary": true, "altText": "Front" },
     { "assetId": "bbbb2222-…", "altText": "Back" }
@@ -146,11 +151,12 @@ Content-Type: application/json
 | `oddsDisclosureRef` | string ≤500 | no | required for randomised drops |
 | `groupCode` | 4 or 12 digits | no (`0000`) | the **group suffix** |
 | `skus.count` | int 1–1000 | no | mints the edition in the same transaction |
+| `prices[]` | 1–200 entries | **yes** | at least one market price — see §3 |
 | `images[]` | ≤24 entries | no | attaches uploaded assets as the gallery |
 
-Everything in `skus` and `images` is written in the **same transaction** as the
-product. The request either produces a complete drop — catalog row, units,
-gallery — or produces nothing.
+Everything in `prices`, `skus` and `images` is written in the **same
+transaction** as the product. The request either produces a complete drop —
+catalog row, pricing, units, gallery — or produces nothing.
 
 **Response `201`** carries the product, plus `skus` when units were minted.
 `images` on the product body is the array of URLs, as everywhere else.
@@ -169,13 +175,160 @@ gallery — or produces nothing.
 }
 ```
 
-**Asset ids are validated before the product is written.** A typo'd uuid fails
-the request without creating anything, so the whole payload does not have to be
-resubmitted to fix one id.
+**Asset ids and market references are validated before the product is
+written.** A typo'd uuid or an unknown market code fails the request without
+creating anything, so the whole payload does not have to be resubmitted to fix
+one id.
+
+Note the ordering inside the transaction: prices are written first, then units,
+then the gallery. Pricing is the required part, so a failure there aborts
+before 500 SKUs are minted.
 
 ---
 
-## 3. Images
+## 3. Market pricing
+
+### At least one price is compulsory
+
+`prices` is **required** on `POST /admin/products`, with a minimum of one
+entry. A drop with no price is not purchasable anywhere: the storefront reads
+`ProductPrice` for the buyer's market and finds nothing to show and nothing to
+charge. Every previous route to that state was a half-finished form, so the API
+no longer allows it.
+
+> ⚠️ **Breaking change.** A create that worked yesterday without `prices` now
+> returns `422` with `prices: At least one market price is required`. Any
+> existing client or script that creates drops needs a price block added.
+
+### One price row per market
+
+`ProductPrice` is scoped to `(product, variant, market)`. An admin prices the
+drop once per market they sell in:
+
+```json
+{
+  "prices": [
+    { "marketCode": "IN", "amount": "1999.00", "costOfGoods": "640.00" },
+    { "marketCode": "US", "amount": "24.99",   "costOfGoods": "8.10" },
+    { "marketCode": "GB", "amount": "19.99" }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `marketId` | uuid | **exactly one of** `marketId` or `marketCode` |
+| `marketCode` | string | `IN`, `US`, `GB` — matched case-insensitively |
+| `amount` | decimal string or number | required **unless** `isFree` |
+| `isFree` | boolean | default `false`. Cannot be combined with `amount` |
+| `costOfGoods` | decimal string or number | unit cost, so finance computes margin without re-deriving it |
+| `status` | `ACTIVE` \| `DISABLED` | default `ACTIVE`; `DISABLED` stages a price without making it live |
+| `variantId` | uuid | price one variant instead of the product as a whole |
+
+### There is no `currency` field, and that is deliberate
+
+The currency is the **market's** (`Market.currency`). Accepting one per price
+would let a drop be quoted in GBP inside a market that settles in INR, and no
+constraint in the schema would catch it. Send the amount; read the currency
+back off the response.
+
+```json
+{ "marketCode": "IN", "amount": "1999.00" }   →   currency: "INR"
+```
+
+### Money stays a string
+
+`amount` and `costOfGoods` accept a number or a string and are carried to the
+database **as strings**. A price that round-trips through a JavaScript float
+can arrive as `1999.9899999999998`, and `Decimal(12, 2)` would round it
+silently — on the column that decides what a buyer is charged. Send strings if
+you can; the column holds up to 10 digits and 2 decimal places.
+
+### `GET /admin/products/:id/prices`
+
+Capability `drop:read`. Base prices first, then variant prices, each by market
+code.
+
+```json
+{
+  "data": [
+    {
+      "priceId": "p1p1p1p1-…",
+      "marketId": "5a9e…",
+      "marketCode": "IN",
+      "marketName": "India",
+      "currency": "INR",
+      "amount": "1999.00",
+      "isFree": false,
+      "costOfGoods": "640.00",
+      "status": "ACTIVE",
+      "variantId": null,
+      "createdAt": "2026-09-21T10:04:22.118Z",
+      "updatedAt": "2026-09-21T10:04:22.118Z"
+    }
+  ]
+}
+```
+
+`amount` is `"0"` for a free price, and `null` only for a row that carries
+neither — which the API will not create.
+
+### `PUT /admin/products/:id/prices` — replace the price list 🔒 platform-wide
+
+```json
+{
+  "prices": [
+    { "marketCode": "IN", "amount": "2199.00" },
+    { "marketCode": "US", "amount": "24.99" }
+  ]
+}
+```
+
+Replaces the list wholesale: markets present before and absent now are removed.
+This is the endpoint the pricing table saves to — a table is edited as a whole,
+and "these are the prices now" is the only statement that can express *dropping
+a market*.
+
+The minimum of one still applies, so this can never de-price a drop.
+
+### `PATCH /admin/products/:id/prices/:priceId` 🔒 platform-wide
+
+Edit one row: `amount`, `isFree`, `costOfGoods` (`null` clears it), `status`.
+The free/amount pair is re-checked against the **stored** row, so flipping
+`isFree: false` on a row with no amount is refused rather than producing a
+priced entry with nothing to charge.
+
+### `DELETE /admin/products/:id/prices/:priceId` 🔒 platform-wide
+
+Removes one market's price. **Refused when it is the last one** —
+`409 PRODUCTS_PRICE_REQUIRED`. To stop selling in every market without
+deleting the pricing, set the rows to `status: "DISABLED"` instead.
+
+Deletion here is a real delete, not an archive. Unlike a gallery placement, a
+price point carries no history worth keeping: an order snapshots `unitPrice`,
+`amount` and `currency` at purchase time, so nothing downstream ever reads back
+through this row.
+
+### One caveat worth knowing
+
+`@@unique([productId, variantId, marketId])` does **not** actually prevent two
+base prices for the same market. `variantId` is nullable, and in Postgres NULLs
+never collide in a unique index — so the constraint silently does not apply to
+the most common row shape. Duplicates are therefore rejected in the API layer,
+both in the payload and when matching existing rows. If you write to
+`ProductPrice` by any other route, that guarantee is not there for you.
+
+### Which market does a buyer get?
+
+The storefront resolves the buyer's country to a market through
+`MarketCountry`, and falls back to the **default** market when the country maps
+nowhere. A drop priced only in `IN` is therefore invisible to a US buyer's
+price lookup. Price the markets you intend to sell in; see
+[admin-write-apis.md §1](admin-write-apis.md) for market administration.
+
+---
+
+## 4. Images
 
 `ProductImage` joins a product to a `MediaAsset`. The **file** belongs to the
 media module; these endpoints only arrange **where it sits** on the drop —
@@ -285,7 +438,7 @@ cascaded, and guessing wrong on every reorder.
 
 ---
 
-## 4. Errors
+## 5. Errors
 
 | HTTP | `code` | Raised when |
 |---|---|---|
@@ -293,13 +446,28 @@ cascaded, and guessing wrong on every reorder.
 | `400` | `PRODUCTS_MINTING_UNAVAILABLE` | `skus` sent but no minting provider wired in |
 | `400` | `PRODUCTS_SUPPLY_EXCEEDED` | `skus.count` > `totalSupply` in the same payload |
 | `400` | `PRODUCTS_MEDIA_UNAVAILABLE` | `images` sent on a deploy with no bucket configured |
+| `400` | `PRODUCTS_MARKETS_UNAVAILABLE` | no market-lookup provider is wired in |
+| `400` | `PRODUCTS_PRICE_MARKET_INVALID` | market missing, archived, inactive, or a foreign `variantId` |
 | `400` | `PRODUCTS_IMAGE_ASSET_INVALID` | asset missing, archived, or not a `DROP_IMAGE` |
 | `403` | `AUTHZ_FORBIDDEN` | grant is organization-scoped, not `:global` |
 | `404` | `PRODUCTS_NOT_FOUND` | no such drop |
 | `404` | `PRODUCTS_IMAGE_NOT_FOUND` | no such placement on this drop |
 | `409` | `PRODUCTS_IMAGE_DUPLICATE` | asset already in this gallery |
+| `409` | `PRODUCTS_PRICE_REQUIRED` | deleting the drop's only price |
+| `404` | `PRODUCTS_PRICE_NOT_FOUND` | no such price point on this drop |
 | `409` | `PRODUCTS_CODE_TAKEN` | five consecutive `groupCode` collisions |
 | `422` | `VALIDATION_ERROR` | schema failure — see 1 |
+
+`PRODUCTS_PRICE_MARKET_INVALID` reports **every** bad market at once — a
+pricing table is filled in for several markets in one sitting, and one error
+per submission is a poor way to find three typos:
+
+```json
+{ "error": {
+    "code": "PRODUCTS_PRICE_MARKET_INVALID",
+    "message": "Cannot price: XX: no such market; GB: market is archived",
+    "details": null } }
+```
 
 `PRODUCTS_IMAGE_ASSET_INVALID` reports **every** bad asset at once, so a
 twelve-image gallery does not need twelve submissions to surface twelve
@@ -314,8 +482,14 @@ problems:
 
 ---
 
-## 5. Checklist
+## 6. Checklist
 
+- [ ] Send at least one entry in `prices` — a create without it is now a `422`
+- [ ] Do **not** send `currency` on a price; read it back off the response
+- [ ] Send money as strings (`"1999.00"`), not floats
+- [ ] Save the pricing table with `PUT .../prices`, not N× `PATCH`
+- [ ] Offer `status: "DISABLED"` rather than delete when stopping sales in a market
+- [ ] Load `GET /admin/markets` to populate the market picker
 - [ ] Send `Content-Type: application/json` — its absence is the `BODY_REQUIRED` case
 - [ ] Upload assets with `assetType: "DROP_IMAGE"`; nothing else attaches
 - [ ] Call `PUT .../images` after a drag-and-drop reorder, not N× `PATCH`
