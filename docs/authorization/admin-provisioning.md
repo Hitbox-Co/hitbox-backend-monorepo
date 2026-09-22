@@ -296,6 +296,19 @@ Base path `/api/v1/admin/authz`. All routes require authentication.
 }
 ```
 
+Inviting an **artist** takes two more optional fields, used only when the role
+makes them one (see §6a):
+
+```json
+{
+  "email": "kaze@studio.io",
+  "roleId": "<the ARTIST role id>",
+  "organizationId": "f3bb6065-…",
+  "artistName": "Kaze",
+  "artistGenre": "street"
+}
+```
+
 `scopeType` and `organizationId` are both optional. Omitted, the role's natural
 scope is used — `brand_artist` roles are organization-scoped, `end_user` roles
 are own-scoped, everything else is global — so the dashboard does not have to
@@ -335,6 +348,11 @@ org-scoped role without an `organizationId` is a 400.
 | `AUTHZ_ASSIGNMENT_EXISTS` | 409 | An open invitation for this exact grant already exists |
 | `AUTHZ_FORBIDDEN` | 400 | The provider refused to send it; `details.invitationId` points at the `FAILED` row |
 
+### Inviting an artist also creates their `Artist` record
+
+See §6a below — the profile exists as soon as the invitation is sent, so the
+artist can be picked on the drop form before they have signed up.
+
 ### `GET /invitations` — list them
 
 **Capability:** `employee-role-mgmt:read`.
@@ -364,6 +382,98 @@ the safe failure.
 
 An already-`ACCEPTED` invitation is a 409: revoke the role assignment instead
 (`DELETE /admin/authz/users/:userId/roles/:roleId`).
+
+---
+
+## 6a. Inviting an artist creates their profile
+
+Inviting somebody as an artist writes an `Artist` row immediately. The drop
+form's artist picker (`GET /admin/artists`) lists them straight away, and a
+drop can be filed against them **before they have an account**.
+
+### The two events
+
+```
+POST /admin/authz/invitations
+        │
+        ├─ access-control.staff.invited ──────────► Artist row created
+        │                                           (userId null, isPublic false)
+        │
+   … the person signs up, days later …
+        │
+        └─ access-control.staff.invitation-accepted ► Artist.userId filled in
+```
+
+Both are published on the path where the address **already had an account**
+too, one after the other — so "invited" means one event regardless of which
+branch ran, and the row is created already linked.
+
+### What the profile looks like
+
+| Field | Value at invite time | Why |
+| --- | --- | --- |
+| `name` | `artistName`, else derived from the email | `jane.doe@label.com` → "Jane Doe" |
+| `slug` | slugified name, deduped | unique index; collisions get a short random suffix |
+| `genre` | `artistGenre`, else null | |
+| `organizationId` | the invitation's scope | an org-scoped artist belongs to that brand |
+| `userId` | **null** until they accept | they have no account yet |
+| `invitationId` | the invitation | the only thing connecting profile to person |
+| `isActive` | `true` | a drop can be filed against them immediately |
+| `isPublic` | **`false`** | no bio, no avatar, an unverified name — not storefront-ready |
+
+**Supply `artistName` whenever you know it.** The email fallback is a guess,
+and the guess ends up printed on a product page. An operator who sees "Jane
+Doe" in the picker knows to correct it; `jane.doe@label.com` reads like a bug.
+
+### Which roles count as artists — and why it is not the role name
+
+The rule reads **capabilities**, never `roleName === 'ARTIST'`:
+
+> A role makes someone an artist when it carries `brand-artist-record` at
+> **`own`** scope — "you may read and update *your own* artist record", which
+> is only true of somebody who has one.
+
+A Brand Admin holds the same resource at `:organization`: they administer other
+people's artist records without being an artist. That distinction is the whole
+rule. In the seeded catalog it matches `ARTIST` and nothing else, and a future
+`GUEST_ARTIST` defined through the Roles screen gets a profile with no code
+change — where a role-name check would silently stop working and the artist
+would simply never appear in the picker.
+
+Asserted against the seeded catalog in
+`packages/artist/tests/artist-provisioning.test.ts`.
+
+### Idempotency
+
+`Artist.invitationId` is unique, so a redelivered event creates nothing. This
+matters today, not just in theory: the in-process bus has no delivery
+guarantees, and `ROLE_ASSIGNED` is currently published twice on the
+already-has-an-account path.
+
+Re-inviting an address that already has a profile **adopts the existing one**
+rather than creating a second. One person is one artist; a duplicate would
+split their drops across two records.
+
+### Failure behaviour
+
+A provisioning failure is logged and swallowed — it never fails the invitation.
+An invitation that was genuinely sent must not report an error because the
+artist table was unhappy. If the profile is missing when the person later
+accepts, it is created then, from the acceptance event.
+
+Nothing is provisioned when the identity provider **refuses** to send the
+invitation: that path writes a `FAILED` row and publishes no event.
+
+### Not built
+
+- **No backfill.** Artists invited before this shipped have no profile. They
+  get one if they accept (the acceptance handler creates it late); an artist
+  who accepted *already* needs one created by hand.
+- **Revoking an invitation does not remove the profile.** It stays, unclaimed
+  and inert, for an operator to archive. Deleting it would be wrong once a drop
+  references it.
+- **No admin "create artist" screen.** Invitation is currently the only route
+  that writes an `Artist` row.
 
 ---
 

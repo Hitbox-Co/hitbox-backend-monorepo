@@ -465,6 +465,25 @@ and price sorting (not expressible against a market-scoped price table without
 a denormalized column or raw SQL). `popular` now orders by minted SKU count, a
 proxy for edition size rather than sales.
 
+### Invited artists — a worked example of event coupling
+
+`POST /admin/authz/invitations` creating an `Artist` row is the clearest
+example in the codebase of the **event** mechanism doing what ports cannot:
+
+- access-control publishes `access-control.staff.invited` and
+  `…staff.invitation-accepted`. It does not know what an artist is.
+- artist subscribes in its own factory and writes the row.
+- A provisioning failure is logged and swallowed, so an invitation that was
+  genuinely sent never reports an error because another module's table was
+  unhappy. A port would have made that a hard dependency in the wrong
+  direction.
+
+The event carries the role's **permission keys**, so the subscriber decides
+from capabilities (`brand-artist-record:*:own`) rather than from the role name
+— the same rule the rest of the platform follows for authorization, applied to
+a business decision. See
+[authorization/admin-provisioning.md 6a](authorization/admin-provisioning.md).
+
 ### The `skus` module and its port
 
 `@hitbox/skus` owns `Sku` and is now a full module rather than a schema

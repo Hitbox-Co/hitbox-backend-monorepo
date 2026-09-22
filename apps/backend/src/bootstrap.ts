@@ -254,7 +254,11 @@ export function bootstrap(): Bootstrapped {
 
     // Artist provides ArtistCollection capacity; collections consumes it for
     // the buyer collection-progress stat.
-    const artistModule = createArtistModule({ prisma, guard: accessControlModule.guard });
+    const artistModule = createArtistModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+    });
 
     // The organization directory — read-only, and the other half of the drop
     // form's owner pickers.

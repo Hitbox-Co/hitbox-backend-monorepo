@@ -8,7 +8,24 @@ import type {
     StaffInvitationStatus,
 } from '@hitbox/database';
 
-export type InvitationWithRole = StaffInvitation & { role: Role };
+/**
+ * The role is loaded with its permission keys, not just its name.
+ *
+ * Subscribers to the invitation events decide whether they care from the
+ * **capabilities** the role confers rather than from its name — the artist
+ * module provisions a profile for any role carrying
+ * `brand-artist-record:*:own`, not for a role literally called ARTIST. That
+ * only works if the keys travel with the event, and they can only travel if
+ * they are selected here.
+ */
+export type InvitationWithRole = StaffInvitation & {
+    role: Role & { rolePermissions: { permission: { key: string } }[] };
+};
+
+/** Loaded everywhere an invitation is read, so every read is event-ready. */
+const roleInclude = {
+    role: { include: { rolePermissions: { include: { permission: true } } } },
+} as const;
 
 /** States an invitation can still be claimed from. */
 export const CLAIMABLE_STATUSES: StaffInvitationStatus[] = ['PENDING', 'SENT'];
@@ -20,7 +37,7 @@ export class StaffInvitationRepository {
     findById(id: string): Promise<InvitationWithRole | null> {
         return this.prisma.staffInvitation.findUnique({
             where: { id },
-            include: { role: true },
+            include: roleInclude,
         });
     }
 
@@ -34,7 +51,7 @@ export class StaffInvitationRepository {
     findClaimable(email: string): Promise<InvitationWithRole[]> {
         return this.prisma.staffInvitation.findMany({
             where: { email: email.toLowerCase(), status: { in: CLAIMABLE_STATUSES } },
-            include: { role: true },
+            include: roleInclude,
             orderBy: { invitedAt: 'desc' },
         });
     }
@@ -52,7 +69,7 @@ export class StaffInvitationRepository {
                 scopeId: input.scopeId,
                 status: { in: CLAIMABLE_STATUSES },
             },
-            include: { role: true },
+            include: roleInclude,
         });
     }
 
@@ -82,7 +99,7 @@ export class StaffInvitationRepository {
             this.prisma.staffInvitation.count({ where }),
             this.prisma.staffInvitation.findMany({
                 where,
-                include: { role: true },
+                include: roleInclude,
                 orderBy: { invitedAt: 'desc' },
                 skip: query.skip,
                 take: query.take,
@@ -122,7 +139,7 @@ export class StaffInvitationRepository {
                 createdAt: now,
                 updatedAt: now,
             },
-            include: { role: true },
+            include: roleInclude,
         });
     }
 
@@ -130,7 +147,7 @@ export class StaffInvitationRepository {
         return this.prisma.staffInvitation.update({
             where: { id },
             data: { status: 'SENT', providerInvitationId, updatedAt: new Date() },
-            include: { role: true },
+            include: roleInclude,
         });
     }
 
@@ -144,7 +161,7 @@ export class StaffInvitationRepository {
                 providerError: providerError.slice(0, 500),
                 updatedAt: new Date(),
             },
-            include: { role: true },
+            include: roleInclude,
         });
     }
 
@@ -163,7 +180,7 @@ export class StaffInvitationRepository {
                 acceptedAt: now,
                 updatedAt: now,
             },
-            include: { role: true },
+            include: roleInclude,
         });
     }
 
@@ -182,7 +199,7 @@ export class StaffInvitationRepository {
                 revokedAt: now,
                 updatedAt: now,
             },
-            include: { role: true },
+            include: roleInclude,
         });
     }
 

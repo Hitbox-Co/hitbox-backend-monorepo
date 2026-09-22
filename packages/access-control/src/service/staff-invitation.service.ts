@@ -153,6 +153,28 @@ export class StaffInvitationService {
             expiresAt,
         });
 
+        /**
+         * Everything a subscriber needs to provision whatever this role
+         * implies. Published on both paths below, so "invited" means one event
+         * whether or not the address already had an account.
+         *
+         * `rolePermissions` is here so subscribers decide from capabilities
+         * rather than role names — see STAFF_INVITED in the constants.
+         */
+        const invitedEvent = {
+            invitationId: invitation.id,
+            email,
+            roleId: role.id,
+            roleName: role.name,
+            roleEntityGroup: role.entityGroup,
+            rolePermissions: role.rolePermissions.map((rp) => rp.permission.key),
+            scopeType,
+            organizationId: scopeId,
+            invitedById: input.invitedById,
+            artistName: input.dto.artistName ?? null,
+            artistGenre: input.dto.artistGenre ?? null,
+        };
+
         // ── Path 1: they already have an account ────────────────────────────
         const existing = await this.deps.users.findActiveByEmail(email);
         if (existing) {
@@ -175,6 +197,20 @@ export class StaffInvitationService {
                 { invitationId: invitation.id, userId: existing.id, role: role.name, email },
                 'staff invitation resolved against an existing account — role granted immediately',
             );
+            // Both events, in this order: a subscriber provisions on INVITED
+            // and links the account on ACCEPTED, and on this path the two
+            // happen in the same breath. Emitting only ACCEPTED would make the
+            // provisioning step conditional on which branch ran.
+            await this.deps.eventBus.publish(ACCESS_CONTROL_EVENTS.STAFF_INVITED, invitedEvent);
+            await this.deps.eventBus.publish(ACCESS_CONTROL_EVENTS.STAFF_INVITATION_ACCEPTED, {
+                ...invitedEvent,
+                userId: existing.id,
+                assignmentId: assignment.id,
+            });
+            // NOTE: `assignments.assign()` above already published
+            // ROLE_ASSIGNED. This second publish is pre-existing and makes the
+            // event fire twice for this path — harmless only because every
+            // subscriber is idempotent. Worth removing separately.
             await this.deps.eventBus.publish(ACCESS_CONTROL_EVENTS.ROLE_ASSIGNED, {
                 assignmentId: assignment.id,
                 userId: existing.id,
@@ -203,6 +239,11 @@ export class StaffInvitationService {
                 { invitationId: invitation.id, role: role.name, email, expiresAt },
                 'staff invitation sent',
             );
+            // Published only once the provider accepted the invitation: a
+            // subscriber should not provision a profile for an email that was
+            // never delivered. The FAILED path below deliberately publishes
+            // nothing.
+            await this.deps.eventBus.publish(ACCESS_CONTROL_EVENTS.STAFF_INVITED, invitedEvent);
             return { outcome: 'INVITATION_SENT', invitation: present(updated), assignmentId: null };
         } catch (error) {
             // The row stays, marked FAILED with the reason: an invitation that
@@ -265,6 +306,26 @@ export class StaffInvitationService {
                     acceptedUserId: input.userId,
                     assignmentId: assignment.id,
                 });
+
+                // The user id is finally known. Anything provisioned at invite
+                // time — an artist profile, say — links to the account here.
+                await this.deps.eventBus.publish(
+                    ACCESS_CONTROL_EVENTS.STAFF_INVITATION_ACCEPTED,
+                    {
+                        invitationId: invitation.id,
+                        email: input.email,
+                        userId: input.userId,
+                        roleId: invitation.roleId,
+                        roleName: invitation.role.name,
+                        rolePermissions: invitation.role.rolePermissions.map(
+                            (rp) => rp.permission.key,
+                        ),
+                        scopeType: invitation.scopeType,
+                        organizationId: invitation.scopeId,
+                        invitedById: invitation.invitedById,
+                        assignmentId: assignment.id,
+                    },
+                );
                 claimed += 1;
                 this.deps.logger.info(
                     {

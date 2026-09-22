@@ -137,6 +137,17 @@ export const inviteStaffSchema = z
         roleId: z.string().uuid(),
         scopeType: z.nativeEnum(RoleScopeType).optional(),
         organizationId: z.string().uuid().nullish(),
+        /**
+         * The artist's public name, used when the invited role makes them one.
+         *
+         * Optional, and ignored for every other role. Without it the profile
+         * falls back to the email's local part — `jane.doe@label.com` becomes
+         * "Jane Doe" — which is a guess, and a guess that ends up printed on a
+         * product page. Supply it whenever the inviter knows it.
+         */
+        artistName: z.string().trim().min(1).max(120).optional(),
+        /** Free-form genre for the artist profile. Ignored for other roles. */
+        artistGenre: z.string().trim().min(1).max(64).optional(),
     })
     .superRefine((dto, ctx) => {
         if (dto.scopeType === RoleScopeType.ORGANIZATION && !dto.organizationId) {

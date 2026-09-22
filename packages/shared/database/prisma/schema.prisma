@@ -402,6 +402,19 @@ model Artist {
   /// Unique — one User can back at most one Artist profile.
   userId               String?       @unique @db.Uuid
   user                 User?         @relation(fields: [userId], references: [id])
+  /// The staff invitation this profile was created from, if any.
+  ///
+  /// An artist is invited before they have an account, so the profile is
+  /// created with `userId` null and this id is the only thing connecting it to
+  /// the person who was invited. When they accept, `userId` is filled in by
+  /// matching on this. Unique, so replaying the invitation event cannot
+  /// produce a second profile.
+  ///
+  /// Deliberately NOT a foreign key: StaffInvitation belongs to the
+  /// access-control module, and a profile must survive that row being swept
+  /// once the invitation has expired. Same reasoning as
+  /// `Sku.provisioningBatchId`.
+  invitationId         String?       @unique @db.Uuid
   complianceAttestedAt DateTime?
   /// User id of the staff member who attested compliance. Intentionally NOT a
   /// foreign key — an attestation must survive that account being removed.

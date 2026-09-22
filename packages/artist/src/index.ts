@@ -20,3 +20,12 @@ export {
 export { listArtistsQuerySchema } from './profile/dto/artist.dto';
 export type { ArtistResponse, ListArtistsQuery } from './profile/dto/artist.dto';
 export type { ArtistService } from './profile/service/artist.service';
+
+// Invited artists get a profile. Exported for tests and backfills; the running
+// app drives this through the event subscriptions the module factory sets up.
+export { ArtistProvisioningService } from './profile/service/artist-provisioning.service';
+export type {
+    StaffInvitationAcceptedEvent,
+    StaffInvitedEvent,
+} from './profile/service/artist-provisioning.service';
+export { nameFromEmail, roleImpliesArtistProfile, slugify } from './profile/domain/artist-role';

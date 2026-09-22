@@ -399,6 +399,17 @@ Render the type next to the name.
 
 `GET /api/v1/admin/artists/:artistId` returns one.
 
+**Where artist rows come from.** Inviting somebody as an artist through
+`POST /admin/authz/invitations` creates their `Artist` row immediately — before
+they have signed up — so they appear in this picker straight away and a drop
+can be filed against them. Pass `artistName` on the invitation; without it the
+name is derived from the email address and ends up on the product page. Full
+behaviour: [admin-provisioning.md 6a](../authorization/admin-provisioning.md).
+
+Invited artists arrive with `isPublic: false` (no bio or avatar yet) and, until
+they accept, no linked account. Both are fine for picking them on a drop form;
+filter with `?isPublic=true` only where the storefront is concerned.
+
 **Chain the two pickers.** After a brand is chosen, load
 `/admin/artists?organizationId=<chosen>` so the artist list only offers that
 brand's roster. `organizationName` is returned on every artist row so an

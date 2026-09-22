@@ -26,6 +26,26 @@ export const ACCESS_CONTROL_EVENTS = {
     ROLE_DELETED: 'access-control.role.deleted',
     ROLE_ASSIGNED: 'access-control.role.assigned',
     ROLE_REVOKED: 'access-control.role.revoked',
+    /**
+     * Someone was invited to hold a role. Published on **both** invite paths —
+     * whether the address already had an account or an email went out — so a
+     * subscriber sees one event per invitation regardless of which branch ran.
+     *
+     * Carries the role's full permission list so subscribers can decide
+     * whether they care **from the capabilities**, never from the role name.
+     * That is what lets the artist module react to "this role makes someone an
+     * artist" without hard-coding `ARTIST`, and keep working when an operator
+     * defines a second artist-shaped role through the Roles screen.
+     */
+    STAFF_INVITED: 'access-control.staff.invited',
+    /**
+     * An invitation was claimed: the invited person now has an account.
+     *
+     * Separate from ROLE_ASSIGNED because subscribers that provisioned
+     * something at invite time need the moment the **user id** becomes known,
+     * and ROLE_ASSIGNED fires for every grant, invited or not.
+     */
+    STAFF_INVITATION_ACCEPTED: 'access-control.staff.invitation-accepted',
 } as const;
 
 export type AccessControlEventName =
