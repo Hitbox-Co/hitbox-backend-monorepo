@@ -28,6 +28,7 @@
     "@hitbox/markets": "workspace:*",
     "@hitbox/media": "workspace:*",
     "@hitbox/orders": "workspace:*",
+    "@hitbox/organizations": "workspace:*",
     "@hitbox/payments": "workspace:*",
     "@hitbox/products": "workspace:*",
     "@hitbox/releases": "workspace:*",

@@ -41,6 +41,13 @@ export interface ApiRouters {
     /** Serialized units across drops: cross-drop list and single-unit detail. */
     adminSkus: Router;
     /**
+     * Owner directories for the drop form's brand and artist pickers, and for
+     * labelling catalog rows. Read-only; both are gated on `drop:read` rather
+     * than `brand-artist-record:read` so a Drop Manager can fill the form.
+     */
+    adminOrganizations: Router;
+    adminArtists: Router;
+    /**
      * Buyer-facing money routes: POST /checkout and POST /refunds. Owned by
      * the payments module, because a purchase starts with a payment and the
      * dependency between payments and orders runs one way.
@@ -115,6 +122,8 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/products/:productId/skus', routers.adminProductSkus);
     api.use('/admin/products', routers.adminProducts);
     api.use('/admin/skus', routers.adminSkus);
+    api.use('/admin/organizations', routers.adminOrganizations);
+    api.use('/admin/artists', routers.adminArtists);
 
     return api;
 }

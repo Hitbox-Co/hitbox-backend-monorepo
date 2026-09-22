@@ -12,7 +12,7 @@
 > The administrative **write** surface (markets, orders, products, releases,
 > roles, team) is in [admin-write-apis.md](admin-write-apis.md).
 > Product upload, request-format rules (and `422` troubleshooting), market
-> pricing, and the image gallery:
+> pricing, the image gallery, and the brand/artist pickers:
 > [product-upload-api.md](product-upload-api.md).
 > Minting SKU units, NFC tag manifests, and per-role unit visibility:
 > [sku-api.md](sku-api.md).

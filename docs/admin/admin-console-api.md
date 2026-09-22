@@ -15,7 +15,7 @@
 > read/reporting surface.
 >
 > **Product upload** — creating a drop, the accepted request formats, market
-> pricing, and the image gallery — is in
+> pricing, the image gallery, and the brand/artist pickers — is in
 > [product-upload-api.md](product-upload-api.md).
 > **Serialized units and NFC tags** — minting, tag manifests, and the per-role
 > field visibility matrix — are in [sku-api.md](sku-api.md).
@@ -817,7 +817,7 @@ What exists today, and what it does not cover:
 | "Awaiting Launch 20 / Active on Market 12" stats | ✅ `products` section of 1 (`approved`, `active`) |
 | "Ready Queue" / "Live Drops" tabs | ✅ `GET /admin/dashboard/products?status=…` |
 | Compliance sign-off "100% Verified" | ✅ `GET /admin/releases?latestOnly=true` |
-| Step 1 — Drop identification & brand | ✅ `POST /api/v1/admin/products` |
+| Step 1 — Drop identification & brand | ✅ `POST /api/v1/admin/products`; brand and artist pickers from `GET /admin/organizations` and `GET /admin/artists` ([product-upload-api.md 4](product-upload-api.md)) |
 | Step 1b — edition size / serialized units | ✅ `POST /admin/products` with a `skus` block, or `POST /admin/products/:productId/skus` — [sku-api.md](sku-api.md) |
 | Step 2 — Artwork & media upload | ✅ `POST /admin/media/upload-url` then `POST /admin/products/:id/images` — multi-image gallery with ordering and a primary flag ([product-upload-api.md 3](product-upload-api.md)) |
 | Live marketplace preview — price | ✅ `prices[]` on create (at least one required) and `PUT /admin/products/:id/prices` — one row per market ([product-upload-api.md 3](product-upload-api.md)) |

@@ -1,9 +1,13 @@
 /**
- * Artist profile sub-module — RESERVED, intentionally empty.
+ * Artist profile sub-module.
  *
- * The public artist profile screen (bio, verified badge, followers, the
- * artist's collections grid) will be built here. Kept as its own folder so
- * the artist package already has the profile / collection split the product
- * roadmap calls for.
+ * Today: the **directory** — the read-only list and lookup that fill the drop
+ * form's artist picker and label catalog rows.
+ *
+ * Still to build: the public artist profile screen (bio, verified badge,
+ * followers, the artist's collections grid) and the staff-facing profile
+ * editor, which carry the fields this directory deliberately omits.
  */
-export { };
+export { ArtistRepository } from './repository/artist.repository';
+export { ArtistService } from './service/artist.service';
+export { ArtistController } from './controller/artist.controller';

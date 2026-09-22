@@ -110,6 +110,28 @@ export interface ProductResponse {
     variants: { id: string; label: string; optionName: string; optionValue: string }[];
 }
 
+/**
+ * A timestamp as the API returns it, from whatever the row actually holds.
+ *
+ * Belt to the cache codec's braces. The codec is the fix — it keeps Dates as
+ * Dates across Redis — but two realities keep this here:
+ *
+ *  1. **Stale entries survive a deploy.** Rows cached by the previous build
+ *     hold untagged ISO strings and stay readable for their full TTL. Without
+ *     this, the endpoint keeps throwing for minutes after the fix ships.
+ *  2. A cast at any future serialization boundary can reintroduce the same
+ *     mismatch, and the failure mode — a 500 only on a warm cache — is
+ *     expensive to diagnose relative to four lines here.
+ */
+function toIso(value: Date | string | null | undefined): string | null {
+    if (value == null) return null;
+    if (value instanceof Date) return value.toISOString();
+    // Already an ISO string from a JSON round trip; re-parse so an invalid
+    // value surfaces as null rather than as plausible-looking garbage.
+    const parsed = new Date(value);
+    return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
 function generateUniqueSegment(): string {
     let digits = '';
     for (let i = 0; i < PRODUCT_CODE_UNIQUE_LENGTH; i += 1) {
@@ -761,7 +783,7 @@ export class ProductService {
         const price = row.productPrices[0];
         if (!price) return null;
         return {
-            amount: price.isFree ? '0' : (price.amount?.toString() ?? null),
+            amount: price.isFree ? '0.00' : (price.amount?.toFixed(2) ?? null),
             currency: price.market.currency,
         };
     }
@@ -788,16 +810,16 @@ export class ProductService {
             complianceStatus: product.complianceStatus,
             totalSupply: product.totalSupply,
             purchaseLimit: product.purchaseLimit,
-            releaseStart: product.releaseStart?.toISOString() ?? null,
-            releaseEnd: product.releaseEnd?.toISOString() ?? null,
-            publishedAt: product.publishedAt?.toISOString() ?? null,
+            releaseStart: toIso(product.releaseStart),
+            releaseEnd: toIso(product.releaseEnd),
+            publishedAt: toIso(product.publishedAt),
             isAgeSpecific: product.isAgeSpecific,
             minimumAge: product.minimumAge,
             oddsDisclosureRef: product.oddsDisclosureRef,
             isActive: product.isActive,
-            archivedAt: product.archivedAt?.toISOString() ?? null,
-            createdAt: product.createdAt.toISOString(),
-            updatedAt: product.updatedAt.toISOString(),
+            archivedAt: toIso(product.archivedAt),
+            createdAt: toIso(product.createdAt) ?? '',
+            updatedAt: toIso(product.updatedAt) ?? '',
             collectionId: product.collectionId,
             artistId: product.artistId,
             artistName: product.artist?.name ?? product.collection?.artist.name ?? null,
@@ -807,7 +829,7 @@ export class ProductService {
                 .filter((url): url is string => url !== null),
             price: price
                 ? {
-                    amount: price.isFree ? '0' : (price.amount?.toString() ?? null),
+                    amount: price.isFree ? '0.00' : (price.amount?.toFixed(2) ?? null),
                     currency: price.market.currency,
                     isFree: price.isFree,
                 }
@@ -877,9 +899,13 @@ function toPriceResponse(row: ProductPriceRow): ProductPriceResponse {
         marketCode: row.market.code,
         marketName: row.market.name,
         currency: row.market.currency,
-        amount: row.isFree ? '0' : (row.amount?.toString() ?? null),
+        // `toFixed(2)`, not `toString()`: Decimal normalises away trailing
+        // zeros, so a 1999.00 price would come back as "1999". Every other
+        // money field on the platform is 2dp (see dashboard/domain/money.ts)
+        // and a pricing table that renders "1999" next to "24.99" looks broken.
+        amount: row.isFree ? '0.00' : (row.amount?.toFixed(2) ?? null),
         isFree: row.isFree,
-        costOfGoods: row.costOfGoods?.toString() ?? null,
+        costOfGoods: row.costOfGoods?.toFixed(2) ?? null,
         status: row.status,
         variantId: row.variantId,
         createdAt: row.createdAt.toISOString(),

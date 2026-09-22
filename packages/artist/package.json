@@ -18,9 +18,14 @@
   "dependencies": {
     "@hitbox/collections": "workspace:*",
     "@hitbox/database": "workspace:*",
-    "@hitbox/shared": "workspace:*"
+    "@hitbox/shared": "workspace:*",
+    "zod": "^3.24.1"
   },
   "devDependencies": {
+    "@types/express": "^4.17.25",
     "typescript": "^5.6.3"
+  },
+  "peerDependencies": {
+    "express": "^4.19.0 || ^5.0.0"
   }
 }

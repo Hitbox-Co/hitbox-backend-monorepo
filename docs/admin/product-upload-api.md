@@ -1,7 +1,7 @@
 # Product Upload & Images API
 
 > Creating a drop, what the request body may actually look like, market
-> pricing, and the image gallery.
+> pricing, the image gallery, and the brand/artist pickers the form needs.
 >
 > Serialized units and NFC tags: [sku-api.md](sku-api.md).
 > Session handling and the Clerk flow: [authentication.md](authentication.md).
@@ -328,7 +328,117 @@ price lookup. Price the markets you intend to sell in; see
 
 ---
 
-## 4. Images
+## 4. Brand & artist pickers
+
+`POST /admin/products` takes `organizationId` and `artistId` as **uuids**, so
+the form needs somewhere to get them. These two directories are that source —
+they replace any hard-coded option list in the frontend, which goes stale the
+moment a brand is renamed, added or retired.
+
+Both are read-only, alphabetical by name, and paginated at 100 by default.
+
+### `GET /api/v1/admin/organizations`
+
+| Param | Type | Notes |
+|---|---|---|
+| `search` | string | matches name or slug, case-insensitively |
+| `type` | `HITBOX` \| `BRAND` \| `ARTIST_INDIVIDUAL` | case-insensitive |
+| `isActive` | boolean | |
+| `includeArchived` | boolean | default `false` |
+| `page` / `limit` | int | `1` / `100` (max 200) |
+
+```json
+{
+  "data": [
+    { "id": "1cabd03c-2b3b-4c9c-8269-28f617b2bc46", "name": "HitBox",
+      "type": "HITBOX", "slug": "hitbox", "isActive": true, "archivedAt": null,
+      "counts": { "artists": 0, "products": 4 } },
+    { "id": "f3bb6065-76c0-4fc9-8d57-a3fcd93d9bfa", "name": "Kaze (solo)",
+      "type": "ARTIST_INDIVIDUAL", "slug": "kaze-solo", "isActive": true,
+      "archivedAt": null, "counts": { "artists": 1, "products": 6 } },
+    { "id": "90ff1548-ae54-4d9c-9e01-ac552d41e4c7", "name": "Lumen Studios",
+      "type": "BRAND", "slug": "lumen-studios", "isActive": true,
+      "archivedAt": null, "counts": { "artists": 3, "products": 22 } }
+  ],
+  "meta": { "page": 1, "limit": 100, "total": 4, "totalPages": 1 }
+}
+```
+
+`type` is part of the row, not a detail: "Kaze" as an `ARTIST_INDIVIDUAL`
+organization and "Kaze" as an `Artist` record are different rows with
+different ids, and picking the wrong one files the drop under the wrong owner.
+Render the type next to the name.
+
+`GET /api/v1/admin/organizations/:organizationId` returns one, as
+`{ "data": OrganizationResponse }`.
+
+### `GET /api/v1/admin/artists`
+
+| Param | Type | Notes |
+|---|---|---|
+| `search` | string | matches name or slug |
+| `organizationId` | uuid | **narrow to one brand's roster** |
+| `isActive` | boolean | |
+| `isPublic` | boolean | profile visibility — unrelated to `isActive` |
+| `includeArchived` | boolean | default `false` |
+| `page` / `limit` | int | `1` / `100` (max 200) |
+
+```json
+{
+  "data": [
+    { "id": "23ef4303-f877-4dc5-a375-ab4fe568b361", "name": "Kaze",
+      "slug": "kaze", "genre": "street", "avatarUrl": null,
+      "isPublic": true, "isActive": true, "archivedAt": null,
+      "organizationId": "f3bb6065-76c0-4fc9-8d57-a3fcd93d9bfa",
+      "organizationName": "Kaze (solo)",
+      "counts": { "products": 6, "collections": 2 } }
+  ],
+  "meta": { "page": 1, "limit": 100, "total": 3, "totalPages": 1 }
+}
+```
+
+`GET /api/v1/admin/artists/:artistId` returns one.
+
+**Chain the two pickers.** After a brand is chosen, load
+`/admin/artists?organizationId=<chosen>` so the artist list only offers that
+brand's roster. `organizationName` is returned on every artist row so an
+unfiltered list is still unambiguous.
+
+### Both are gated on `drop:read`, not `brand-artist-record:read`
+
+That is deliberate, and worth knowing before you wire the permission checks.
+`HITBOX_DROP_MANAGER` — the role whose entire job is creating drops across
+every brand — holds **no** `brand-artist-record` grant. Gating the pickers on
+that resource would lock the role out of a form it cannot complete without
+them.
+
+What makes it safe is the payload. These are *directories*: id, name, type,
+slug, genre, avatar and counts. Brand and artist names are already printed on
+the storefront beside every product. The sensitive half of an artist record —
+bio, the linked user account, the compliance attestation and who signed it,
+payout terms — is **not selected by these queries at all**, and stays behind
+`brand-artist-record:read` on the artist profile screen, which is not built.
+
+### Replacing the hard-coded lists
+
+If your frontend currently ships something like:
+
+```ts
+export const ORGANIZATION_OPTIONS = [
+  { id: "90ff1548-…", name: "Lumen Studios", type: "BRAND" },
+  // …
+];
+```
+
+…swap it for a fetch of `/admin/organizations` and `/admin/artists` at form
+mount. The ids in a checked-in constant are environment-specific: they are seed
+uuids and will not exist in staging or production, so a form built on them
+fails validation with `400 PRODUCTS_…` or a foreign-key error the first time it
+meets a real database.
+
+---
+
+## 5. Images
 
 `ProductImage` joins a product to a `MediaAsset`. The **file** belongs to the
 media module; these endpoints only arrange **where it sits** on the drop —
@@ -438,7 +548,7 @@ cascaded, and guessing wrong on every reorder.
 
 ---
 
-## 5. Errors
+## 6. Errors
 
 | HTTP | `code` | Raised when |
 |---|---|---|
@@ -455,6 +565,8 @@ cascaded, and guessing wrong on every reorder.
 | `409` | `PRODUCTS_IMAGE_DUPLICATE` | asset already in this gallery |
 | `409` | `PRODUCTS_PRICE_REQUIRED` | deleting the drop's only price |
 | `404` | `PRODUCTS_PRICE_NOT_FOUND` | no such price point on this drop |
+| `404` | `ORGANIZATIONS_NOT_FOUND` | no such organization |
+| `404` | `ARTIST_NOT_FOUND` | no such artist |
 | `409` | `PRODUCTS_CODE_TAKEN` | five consecutive `groupCode` collisions |
 | `422` | `VALIDATION_ERROR` | schema failure — see 1 |
 
@@ -482,7 +594,7 @@ problems:
 
 ---
 
-## 6. Checklist
+## 7. Checklist
 
 - [ ] Send at least one entry in `prices` — a create without it is now a `422`
 - [ ] Do **not** send `currency` on a price; read it back off the response
@@ -490,6 +602,9 @@ problems:
 - [ ] Save the pricing table with `PUT .../prices`, not N× `PATCH`
 - [ ] Offer `status: "DISABLED"` rather than delete when stopping sales in a market
 - [ ] Load `GET /admin/markets` to populate the market picker
+- [ ] Load `GET /admin/organizations` and `GET /admin/artists` for the owner pickers — never a hard-coded list
+- [ ] Filter the artist picker by `organizationId` once a brand is chosen
+- [ ] Show `type` beside each organization; the name alone is ambiguous
 - [ ] Send `Content-Type: application/json` — its absence is the `BODY_REQUIRED` case
 - [ ] Upload assets with `assetType: "DROP_IMAGE"`; nothing else attaches
 - [ ] Call `PUT .../images` after a drag-and-drop reorder, not N× `PATCH`

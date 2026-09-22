@@ -17,6 +17,7 @@ import { createCollectionsModule } from '@hitbox/collections';
 import { createArtistModule } from '@hitbox/artist';
 import { createClaimsModule } from '@hitbox/claims';
 import { createMarketsModule } from '@hitbox/markets';
+import { createOrganizationsModule } from '@hitbox/organizations';
 import { createOrdersModule } from '@hitbox/orders';
 import { createReleasesModule } from '@hitbox/releases';
 import { createSkusModule } from '@hitbox/skus';
@@ -253,7 +254,14 @@ export function bootstrap(): Bootstrapped {
 
     // Artist provides ArtistCollection capacity; collections consumes it for
     // the buyer collection-progress stat.
-    const artistModule = createArtistModule({ prisma });
+    const artistModule = createArtistModule({ prisma, guard: accessControlModule.guard });
+
+    // The organization directory — read-only, and the other half of the drop
+    // form's owner pickers.
+    const organizationsModule = createOrganizationsModule({
+        prisma,
+        guard: accessControlModule.guard,
+    });
 
     const collectionsModule = createCollectionsModule({
         prisma,
@@ -421,6 +429,8 @@ export function bootstrap(): Bootstrapped {
         adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
         adminProductSkus: skusModule.createProductRouter(authModule.requireAuth),
         adminSkus: skusModule.createRouter(authModule.requireAuth),
+        adminOrganizations: organizationsModule.createRouter(authModule.requireAuth),
+        adminArtists: artistModule.createAdminRouter(authModule.requireAuth),
         payments: paymentsModule.createBuyerRouter(authModule.requireAuth),
         adminPayments: paymentsModule.createAdminRouter(authModule.requireAuth),
         adminFinance: financeModule.createRouter(authModule.requireAuth),

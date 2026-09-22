@@ -67,6 +67,8 @@ role check here.
 | Product gallery attach / replace / remove | `drop:manage` | **yes** |
 | Product price read | `drop:read` | no |
 | Product price set / update / delete | `drop:manage` | **yes** |
+| Organization directory | `drop:read` | no — it fills the drop form's brand picker |
+| Artist directory | `drop:read` | no — same reason |
 | Release read | `release-approval:read` | no |
 | Release submit / amend / decide | `release-approval:manage` | no |
 | Release **reverse a decision** | `release-approval:override:global` | implicit |
@@ -814,6 +816,8 @@ instantly.
 | `PRODUCTS_PRICE_MARKET_INVALID` | 400 | products |
 | `PRODUCTS_PRICE_REQUIRED` | 409 | products |
 | `PRODUCTS_PRICE_NOT_FOUND` | 404 | products |
+| `ORGANIZATIONS_NOT_FOUND` | 404 | organizations |
+| `ARTIST_NOT_FOUND` | 404 | artist |
 | `BODY_REQUIRED` | 400 | shared — no JSON body was parsed |
 | `PRODUCTS_MINTING_UNAVAILABLE` | 400 | products |
 | `PRODUCTS_SUPPLY_EXCEEDED` | 400 | products |
@@ -847,6 +851,7 @@ instantly.
 - [ ] Add a `prices` block to every existing create call — it is now required
 - [ ] Never send `currency` on a price; it comes from the market
 - [ ] Send money as decimal strings, never floats
+- [ ] Fetch the brand and artist pickers from `/admin/organizations` and `/admin/artists` — hard-coded uuids are seed-only and break outside dev
 - [ ] Show `isSystem: true` roles as read-only
 - [ ] Default the Team list to `internalOnly=true`
 - [ ] Refetch the team after assigning a role; grants are cached briefly

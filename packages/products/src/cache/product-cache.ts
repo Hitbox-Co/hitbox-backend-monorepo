@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { Prisma } from '@hitbox/database';
 import { createModuleLogger, getRedis } from '@hitbox/shared';
 import {
     PRODUCT_CACHE_ENTITY_TTL_SECONDS,
@@ -16,6 +17,57 @@ const LIST_VERSION_KEY = `${PRODUCT_CACHE_KEY_PREFIX}:list:version`;
 /** Deterministic, order-stable digest for an arbitrary query/params object. */
 function hashInput(input: unknown): string {
     return createHash('sha1').update(JSON.stringify(input)).digest('hex');
+}
+
+/**
+ * JSON round-tripping loses every non-primitive type Prisma returns.
+ *
+ * `JSON.stringify(new Date())` produces a plain ISO **string**, and
+ * `Prisma.Decimal` serializes to a numeric **string** — so a row read from
+ * Redis is not the same shape as the row read from Postgres, even though both
+ * are typed `ProductWithRelations`. The symptom is a 500 far from the cause:
+ *
+ *     TypeError: product.releaseStart?.toISOString is not a function
+ *
+ * …on any request that happened to hit a warm cache, and never on a cold one.
+ * Types cannot catch it because the cast at the `JSON.parse` boundary asserts
+ * a shape nobody verified.
+ *
+ * So values are tagged on the way in and rebuilt on the way out. Tagging
+ * beats sniffing ISO-shaped strings on read: a legitimate string field that
+ * merely *looks* like a timestamp would otherwise be silently converted to a
+ * Date, which is the same class of bug pointing the other way.
+ */
+const DATE_TAG = '$date';
+const DECIMAL_TAG = '$decimal';
+
+export function serialise(value: unknown): string {
+    // `toJSON` runs BEFORE a replacer, so by the time this is called a Date has
+    // already collapsed to a string. `this[key]` is the untouched original —
+    // which is the only way to see what the value really was.
+    return JSON.stringify(value, function replacer(this: Record<string, unknown>, key, parsed) {
+        const original = this[key];
+        if (original instanceof Date) {
+            return { [DATE_TAG]: original.toISOString() };
+        }
+        if (Prisma.Decimal.isDecimal(original)) {
+            return { [DECIMAL_TAG]: original.toString() };
+        }
+        return parsed;
+    });
+}
+
+export function deserialise<T>(raw: string): T {
+    return JSON.parse(raw, (_key, value) => {
+        if (value && typeof value === 'object' && !Array.isArray(value)) {
+            const tagged = value as Record<string, unknown>;
+            if (typeof tagged[DATE_TAG] === 'string') return new Date(tagged[DATE_TAG]);
+            if (typeof tagged[DECIMAL_TAG] === 'string') {
+                return new Prisma.Decimal(tagged[DECIMAL_TAG]);
+            }
+        }
+        return value;
+    }) as T;
 }
 
 /**
@@ -40,7 +92,7 @@ export class ProductCache {
         if (!redis) return null;
         try {
             const raw = await redis.get(this.entityKey(scope, key));
-            return raw ? (JSON.parse(raw) as T) : null;
+            return raw ? deserialise<T>(raw) : null;
         } catch (error) {
             logger.warn({ err: error }, 'cache read failed — falling back to database');
             return null;
@@ -53,7 +105,7 @@ export class ProductCache {
         try {
             await redis.set(
                 this.entityKey(scope, key),
-                JSON.stringify(value),
+                serialise(value),
                 'EX',
                 PRODUCT_CACHE_ENTITY_TTL_SECONDS,
             );
@@ -82,7 +134,7 @@ export class ProductCache {
         try {
             const version = await this.currentListVersion(redis);
             const raw = await redis.get(this.listKey(namespace, version, query));
-            return raw ? (JSON.parse(raw) as T) : null;
+            return raw ? deserialise<T>(raw) : null;
         } catch (error) {
             logger.warn({ err: error }, 'cache read failed — falling back to database');
             return null;
@@ -96,7 +148,7 @@ export class ProductCache {
             const version = await this.currentListVersion(redis);
             await redis.set(
                 this.listKey(namespace, version, query),
-                JSON.stringify(value),
+                serialise(value),
                 'EX',
                 PRODUCT_CACHE_LIST_TTL_SECONDS,
             );
