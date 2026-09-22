@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import type { Request } from 'express';
 import { prisma } from '@hitbox/database';
+import type { Prisma } from '@hitbox/database';
 import { eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
 import { createAccessControlModule } from '@hitbox/access-control';
@@ -230,6 +231,48 @@ export function bootstrap(): Bootstrapped {
         };
     };
 
+    /**
+     * The release caller — `adminView` plus the two facts the approval
+     * authority rule needs and the read scope deliberately loses.
+     *
+     * `organizationIds` above collapses to `null` for anyone holding a global
+     * grant, which is right for *reading* and wrong for *approving*: a HitBox
+     * administrator reaches every brand's queue and is a member of no brand.
+     * `memberOrganizationIds` is the unwidened list, and `artistId` is the
+     * artist record this account backs — the two things that decide whether
+     * the caller is the party entitled to sign a drop off.
+     */
+    const releaseView = async (req: Request) => {
+        const base = await adminView(req);
+        const principal = await accessControlModule.guard.describePrincipal(req);
+        const memberOrganizationIds = [
+            ...new Set(
+                principal.roles
+                    .map((role) => role.organizationId)
+                    .filter((id): id is string => id !== null),
+            ),
+        ];
+        const artist = await prisma.artist.findUnique({
+            where: { userId: principal.userId },
+            select: { id: true },
+        });
+
+        return {
+            ...base,
+            correlationId: correlationIdOf(req as Request & { correlationId?: string }),
+            actor: {
+                userId: principal.userId,
+                memberOrganizationIds,
+                artistId: artist?.id ?? null,
+                canDecide: principal.permissions.some((key) =>
+                    key.startsWith('release-approval:'),
+                ),
+                canOverride: base.canOverride,
+            },
+        };
+    };
+
+
     const ordersModule = createOrdersModule({
         prisma,
         eventBus,
@@ -237,11 +280,52 @@ export function bootstrap(): Bootstrapped {
         resolveCaller: adminView,
     });
 
+    /**
+     * Releases' audit port, adapted onto the real recorder.
+     *
+     * `record` rather than `emit`: an approval whose audit write failed is an
+     * approval nobody can account for, and the compliance trail is most of the
+     * point of this workflow.
+     */
+    const releaseAudit = {
+        record: (input: {
+            eventType: string;
+            actorId: string;
+            actorType: 'ARTIST' | 'BRAND_EMPLOYEE' | 'HITBOX_ADMIN';
+            organizationId: string | null;
+            approvalId: string;
+            productId: string;
+            result: 'SUCCESS' | 'DENIED';
+            correlationId: string;
+            before?: Record<string, unknown> | undefined;
+            after?: Record<string, unknown> | undefined;
+            metadata?: Record<string, unknown> | undefined;
+        }) =>
+            auditModule.recorder.record({
+                eventType: input.eventType,
+                actor: { type: input.actorType, id: input.actorId },
+                result: input.result,
+                organizationId: input.organizationId,
+                resource: { type: 'ReleaseApproval', id: input.approvalId },
+                // Cast at the boundary: the port speaks plain records so
+                // releases never imports Prisma's JSON types, and everything
+                // it puts in them is JSON-serialisable by construction.
+                ...(input.before ? { beforeState: input.before as Prisma.InputJsonValue } : {}),
+                ...(input.after ? { afterState: input.after as Prisma.InputJsonValue } : {}),
+                correlationId: input.correlationId,
+                metadata: {
+                    productId: input.productId,
+                    ...(input.metadata ?? {}),
+                } as Prisma.InputJsonValue,
+            }),
+    };
+
     const releasesModule = createReleasesModule({
         prisma,
         eventBus,
         guard: accessControlModule.guard,
-        resolveCaller: adminView,
+        resolveCaller: releaseView,
+        audit: releaseAudit,
     });
 
     const discoverModule = createDiscoverModule({

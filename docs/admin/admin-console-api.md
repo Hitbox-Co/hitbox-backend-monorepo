@@ -821,8 +821,8 @@ What exists today, and what it does not cover:
 | Step 1b — edition size / serialized units | ✅ `POST /admin/products` with a `skus` block, or `POST /admin/products/:productId/skus` — [sku-api.md](sku-api.md) |
 | Step 2 — Artwork & media upload | ✅ `POST /admin/media/upload-url` then `POST /admin/products/:id/images` — multi-image gallery with ordering and a primary flag ([product-upload-api.md 3](product-upload-api.md)) |
 | Live marketplace preview — price | ✅ `prices[]` on create (at least one required) and `PUT /admin/products/:id/prices` — one row per market ([product-upload-api.md 3](product-upload-api.md)) |
-| Submit for review | ✅ `POST /api/v1/admin/releases` |
-| Approve / reject | ✅ `POST /api/v1/admin/releases/:id/decision` |
+| Submit for review | ✅ `POST /api/v1/admin/releases` — freezes who must approve |
+| Approve / reject | ✅ `POST /api/v1/admin/releases/:id/decision` — **the owner approves, not HitBox**; needs the legal compliance tickmark ([admin-write-apis.md 4.0](admin-write-apis.md)) |
 | "Deploy New Drop" / publish action | ❌ **nothing** — no `APPROVED → PUBLISHED/ACTIVE` transition |
 | NFC tag claims "Enabled" toggle | ⚠️ tags are bound at mint time via `tagIds` ([sku-api.md 3](sku-api.md)); there is no per-drop toggle and no way to bind a tag to an already-minted unit |
 

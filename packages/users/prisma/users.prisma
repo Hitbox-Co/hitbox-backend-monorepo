@@ -42,6 +42,7 @@ model User {
   roleAssignment_grantedBy RoleAssignment[]        @relation("User_grantedBy")
   releaseApproval_approver ReleaseApproval[]       @relation("User_approver")
   releaseApproval_checkedBy ReleaseApproval[]      @relation("User_checkedBy")
+  releaseApproval_reopenedBy ReleaseApproval[]     @relation("User_reopenedBy")
   mediaAssets              MediaAsset[]
   contentUnlocks           ContentUnlock[]
   orders                   Order[]

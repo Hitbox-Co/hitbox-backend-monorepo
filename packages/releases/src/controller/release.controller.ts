@@ -3,6 +3,7 @@ import { asyncHandler } from '@hitbox/shared';
 import {
     decideReleaseApprovalSchema,
     listReleaseApprovalsQuerySchema,
+    reopenReleaseApprovalSchema,
     submitForReviewSchema,
     updateReleaseApprovalSchema,
 } from '../dto/release.dto';
@@ -33,7 +34,9 @@ export class ReleaseController {
     submit: RequestHandler = asyncHandler(async (req, res) => {
         const dto = submitForReviewSchema.parse(req.body);
         const caller = await this.resolveCaller(req);
-        res.status(201).json({ data: await this.service.submitForReview(dto, caller.userId) });
+        res.status(201).json({
+            data: await this.service.submitForReview(dto, caller.userId, caller.correlationId),
+        });
     });
 
     /** PATCH /admin/releases/:approvalId — amend an undecided review */
@@ -42,6 +45,25 @@ export class ReleaseController {
         const caller = await this.resolveCaller(req);
         res.json({
             data: await this.service.update(req.params.approvalId as string, dto, caller),
+        });
+    });
+
+    /**
+     * POST /admin/releases/:approvalId/reopen
+     *
+     * Sends a decided review back so the **owner** can decide again. Does not
+     * approve anything — see the service for why that separation matters.
+     */
+    reopen: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = reopenReleaseApprovalSchema.parse(req.body);
+        const caller = await this.resolveCaller(req);
+        res.status(201).json({
+            data: await this.service.reopen({
+                id: req.params.approvalId as string,
+                dto,
+                view: caller,
+                actorId: caller.userId,
+            }),
         });
     });
 

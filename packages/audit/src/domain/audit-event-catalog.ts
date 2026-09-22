@@ -290,16 +290,45 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         sourceStories: [`${AUDIT_DOC} §what-is-recorded`],
     },
     {
+        eventType: 'release.submit',
+        personaGroup: BRAND_EMPLOYEE,
+        description: 'A drop was submitted for release review, opening a new version.',
+        defaultSeverity: INFO,
+        sourceStories: [`${AUDIT_DOC} §what-is-recorded`],
+    },
+    {
         eventType: 'release.approve',
-        personaGroup: HITBOX_EMPLOYEE,
-        description: 'A release was approved for publication.',
+        // Regrouped from hitbox_employee: a release is now approved by the
+        // party that owns the drop — the artist or the brand — and a HitBox
+        // administrator explicitly cannot approve on their behalf.
+        personaGroup: BRAND_EMPLOYEE,
+        description:
+            'A release was approved for publication by its owner, with the legal ' +
+            'compliance statement accepted. A DENIED record means someone who was ' +
+            'not the owner attempted it.',
         defaultSeverity: WARNING,
         sourceStories: [`${AUDIT_DOC} §what-is-recorded`],
     },
     {
         eventType: 'release.reject',
-        personaGroup: HITBOX_EMPLOYEE,
-        description: 'A release was rejected.',
+        personaGroup: BRAND_EMPLOYEE,
+        description: 'A release was rejected, with the reason in metadata.note.',
+        defaultSeverity: WARNING,
+        sourceStories: [`${AUDIT_DOC} §what-is-recorded`],
+    },
+    {
+        eventType: 'release.amend',
+        personaGroup: BRAND_EMPLOYEE,
+        description: "A reviewer edited an undecided release's compliance notes.",
+        defaultSeverity: INFO,
+        sourceStories: [`${AUDIT_DOC} §what-is-recorded`],
+    },
+    {
+        eventType: 'release.reopen',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'An administrator sent a decided release back to its owner for another ' +
+            'decision. Records the reason, and never itself approves anything.',
         defaultSeverity: WARNING,
         sourceStories: [`${AUDIT_DOC} §what-is-recorded`],
     },

@@ -23,6 +23,7 @@ model Organization {
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   artists               Artist[]
+  releaseApprovals      ReleaseApproval[]
   artistCollections     ArtistCollection[]
   products              Product[]
   artistBrandLinks      ArtistBrandLink[]

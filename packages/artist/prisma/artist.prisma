@@ -48,6 +48,7 @@ model Artist {
   // ── Own-module back-relations ─────────────────────────────────────────────
   artistCollections ArtistCollection[]
   artistBrandLinks  ArtistBrandLink[]
+  releaseApprovals  ReleaseApproval[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   products      Product[]

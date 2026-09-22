@@ -1,6 +1,8 @@
-import { ApprovalStatus, ComplianceStatus } from '@hitbox/database';
+import { ApprovalAuthority, ApprovalStatus, ComplianceStatus } from '@hitbox/database';
 import { z } from 'zod';
 import { RELEASES_DEFAULT_LIMIT, RELEASES_MAX_LIMIT } from '../constants/releases.constant';
+
+export { ApprovalAuthority };
 
 export const listReleaseApprovalsQuerySchema = z.object({
     status: z.nativeEnum(ApprovalStatus).optional(),
@@ -26,6 +28,19 @@ export const decideReleaseApprovalSchema = z
         status: z.enum([ApprovalStatus.APPROVED, ApprovalStatus.REJECTED]),
         comment: z.string().trim().max(2000).optional(),
         /**
+         * The approver's acceptance of the legal compliance terms.
+         *
+         * **Required, and required to be `true`, when approving.** Not a
+         * formality: this is the record that a named person took
+         * responsibility for the drop, and it is the reason a platform
+         * administrator cannot approve on an owner's behalf. Rejecting needs
+         * no acceptance — refusing to publish something carries no liability.
+         *
+         * Render it as an unticked checkbox showing
+         * `LEGAL_COMPLIANCE_STATEMENT`; never default it to ticked.
+         */
+        acceptLegalCompliance: z.literal(true).optional(),
+        /**
          * The compliance sign-off. Defaults to CLEARED on an approval and
          * FLAGGED on a rejection, but a reviewer may clear a drop's compliance
          * while still rejecting it on other grounds.
@@ -38,6 +53,15 @@ export const decideReleaseApprovalSchema = z
     .refine(
         (value) => value.status !== ApprovalStatus.REJECTED || Boolean(value.comment),
         { message: 'A comment is required when rejecting a release.', path: ['comment'] },
+    )
+    .refine(
+        (value) =>
+            value.status !== ApprovalStatus.APPROVED || value.acceptLegalCompliance === true,
+        {
+            message:
+                'You must accept the legal compliance statement to approve this release.',
+            path: ['acceptLegalCompliance'],
+        },
     );
 export type DecideReleaseApprovalDto = z.infer<typeof decideReleaseApprovalSchema>;
 
@@ -54,6 +78,21 @@ export const updateReleaseApprovalSchema = z
     })
     .strict();
 export type UpdateReleaseApprovalDto = z.infer<typeof updateReleaseApprovalSchema>;
+
+/**
+ * An administrator sending a decided review back for another decision.
+ *
+ * Creates version N+1 in PENDING with the same authority as the version it
+ * came from, so the owner — not the administrator — decides again. The reason
+ * is required: the owner is being asked to look at this a second time and is
+ * owed an explanation, and it is the first thing they will read.
+ */
+export const reopenReleaseApprovalSchema = z
+    .object({
+        reason: z.string().trim().min(1).max(2000),
+    })
+    .strict();
+export type ReopenReleaseApprovalDto = z.infer<typeof reopenReleaseApprovalSchema>;
 
 /** Opening a review on a product — creates version N+1. */
 export const submitForReviewSchema = z
@@ -82,6 +121,21 @@ export interface ReleaseApprovalListItem {
     decidedAt: string | null;
     createdAt: string;
     updatedAt: string;
+    /** Who must sign this off: ARTIST, ORGANIZATION or PLATFORM. */
+    authority: ApprovalAuthority;
+    requiredArtistId: string | null;
+    requiredArtistName: string | null;
+    requiredOrganizationId: string | null;
+    requiredOrganizationName: string | null;
+    /** The approver's acceptance, and which wording they accepted. */
+    legalComplianceAccepted: boolean;
+    legalComplianceAcceptedAt: string | null;
+    legalComplianceVersion: string | null;
+    /** Set when an administrator sent this version back for another decision. */
+    reopenedFromVersion: number | null;
+    reopenedById: string | null;
+    reopenedAt: string | null;
+    reopenReason: string | null;
     product: {
         id: string;
         groupCode: string;
@@ -104,14 +158,34 @@ export interface ReleaseApprovalDetail extends ReleaseApprovalListItem {
         id: string;
         version: number;
         status: ApprovalStatus;
+        /** The rejection note, when this version was rejected. */
         comment: string | null;
         complianceStatus: ComplianceStatus;
+        authority: ApprovalAuthority;
         approverId: string;
         approverEmail: string | null;
+        /** Who actually recorded the decision, which is not always the submitter. */
+        checkedById: string | null;
+        legalComplianceAccepted: boolean;
+        legalComplianceVersion: string | null;
+        reopenedFromVersion: number | null;
+        reopenReason: string | null;
         decidedAt: string | null;
         createdAt: string;
     }[];
     /** Whether the caller may still act on this row, and why not if they cannot. */
     canDecide: boolean;
     blockedReason: string | null;
+    /**
+     * Split, because the two are genuinely different for an administrator
+     * looking at a brand's drop: they may reject it and may not approve it.
+     * Drive the two buttons from these, not from one flag.
+     */
+    canApprove: boolean;
+    canReject: boolean;
+    canReopen: boolean;
+    approveBlockedReason: string | null;
+    /** The wording the approver is being asked to accept. */
+    legalComplianceStatement: string;
+    legalComplianceVersionRequired: string;
 }

@@ -70,8 +70,11 @@ role check here.
 | Organization directory | `drop:read` | no — it fills the drop form's brand picker |
 | Artist directory | `drop:read` | no — same reason |
 | Release read | `release-approval:read` | no |
-| Release submit / amend / decide | `release-approval:manage` | no |
-| Release **reverse a decision** | `release-approval:override:global` | implicit |
+| Release submit / amend | `release-approval:manage` | no |
+| Release **approve** | `release-approval:manage` **+ be the drop's owner** | no — see §4.0 |
+| Release **reject** | `release-approval:manage`, or override | no |
+| Release **reopen** | `release-approval:override` | implicit |
+| Release **reverse a decision** | `release-approval:override:global` | implicit — never into an approval |
 | Media list / archive view | `assets-documents-upload:read` | no |
 | Role list + permissions | `employee-role-mgmt:read` | no |
 | Role create / update / delete | `employee-role-mgmt:manage` | **yes** |
@@ -462,6 +465,56 @@ creates version N+1 rather than overwriting the rejection, so the whole review
 trail survives. That is what makes "why was this bounced twice" answerable six
 months later.
 
+### 4.0 Who is entitled to approve — read this before wiring the buttons
+
+**The party that owns the drop approves it, and nobody approves on their
+behalf.** Resolved from the drop's organization when the review opens and
+frozen on the row as `authority`:
+
+| The drop's organization | `authority` | Who must approve |
+|---|---|---|
+| `ARTIST_INDIVIDUAL` | `ARTIST` | the artist named on the drop |
+| `BRAND` | `ORGANIZATION` | someone with a role **in** that brand |
+| `HITBOX`, or none | `PLATFORM` | HitBox staff |
+
+`Organization.type` is the discriminator rather than "does the drop have an
+`artistId`", because most brand drops have both: a Lumen drop carries
+`artistId = Lumen` **and** `organizationId = Lumen Studios (BRAND)`. The artist
+is signed to the brand, and the brand is accountable.
+
+**A HitBox System Admin cannot approve a brand's or an artist's drop.** Not a
+scoping accident — an approval carries a named person's acceptance of the legal
+compliance terms, and an administrator accepting those for a brand would record
+consent that brand never gave. What the administrator *can* do:
+
+| Action | Owner | HitBox admin |
+|---|---|---|
+| Approve | ✅ | ❌ `403 RELEASES_NOT_THE_APPROVER` |
+| Reject | ✅ | ✅ — refusal is broader than consent |
+| Reverse a decision → REJECTED | ❌ | ✅ (override) |
+| Reverse a decision → APPROVED | ❌ | ❌ **never** — reopen instead |
+| Reopen for another decision | ❌ | ✅ (override) |
+
+Drive the two buttons from `canApprove` and `canReject` on the detail response,
+**not** from one `canDecide` flag — for an administrator looking at a brand's
+drop those two differ, and `approveBlockedReason` is the sentence to show.
+
+### 4.0.1 The legal compliance tickmark
+
+Approving **requires** `acceptLegalCompliance: true`. Omitting it, or sending
+`false`, is a `422`; the schema refuses it before the service is reached.
+
+The detail response carries the exact wording to show
+(`legalComplianceStatement`) and its version
+(`legalComplianceVersionRequired`). Render it as an **unticked** checkbox —
+never pre-ticked, and never a hidden field. What gets stored on the approval is
+`legalComplianceAccepted`, `legalComplianceAcceptedAt` and
+`legalComplianceVersion`, so the trail records *which* wording was accepted
+rather than merely that a box was ticked.
+
+Rejecting needs no acceptance — refusing to publish something carries no
+liability — but it still requires a `comment`.
+
 ### `GET /admin/releases`
 
 | Param | Type | Notes |
@@ -564,11 +617,16 @@ the override path below.
 ```jsonc
 {
   "status": "APPROVED",              // APPROVED | REJECTED
+  "acceptLegalCompliance": true,     // REQUIRED, and must be true, when approving
   "comment": "Cleared.",             // REQUIRED when rejecting
   "complianceStatus": "CLEARED",     // defaults: CLEARED on approve, FLAGGED on reject
   "oddsDisclosureRef": "https://…"
 }
 ```
+
+**Who may call this depends on the drop — see §4.0.** An approval from anyone
+but the owner is `403 RELEASES_NOT_THE_APPROVER`, and the message names who is
+entitled. A rejection is wider: the owner or an override holder.
 
 → `200 { "data": ReleaseApprovalDetail }`
 
@@ -589,10 +647,45 @@ approval row is what an audit reads:
 |---|---|---|
 | `RELEASES_COMPLIANCE_INCOMPLETE` | 400 | Approving an age-restricted drop with no `minimumAge` |
 | `RELEASES_COMMENT_REQUIRED` | 422 | Rejecting with no `comment` |
+| `RELEASES_LEGAL_ACCEPTANCE_REQUIRED` | 422 | Approving without `acceptLegalCompliance: true` |
+| `RELEASES_NOT_THE_APPROVER` | 403 | You are not the party entitled to decide this drop |
 | `RELEASES_ALREADY_DECIDED` | 409 | Deciding twice without `release-approval:override:global` |
+| `RELEASES_NOT_REOPENABLE` | 409 | Reopening a review that was never decided |
 
 Clearing compliance with no odds disclosure reference logs a **warning** rather
 than refusing — a non-randomised drop legitimately has none.
+
+### `POST /admin/releases/:approvalId/reopen` — send it back to its owner
+
+**Capability:** `release-approval:override`.
+
+The administrator's answer to a rejection they disagree with, and to an owner
+who rejected by mistake.
+
+```json
+{ "reason": "The rights query was resolved — please take another look." }
+```
+
+→ `201 { "data": ReleaseApprovalDetail }` — the **new** version.
+
+What it does and does not do:
+
+- Opens version N+1 in `PENDING`, and moves `Product.status` back to
+  `SUBMITTED`.
+- Carries the **same `authority`** forward, so the same party is asked again.
+  Not re-derived — if the drop changed hands since, the party that was asked is
+  the party asked again.
+- Records `reopenedFromVersion`, `reopenedById`, `reopenedAt` and
+  `reopenReason` on the new row, so a reopened review is distinguishable from
+  an ordinary resubmission.
+- **Approves nothing.** The owner still has to approve, tickmark and all.
+
+The rejection it came from is left intact. A new version rather than clearing
+`decidedAt`, because the rejection is evidence — "why was this bounced twice"
+has to stay answerable.
+
+`409 RELEASES_NOT_REOPENABLE` if the review was never decided;
+`409 RELEASES_ALREADY_PENDING` if the drop already has an open review.
 
 ### Reversing a decision
 
@@ -600,6 +693,34 @@ Requires `release-approval:override:global`, held only by
 `HITBOX_SYSTEM_ADMIN`. That is what keeps "I changed my mind" separate from "I
 am overruling a compliance officer". With it, `POST /decision` succeeds on an
 already-decided row; without it, `409`.
+
+**It can only reverse toward `REJECTED`.** Overriding into an approval is
+refused outright — it would record a legal acceptance the owner never gave,
+which is exactly what §4.0 exists to prevent. The route back to `APPROVED` is
+`/reopen`, and then the owner decides.
+
+### The transaction record
+
+Every action writes to the audit trail (`AuditEvent`) as well as to the
+approval row:
+
+| Action | `eventType` | Recorded |
+|---|---|---|
+| Submit | `release.submit` | version, resolved authority |
+| Approve | `release.approve` | acceptance + version of the terms, authority |
+| Reject | `release.reject` | the note, in `metadata.note` |
+| Amend | `release.amend` | before/after of the compliance notes |
+| Reopen | `release.reopen` | the reason, and which version it came from |
+
+**A refused approval is recorded too**, as `result: DENIED` with the reason —
+somebody who is not the owner attempting to approve is exactly the event a
+compliance review wants to see, and it leaves no other trace. `actorType` says
+which hat they wore on *that* drop (`ARTIST`, `BRAND_EMPLOYEE`,
+`HITBOX_ADMIN`), derived from their relationship to it rather than their role
+name.
+
+The trail is written with `record()`, not `emit()` — an approval whose audit
+write failed is an approval nobody can account for, so it fails the request.
 
 ---
 

@@ -427,6 +427,7 @@ model Artist {
   // ── Own-module back-relations ─────────────────────────────────────────────
   artistCollections ArtistCollection[]
   artistBrandLinks  ArtistBrandLink[]
+  releaseApprovals  ReleaseApproval[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   products      Product[]
@@ -1614,6 +1615,7 @@ model Organization {
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   artists               Artist[]
+  releaseApprovals      ReleaseApproval[]
   artistCollections     ArtistCollection[]
   products              Product[]
   artistBrandLinks      ArtistBrandLink[]
@@ -2108,6 +2110,58 @@ model ReleaseApproval {
   checkedAt         DateTime?
   createdAt         DateTime
   updatedAt         DateTime
+
+  // ── Who is entitled to decide this release ────────────────────────────────
+  /// Resolved from the drop's owner when the review opened, and frozen here.
+  ///
+  /// Stored rather than re-derived at decision time on purpose: a drop that
+  /// moves between a brand and an artist afterwards must not retroactively
+  /// change who was accountable for the sign-off already given.
+  authority         ApprovalAuthority
+  /// The artist whose sign-off is required, when `authority` is ARTIST.
+  requiredArtistId  String?          @db.Uuid
+  requiredArtist    Artist?          @relation(fields: [requiredArtistId], references: [id])
+  /// The organization whose sign-off is required, when `authority` is
+  /// ORGANIZATION. Denormalised from the product for the same freezing reason.
+  requiredOrganizationId String?     @db.Uuid
+  requiredOrganization   Organization? @relation(fields: [requiredOrganizationId], references: [id])
+
+  // ── Legal compliance acceptance ───────────────────────────────────────────
+  /// The approver's explicit acceptance of the legal compliance terms.
+  ///
+  /// An approval cannot be recorded without it. Kept as its own column rather
+  /// than folded into `complianceStatus` because they answer different
+  /// questions: `complianceStatus` is the platform's assessment of the drop,
+  /// this is a named person accepting liability for it.
+  legalComplianceAccepted   Boolean
+  legalComplianceAcceptedAt DateTime?
+  /// Which wording they accepted. Without it the trail says somebody ticked a
+  /// box but not which box, and the terms change over time.
+  legalComplianceVersion    String?
+
+  // ── Reopening ─────────────────────────────────────────────────────────────
+  /// Set on the version created when an administrator sends a rejected drop
+  /// back for another decision, so a reopened review is distinguishable from
+  /// an ordinary resubmission by the owner.
+  reopenedFromVersion Int?
+  reopenedById        String?        @db.Uuid
+  reopenedBy          User?          @relation("User_reopenedBy", fields: [reopenedById], references: [id])
+  reopenedAt          DateTime?
+  reopenReason        String?
+
+  @@unique([productId, version])
+}
+
+/// Who must sign a release off, decided from the drop's owner.
+///
+/// The platform is deliberately NOT a substitute for the other two: a HitBox
+/// administrator cannot approve a brand's or an artist's drop on their behalf,
+/// because the approval carries a legal acceptance that only the owner can
+/// give. PLATFORM applies to HitBox's own drops.
+enum ApprovalAuthority {
+  ARTIST
+  ORGANIZATION
+  PLATFORM
 }
 
 /// Outcome of a release review.
@@ -3017,6 +3071,7 @@ model User {
   roleAssignment_grantedBy RoleAssignment[]        @relation("User_grantedBy")
   releaseApproval_approver ReleaseApproval[]       @relation("User_approver")
   releaseApproval_checkedBy ReleaseApproval[]      @relation("User_checkedBy")
+  releaseApproval_reopenedBy ReleaseApproval[]     @relation("User_reopenedBy")
   mediaAssets              MediaAsset[]
   contentUnlocks           ContentUnlock[]
   orders                   Order[]

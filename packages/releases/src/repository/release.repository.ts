@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
-import { ApprovalStatus, ComplianceStatus, DropStatus, Prisma } from '@hitbox/database';
-import type { PrismaClient } from '@hitbox/database';
+import { ApprovalAuthority, ApprovalStatus, ComplianceStatus, DropStatus, Prisma } from '@hitbox/database';
+import type { OrganizationType, PrismaClient } from '@hitbox/database';
 import type { ListReleaseApprovalsQuery } from '../dto/release.dto';
 
 const approvalSelect = {
@@ -17,13 +17,31 @@ const approvalSelect = {
     checkedAt: true,
     createdAt: true,
     updatedAt: true,
+    authority: true,
+    requiredArtistId: true,
+    requiredOrganizationId: true,
+    legalComplianceAccepted: true,
+    legalComplianceAcceptedAt: true,
+    legalComplianceVersion: true,
+    reopenedFromVersion: true,
+    reopenedById: true,
+    reopenedAt: true,
+    reopenReason: true,
     approver: { select: { email: true, fullName: true } },
+    requiredArtist: { select: { name: true } },
+    requiredOrganization: { select: { name: true } },
     product: {
         select: {
             id: true, groupCode: true, name: true, status: true,
             complianceStatus: true, isAgeSpecific: true, minimumAge: true,
             oddsDisclosureRef: true, totalSupply: true,
             organizationId: true, artistId: true,
+            // Read through the relations rather than through a port: the
+            // authority rule needs the owner's *type* and the artist's linked
+            // account, and both are one join away on a row this module already
+            // loads. Same precedent as products reading MediaAsset.storageRef.
+            organization: { select: { type: true } },
+            artist: { select: { userId: true } },
         },
     },
 } satisfies Prisma.ReleaseApprovalSelect;
@@ -81,6 +99,31 @@ export class ReleaseRepository {
         });
     }
 
+    /** The drop's owner, for the authority rule. */
+    async findOwnership(productId: string): Promise<{
+        organizationId: string | null;
+        organizationType: OrganizationType | null;
+        artistId: string | null;
+        artistUserId: string | null;
+    } | null> {
+        const product = await this.prisma.product.findUnique({
+            where: { id: productId },
+            select: {
+                organizationId: true,
+                artistId: true,
+                organization: { select: { type: true } },
+                artist: { select: { userId: true } },
+            },
+        });
+        if (!product) return null;
+        return {
+            organizationId: product.organizationId,
+            organizationType: product.organization?.type ?? null,
+            artistId: product.artistId,
+            artistUserId: product.artist?.userId ?? null,
+        };
+    }
+
     async findLatestVersion(productId: string): Promise<number> {
         const latest = await this.prisma.releaseApproval.findFirst({
             where: { productId },
@@ -109,6 +152,12 @@ export class ReleaseRepository {
         comment: string | undefined;
         complianceStatus: ComplianceStatus;
         oddsDisclosureRef: string | null;
+        authority: ApprovalAuthority;
+        requiredArtistId: string | null;
+        requiredOrganizationId: string | null;
+        reopenedFromVersion?: number | null;
+        reopenedById?: string | null;
+        reopenReason?: string | null;
     }): Promise<ReleaseApprovalRow> {
         const id = randomUUID();
         const now = new Date();
@@ -125,6 +174,20 @@ export class ReleaseRepository {
                     complianceStatus: input.complianceStatus,
                     ...(input.oddsDisclosureRef !== null
                         ? { oddsDisclosureRef: input.oddsDisclosureRef }
+                        : {}),
+                    authority: input.authority,
+                    requiredArtistId: input.requiredArtistId,
+                    requiredOrganizationId: input.requiredOrganizationId,
+                    // Never pre-ticked. The acceptance is recorded at the
+                    // moment of approval, by the person approving.
+                    legalComplianceAccepted: false,
+                    ...(input.reopenedFromVersion != null
+                        ? {
+                            reopenedFromVersion: input.reopenedFromVersion,
+                            reopenedById: input.reopenedById ?? null,
+                            reopenedAt: now,
+                            reopenReason: input.reopenReason ?? null,
+                        }
                         : {}),
                     createdAt: now,
                     updatedAt: now,
@@ -184,6 +247,8 @@ export class ReleaseRepository {
         oddsDisclosureRef: string | undefined;
         checkedById: string;
         allowDecided: boolean;
+        legalComplianceAccepted: boolean;
+        legalComplianceVersion: string | null;
     }): Promise<number> {
         const now = new Date();
 
@@ -203,6 +268,9 @@ export class ReleaseRepository {
                     checkedById: input.checkedById,
                     checkedAt: now,
                     decidedAt: now,
+                    legalComplianceAccepted: input.legalComplianceAccepted,
+                    legalComplianceAcceptedAt: input.legalComplianceAccepted ? now : null,
+                    legalComplianceVersion: input.legalComplianceVersion,
                     updatedAt: now,
                 },
             });

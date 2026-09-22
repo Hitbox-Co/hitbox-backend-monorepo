@@ -465,6 +465,21 @@ and price sorting (not expressible against a market-scoped price table without
 a denormalized column or raw SQL). `popular` now orders by minted SKU count, a
 proxy for edition size rather than sales.
 
+### Release approval authority
+
+`ReleaseApproval` carries `authority` — `ARTIST`, `ORGANIZATION` or `PLATFORM`
+— resolved from the drop's owning organization when the review opens and frozen
+on the row. It is the one place in the platform where a capability check is
+deliberately **not** sufficient: holding `release-approval:manage:global` lets
+you reach every review, and still does not let you approve a brand's drop,
+because an approval carries a named person's acceptance of the legal compliance
+terms and an administrator cannot give that on someone else's behalf.
+
+The asymmetry is the design: **consent is narrow, refusal is broad.** An
+administrator may reject and may reopen; they may not approve, and an override
+can reverse a decision only toward `REJECTED`. See
+[admin/admin-write-apis.md 4.0](admin/admin-write-apis.md).
+
 ### Invited artists — a worked example of event coupling
 
 `POST /admin/authz/invitations` creating an `Artist` row is the clearest
