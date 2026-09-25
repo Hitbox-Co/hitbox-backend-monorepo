@@ -132,6 +132,8 @@ async function wipe() {
     await prisma.buyerCollection.deleteMany();
     await prisma.skuHistory.deleteMany();
     await prisma.dropImage.deleteMany();
+    // Before the drops it references ON DELETE RESTRICT, which would block them.
+    await prisma.cogsReconciliation.deleteMany();
     await prisma.drop.deleteMany();
     await prisma.artistCollection.deleteMany();
     await prisma.artist.deleteMany();

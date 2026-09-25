@@ -687,7 +687,6 @@ model SkuClaim {
   revokedReason String?
 
   @@unique([skuId, claimedNo])
-  @@map("ProductClaim")
 }
 
 /// Append-only hash chain per SKU. Each row commits to the previous one
@@ -758,8 +757,6 @@ model SkuHistory {
   startedAt   DateTime
   endedAt     DateTime?
   isCurrent   Boolean
-
-  @@map("ProductHistory")
 }
 
 /// Kind of ownership event on the provenance chain. Each SKU's ledger runs
@@ -2104,11 +2101,15 @@ enum ExceptionStatus {
 // separate so catalog editing and item/tag custody can scale apart.
 //
 // NAMING (v3.1): these models were called Product / ProductVariant /
-// ProductImage / ProductPrice. The rename is a Prisma-side rename only — every
-// model keeps an @@map to its original table and every renamed scalar keeps an
-// @map to its original column, so the database is untouched. "Drop" is what the
-// business calls this record everywhere else, and the old name kept reading as
-// "a physical thing", which is the Sku.
+// ProductImage / ProductPrice. "Drop" is what the business calls this record
+// everywhere else, and the old name kept reading as "a physical thing", which
+// is the Sku.
+//
+// The rename initially landed as a Prisma-only rename behind @@map, keeping the
+// physical names. v3.1.1 renamed the tables themselves (ALTER TABLE ... RENAME,
+// metadata-only, no data copied), so there is no @@map here any more and every
+// Prisma name is the database name. Anything reading these tables by their old
+// name — raw SQL, a BI tool, a dashboard query — has to be updated with it.
 // ============================================================================
 
 /// A drop: one sellable product definition. `totalSupply` is the number of
@@ -2170,8 +2171,6 @@ model Drop {
   cogsReconciliations CogsReconciliation[]
   /// Vendor consignments received against this drop — see packages/supply.
   supplyBatches       SupplyBatch[]
-
-  @@map("Product")
 }
 
 /// A purchasable option of a drop — size, colourway, edition. Modelled as a
@@ -2207,7 +2206,6 @@ model DropVariant {
   wishlistItems WishlistItem[]
 
   @@unique([productId, optionName, optionValue])
-  @@map("ProductVariant")
 }
 
 /// Joins a drop to a media asset for gallery display. The asset itself is
@@ -2227,7 +2225,6 @@ model DropImage {
   createdAt  DateTime
 
   @@unique([productId, assetId])
-  @@map("ProductImage")
 }
 
 /// Price of a drop (optionally a specific variant) in one market.
@@ -2243,7 +2240,7 @@ model DropImage {
 /// now)`), because a unique index cannot express "at most one *open* row".
 model DropPrice {
   id            String          @id @db.Uuid
-  dropId        String          @map("productId") @db.Uuid
+  dropId        String          @db.Uuid
   drop          Drop            @relation(fields: [dropId], references: [id])
   variantId     String?         @db.Uuid
   variant       DropVariant?    @relation(fields: [variantId], references: [id])
@@ -2266,7 +2263,6 @@ model DropPrice {
   updatedAt     DateTime
 
   @@unique([dropId, variantId, marketId, effectiveFrom])
-  @@map("ProductPrice")
 }
 
 /// Lifecycle state of a drop. APPROVED means cleared for release; PUBLISHED
@@ -2287,8 +2283,6 @@ enum DropStatus {
 enum DropPriceStatus {
   ACTIVE
   DISABLED
-
-  @@map("ProductPriceStatus")
 }
 
 // ───── source: packages\releases\prisma\releases.prisma ────────────────────────────
@@ -3037,9 +3031,9 @@ model Invoice {
   salesPriceSnapshot Decimal?  @db.Decimal(12, 2)
   /// Pointer to the priced `DropPrice` version that priced it. Plain id with
   /// NO foreign key: an invoice must never be blocked from being issued by a
-  /// pricing table it does not own. Renamed from `productCostId` in v3.1; the
-  /// column keeps its original name via @map, so nothing is migrated.
-  dropPriceId        String?   @map("productCostId") @db.Uuid
+  /// pricing table it does not own. Renamed from `productCostId` in v3.1, and
+  /// the column itself renamed in v3.1.1.
+  dropPriceId        String?   @db.Uuid
 
   // ── The document ──────────────────────────────────────────────────────────
   /// S3 key under `tax-invoices/`, never a URL. Null between the row being

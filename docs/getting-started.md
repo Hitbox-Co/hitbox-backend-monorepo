@@ -63,6 +63,26 @@ pnpm db:studio       # browse data
 pnpm db:seed         # fill the database with realistic dummy data (see below)
 ```
 
+### Applying schema changes to an existing database
+
+In this order, every time:
+
+```bash
+pnpm db:deploy          # apply pending migrations (non-interactive; `db:migrate` prompts)
+pnpm db:seed:authz      # reconcile the permission + role catalog
+pnpm db:seed:audit      # reconcile the audit event catalog — NOT optional, see below
+pnpm db:backfill:v31    # one-off: repair v3.1's column defaults and fill its new tables
+```
+
+`db:seed:audit` is not optional on any database. `AuditEvent.eventType` is a
+foreign key to `AuditEventType`, so on an unseeded database *every* audited
+write in the platform — a release decision, a refund, a SKU edit — fails with a
+`500`. All three seeds are idempotent.
+
+`db:backfill:v31` is a one-off for the v3.1 migration and is also idempotent;
+what it repairs and why is in
+[schema-v3.1-changes.md](schema-v3.1-changes.md) §8.
+
 ### Dummy data
 
 `pnpm db:seed` populates **every table** with realistic development data: 5 users, 6 artists, 8 collections, 16 products (with images, spread across trending / new releases / top creators), plus claims, ledger entries, ownership history and buyer collections — so the discover feed, product listings, search and detail endpoints all return real-looking responses immediately.

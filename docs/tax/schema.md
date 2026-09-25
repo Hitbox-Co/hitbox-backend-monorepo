@@ -83,10 +83,11 @@ raised at (guide 8.1). `dropPriceId` is a plain `Uuid` with **no foreign key**:
 an invoice must never be blocked from being issued by a pricing table it does
 not own.
 
-> **Renamed in v3.1.** The Prisma field was `productCostId`; the **column is
-> still `productCostId`**, via `@map`. It named a `product_cost` table that never
-> landed, and now names the versioned `DropPrice` row that priced the invoice —
-> see [schema-v3.1-changes.md](../schema-v3.1-changes.md) §4 and §7.
+> **Renamed.** The field was `productCostId` in v3.1 and the **column itself**
+> was renamed in v3.1.1, so Prisma and the database agree. It named a
+> `product_cost` table that never landed, and now names the versioned
+> `DropPrice` row that priced the invoice — see
+> [schema-v3.1-changes.md](../schema-v3.1-changes.md) §1, §4 and §7.
 
 **The document** — `pdfStorageRef` is the S3 **key**, never a URL, exactly as
 `MediaAsset.storageRef` is, so signed-URL policy stays a runtime decision.

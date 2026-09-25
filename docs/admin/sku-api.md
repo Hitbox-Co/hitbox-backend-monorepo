@@ -24,7 +24,7 @@
 These are two different records and conflating them is the most common
 integration mistake:
 
-| | `Product` (catalog) | `Sku` (serialized unit) |
+| | `Drop` (catalog) | `Sku` (serialized unit) |
 |---|---|---|
 | Owned by | `@hitbox/products` | `@hitbox/skus` |
 | Means | "this drop exists and here is what it is" | "this **physical object** exists" |
@@ -32,7 +32,7 @@ integration mistake:
 | Quantity | one row per drop | one row per item, `#1 … #totalSupply` |
 | Carries | name, artwork, price, release window | serial, NFC tag UID, owner, provenance |
 
-`Product.totalSupply` is a **declaration** — "this edition will be 500". The
+`Drop.totalSupply` is a **declaration** — "this edition will be 500". The
 number of `Sku` rows is the **fact**. They are allowed to disagree while an
 edition is being minted, and the API tells you the gap (`remainingSupply`).
 
@@ -143,7 +143,7 @@ The `skus` key is **absent** when no `skus` block was sent. It is not `null`.
 
 ### Why 1000 is the inline cap
 
-This insert runs inside the transaction that also creates the `Product`, and a
+This insert runs inside the transaction that also creates the `Drop`, and a
 transaction writing 10,000 rows holds locks long enough to matter. Larger
 editions are minted in batches through 3 — the same code path without a
 product write attached.

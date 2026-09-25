@@ -130,7 +130,7 @@ module's document model, and the port tax declares over orders
 (`IInvoiceableOrderSource`) does not expose one. That is structural, not a
 convention someone has to remember: the type simply has no such field to print.
 
-`Invoice.dropPriceId` (column still `productCostId`) is a nullable `Uuid` with
+`Invoice.dropPriceId` (renamed from `productCostId`) is a nullable `Uuid` with
 **no foreign key**, naming the versioned `DropPrice` row that priced the
 invoice. No FK because an invoice must never be blocked from being issued by a
 pricing table it does not own. Nothing populates it yet; when something does,

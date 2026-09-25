@@ -1,39 +1,87 @@
 # Schema v3.1 — What Changed, and What Did Not
 
-> One migration, `20260925000000_v31_nfc_tag_master_cogs_exceptions_and_approvals`.
+> Two migrations:
+> `20260925000000_v31_nfc_tag_master_cogs_exceptions_and_approvals` (additive)
+> and `20260925120000_v311_rename_product_tables_to_drop` (renames).
 >
 > **No REST route, request body or response body changed**, with one named
-> exception in §7. If you are integrating against the API, §1 and §7 are the
-> only sections that can affect you.
+> exception in §7. If you integrate against the HTTP API, §1 and §7 are the only
+> sections that can affect you. If you read the **database** directly, §1 is a
+> breaking change and you have to read it.
 >
 > Related: [database-architecture.md](database-architecture.md) (module
 > ownership and the partial-schema layout), [admin/](admin/admin-api-reference.md).
 
 ---
 
-## 1. The headline: nothing was renamed in the database
+## 1. Six tables and one enum type were renamed
 
-Seven Prisma models and one enum were renamed. **Not one table or column was.**
-Every rename is carried by `@@map` / `@map`, so the physical schema is byte-for-byte
-what it was and every existing row, index, foreign key and SQL query still works.
+`Drop` is what the business calls this record everywhere else. The old name read
+as "a physical thing", which is the `Sku` — one row per object in somebody's
+hands. Conflating the two is the most common integration mistake in this
+codebase, and the model names were helping the confusion along.
 
-| Prisma name before | Prisma name now | Table / column, unchanged |
-|---|---|---|
-| `Product` | `Drop` | `Product` |
-| `ProductVariant` | `DropVariant` | `ProductVariant` |
-| `ProductPrice` | `DropPrice` | `ProductPrice` |
-| `ProductImage` | `DropImage` | `ProductImage` |
-| `ProductClaim` | `SkuClaim` | `ProductClaim` |
-| `ProductHistory` | `SkuHistory` | `ProductHistory` |
-| enum `ProductPriceStatus` | `DropPriceStatus` | `ProductPriceStatus` |
-| `DropPrice.productId` | `DropPrice.dropId` | column `productId` |
-| `Invoice.productCostId` | `Invoice.dropPriceId` | column `productCostId` |
+| Before | Now |
+|---|---|
+| `Product` | `Drop` |
+| `ProductVariant` | `DropVariant` |
+| `ProductPrice` | `DropPrice` |
+| `ProductImage` | `DropImage` |
+| `ProductClaim` | `SkuClaim` |
+| `ProductHistory` | `SkuHistory` |
+| enum `ProductPriceStatus` | `DropPriceStatus` |
+| `ProductPrice.productId` | `DropPrice.dropId` |
+| `Invoice.productCostId` | `Invoice.dropPriceId` |
 
-Relation fields moved with them: `product` → `drop`, `products` → `drops`,
-`productImages` → `dropImages`, `productVariants` → `dropVariants`,
+**This is now true of the database as well as of Prisma.** It landed in two
+steps, which matters if you are reading an older commit:
+
+- **v3.1** renamed the Prisma models only, keeping the physical names behind
+  `@@map` / `@map`.
+- **v3.1.1** dropped those aliases and renamed the tables, the enum type and the
+  two columns for real. There is no `@@map` left in the schema — every Prisma
+  name *is* the database name.
+
+Relation fields moved with the models: `product` → `drop`, `products` →
+`drops`, `productImages` → `dropImages`, `productVariants` → `dropVariants`,
 `productPrices` → `dropPrices`, `productClaims` → `skuClaims`,
-`productHistorys` → `skuHistories`. Relation fields have no column, so the
-database does not know they exist.
+`productHistorys` → `skuHistories`. Those have no column, so they never reached
+the database either way.
+
+### ⚠️ What this breaks
+
+Anything addressing these tables **by name from outside Prisma**: raw SQL, saved
+queries, BI tools, dashboards, external readers, a replica's mapping. Inside
+this repo the three raw-SQL sites were updated in the same change
+(`dashboard.repository.ts` ×2, `backfill-v31.ts` ×1); outside it, nobody can
+find them for you.
+
+Nothing else breaks. `ALTER TABLE … RENAME` is a catalog operation: no rows are
+read or copied, it is constant time regardless of table size, and every row,
+index, constraint, foreign key and default survives untouched. Row counts before
+and after were identical — 18 / 36 / 37 / 13 / 60 / 60.
+
+### How the migration was written, and why by hand
+
+**`prisma migrate` cannot express a rename.** Given a model renamed from
+`Product` to `Drop` it emits `DROP TABLE "Product"` + `CREATE TABLE "Drop"`,
+which would destroy every row in six tables. The v3.1.1 migration is therefore
+hand-written `ALTER … RENAME`, and it renames three kinds of thing:
+
+1. the six tables, the enum type and the two columns;
+2. **every constraint and index name on them.** Postgres keeps the old names
+   after a table rename, so `Drop` would still carry `Product_pkey`. Prisma
+   derives expected names from the table, so leaving them means permanent
+   drift: every `migrate diff` would want to rename them, and the next
+   `migrate dev` would try to drop and recreate them. A `DO` block prefix-swaps
+   all 68 of them, because a hand-written list of 68 names is a place to make a
+   typo;
+3. the three names that carry the renamed *column* as well as the table —
+   `DropPrice_dropId_fkey` and friends.
+
+The proof it was complete: `migrate diff` against the live database afterwards
+returns *"This is an empty migration"*. Prisma finds nothing it would change,
+down to every constraint and index name.
 
 **"Drop" is what everyone already calls it.** The old name read as "a physical
 thing", which is the `Sku` — one row per object in somebody's hands. Conflating
@@ -48,12 +96,16 @@ names were helping the confusion along.
   modules for no behavioural gain.
 - **`DropVariant.productId` and `DropImage.productId`** — same reason, plus
   their compound uniques (`productId_optionName_optionValue`,
-  `productId_assetId`) are part of the Prisma Client API. `DropPrice` is the one
-  exception, because its unique key was being changed anyway.
+  `productId_assetId`) are part of the Prisma Client API. `DropPrice.dropId` is
+  the exception, because its unique key was being rebuilt anyway (§4).
+  These are consistent between Prisma and the database, which is the property
+  that actually matters.
 - **REST routes** (`/api/v1/admin/products/…`), **DTO fields**, **response body
   keys** (`product`, `counts.products`, `productCode`, `productName`) and every
   other public contract. A rename of an internal model is not a reason to break
-  a client.
+  a client. Where a codemod reached one of these by accident it was put back —
+  `markets` still returns `usage.productPrices` and `MARKETS_IN_USE` still
+  carries `details.productPrices`, now read from the renamed relation.
 
 ---
 
@@ -88,7 +140,7 @@ inventory surface in
 [admin/sku-inventory-management.md](admin/sku-inventory-management.md), which
 continues to edit the `Sku` columns.
 
-Backfilling `NfcTag` from them is an open question (§8).
+`NfcTag` is mirrored from them by the backfill in §8; **nothing reads it yet**, and the `Sku` columns remain the ones that are written.
 
 ---
 
@@ -218,31 +270,114 @@ ever passed through as a value), so nothing needed a new branch.
 
 `GET /api/v1/admin/tax/invoices/:id` — the **operator-only** block renames
 `productCostId` to `dropPriceId`. Same value, same nullable UUID, same
-no-foreign-key rule. It is only visible to callers with operator-grade tax
-access, and it pointed at a `product_cost` table that never landed; it now names
-the `DropPrice` row that priced the invoice. Buyer and artist views of an
-invoice are untouched.
+no-foreign-key rule — the column behind it was renamed to match in v3.1.1. It is
+only visible to callers with operator-grade tax access, and it pointed at a
+`product_cost` table that never landed; it now names the `DropPrice` row that
+priced the invoice. Buyer and artist views of an invoice are untouched.
 
 ---
 
-## 8. Open questions — these need a decision, not a guess
+## 8. The data backfill
 
-1. **What status should existing `AdjustmentEntry` rows have?** They defaulted
-   to `PENDING_APPROVAL`, which reads as "somebody still has to approve these".
-   If they should be `EXECUTED`, that is a one-line update — but it is a
-   statement about money that already moved, so finance should make it, not us.
-2. **When does `SupplyBatch.dropId` become required?** It is nullable with a
-   `// TODO: make required after backfill (target: String)` marker. Existing
-   batches predate the per-drop model and have no drop to point at.
-3. **When is `NfcTag` backfilled from the deprecated `Sku` columns, and who
-   flips the reads?** Until then there are two sources of truth for a chip's
-   state, and only the `Sku` one is written. The inventory-edit endpoints in
+```bash
+pnpm db:deploy          # the migration
+pnpm db:backfill:v31    # then this
+```
+
+An additive migration can only give an existing row a **column default**, and
+for several of the new columns that default is mechanically correct and
+factually wrong. `BlockchainLedger.occurredAt` defaulting to `now()` says a
+claim from July happened on the day the migration ran — which is exactly the
+sort of thing a provenance chain must not say.
+
+[backfill-v31.ts](../packages/shared/database/prisma/backfill-v31.ts) repairs
+those and populates the four new tables. It is **idempotent** — Part A is scoped
+to rows that existed at `_prisma_migrations.finished_at`, so a re-run touches
+nothing and rows written afterwards are never rewritten — and **additive**:
+nothing is deleted, and `Sku`'s deprecated tag columns are read and left exactly
+as they are.
+
+### Part A — defaults that were wrong for historical rows
+
+| Column | Was | Now |
+|---|---|---|
+| `BlockchainLedger.occurredAt` | migration time | `createdAt` |
+| `DropPrice.effectiveFrom` | migration time | `createdAt`, so a price has been in force since it was written |
+| `SupplyBatch.batchDate` / `status` / `rows*` / `updatedAt` | today / `UPLOADED` / `0` | `receivedAt` / `ACCEPTED` / `quantity` |
+| `Vendor.updatedAt` | migration time | `createdAt` — nothing has edited them |
+| `Order.paidAt` | `NULL` | the gateway's `PaymentTransaction.settledAt`, else `placedAt`. Skips `PENDING_PAYMENT` and `CANCELLED`, which were never paid |
+
+### Part B — the new tables, from the data already there
+
+`NfcTag` is built from the units carrying a tag on the deprecated columns.
+`NfcTag.supplyBatchId` is required and the only link available is
+`Sku.provisioningBatchId` matched against `SupplyBatch.batchRef`; a unit whose
+reference resolves to nothing is **skipped and reported**, never attached to an
+arbitrary consignment. `Sku.currentNfcTagId` and `Sku.supplyBatchId` are then
+linked.
+
+`NfcVerification` reconstructs one row per tap `lastTapCounter` already claims
+happened, so the counter and the log agree — which is what anything reading both
+will assume.
+
+`CogsReconciliation` and `ExceptionCase` get a small representative set pointed
+at real drops, claims, orders and ledger rows.
+
+> ### The dev key, stated plainly
+>
+> `tagUidHash` and `tagUidEncrypted` are real HMAC-SHA256 and AES-256-GCM,
+> computed from a constant in the script. That is fine for a demo database and
+> **is not a production backfill** — production needs the KMS key. Every row
+> this script writes carries `keyReference: "dev-local:v1"`, so it can never be
+> mistaken for one written against a real key.
+
+### What it did on the dev branch
+
+| | |
+|---|---|
+| `BlockchainLedger.occurredAt` | 120 of 120 repaired |
+| `DropPrice.effectiveFrom` | 37 of 37 repaired; all 37 still resolve as the current price |
+| `SupplyBatch` | 2 rows → `ACCEPTED`, 5000 / 1200 rows received |
+| `Vendor.updatedAt` | 2 rows |
+| `Order.paidAt` | 48 of 60 — the 12 left null are `PENDING_PAYMENT` and `CANCELLED` |
+| `NfcTag` | 100, one per tagged unit, all linked and all resolving to `NT-2026-014` |
+| `NfcVerification` | 355 — `lastTapCounter` matches the row count for **every** tag |
+| `CogsReconciliation` / `ExceptionCase` | 12 / 5 |
+
+A second run reported `0 row(s)` for every Part A repair and created no new
+rows, which is the idempotency claim demonstrated rather than asserted.
+
+### If you re-seed
+
+`db:seed:demo` wipes and re-creates every business row, and two of the new
+tables would have blocked it: `CogsReconciliation.dropId` and
+`NfcTag.supplyBatchId` are `ON DELETE RESTRICT`. Both seeds now clear the v3.1
+tables in the right order, so the teardown still works — but a re-seed drops
+everything this backfill wrote, so **run `db:backfill:v31` again afterwards**.
+
+---
+
+## 9. Open questions — these need a decision, not a guess
+
+1. **What status should existing `AdjustmentEntry` rows have?** They default to
+   `PENDING_APPROVAL`, which reads as "somebody still has to approve these". The
+   backfill deliberately does **not** touch them — it is a statement about money
+   that already moved, so finance should make it. *(Moot on the dev branch: it
+   has no `AdjustmentEntry` rows. It will not be moot in production.)*
+2. **When does `SupplyBatch.dropId` become required?** Still nullable, with a
+   `// TODO: make required after backfill (target: String)` marker. The existing
+   consignments predate the per-drop model and have no drop to point at, so the
+   backfill leaves them null rather than inventing an attribution.
+3. **Who flips the reads onto `NfcTag`, and when?** The dev branch now has both
+   representations and they agree, but **only the `Sku` columns are written** —
+   the inventory-edit endpoints in
    [admin/sku-inventory-management.md](admin/sku-inventory-management.md) still
-   write the `Sku` columns exclusively.
+   write those exclusively, so the two will drift the moment somebody edits a
+   tag. Production also needs the real KMS key before any backfill there.
 
 ---
 
-## 9. Verification
+## 10. Verification
 
 | Check | Result |
 |---|---|
@@ -253,6 +388,17 @@ invoice are untouched.
 | Typecheck | clean across all 30 packages and `apps/backend` |
 | Tests | 842 pass |
 | Grep | no `prisma.product*`, `Prisma.Product*`, `ProductPriceStatus` or `productCostId` left in application code |
+| Rename migration | hand-written `ALTER … RENAME` only; zero `DROP`, `DELETE` or `TRUNCATE` |
+| Row counts across the rename | identical: `Drop` 18, `DropVariant` 36, `DropPrice` 37, `DropImage` 13, `SkuClaim` 60, `SkuHistory` 60 |
+| Stale names in the database | none — no table, constraint or index still begins `Product`, and `ProductPriceStatus` no longer exists as a type |
+| Live smoke test | `drop` → `dropPrices` / `dropVariants` / `dropImages` / `_count.skuClaims`, `skuClaim.drop`, `skuHistory.sku.drop` and `invoice.dropPriceId` all query successfully |
 
-The migration was applied to the **dev** Neon branch. Production still needs
-`pnpm db:deploy`.
+Applied to the **dev** Neon branch (`ep-blue-brook-ax6p9j8t` / `neondb`):
+both migrations, then `pnpm db:backfill:v31`. Production needs the same three,
+in that order — and the backfill's tag crypto needs the real KMS key first
+(§8).
+
+Before running the rename migration anywhere else, find the readers. Every
+consumer of these tables that is not this Prisma client — a BI dashboard, a
+saved query, an ETL job, a read replica's mapping — breaks at the moment it
+runs, and no amount of care inside this repo can detect them.

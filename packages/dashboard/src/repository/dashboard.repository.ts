@@ -462,7 +462,7 @@ export class DashboardRepository {
                    count(DISTINCT s.id)  FILTER (WHERE s."claimedStatus" = 'CLAIMED') AS claimed,
                    count(DISTINCT o.id)  FILTER (WHERE o."skuId" IS NOT NULL
                         AND o.status IN ('PAID','PROCESSING','SHIPPED','DELIVERED'))  AS sold
-            FROM "Product" p
+            FROM "Drop" p
             LEFT JOIN "Sku" s  ON s."productId" = p.id
             LEFT JOIN "InventoryReservation" ir ON ir."skuId" = s.id
             LEFT JOIN "Order" o ON o."productId" = p.id
@@ -760,7 +760,7 @@ export class DashboardRepository {
             SELECT p.id AS "productId", p.name,
                    count(DISTINCT w.id) AS wishlists,
                    count(DISTINCT f.id) AS follows
-            FROM "Product" p
+            FROM "Drop" p
             LEFT JOIN "WishlistItem" w ON w."productId" = p.id
             LEFT JOIN "Follow" f ON f."artistId" = p."artistId"
             WHERE p."archivedAt" IS NULL AND p.status IN ('PUBLISHED','ACTIVE')

@@ -208,8 +208,9 @@ Everything that could later change:
 | `customerName/Email/Address` | The address book entry may be edited or deleted |
 | Line `description` | A renamed product must not rename an issued invoice's line |
 
-`dropPriceId` (Prisma field; column still `productCostId`) is a plain UUID with
-**no foreign key**: an invoice must never be blocked from being issued by a
+`dropPriceId` (renamed from `productCostId`, in Prisma and in the database) is
+a plain UUID with **no foreign key**: an invoice must never be blocked from
+being issued by a
 pricing table it does not own. It names the versioned `DropPrice` row that
 priced the invoice — see [schema-v3.1-changes.md](../schema-v3.1-changes.md) §4.
 Still nullable, and nothing populates it yet.

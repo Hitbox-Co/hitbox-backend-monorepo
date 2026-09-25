@@ -36,7 +36,6 @@ model SkuClaim {
   revokedReason String?
 
   @@unique([skuId, claimedNo])
-  @@map("ProductClaim")
 }
 
 /// Append-only hash chain per SKU. Each row commits to the previous one
@@ -107,8 +106,6 @@ model SkuHistory {
   startedAt   DateTime
   endedAt     DateTime?
   isCurrent   Boolean
-
-  @@map("ProductHistory")
 }
 
 /// Kind of ownership event on the provenance chain. Each SKU's ledger runs

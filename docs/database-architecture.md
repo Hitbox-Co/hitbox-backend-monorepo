@@ -296,12 +296,18 @@ These are deliberate records of what the schema does *not* yet do, not a backlog
    `AuditEvent.correlationId`/`occurredAt`, `SkuHistory.skuId` + `isCurrent`,
    `SearchIndexJob.status`, `Notification.userId` + `status`.
 
-3. **`@map` / `@@map` is used for renames only.** Table and column names are the Prisma defaults
-   (`ProductClaim`, `createdAt`) rather than the snake_case (`product_claims`, `created_at`) the
-   earlier schema used. The v3.1 model renames are carried entirely by `@@map`/`@map` precisely
-   because renaming a table for real is a genuinely destructive migration — so
-   `model Drop { … @@map("Product") }` keeps the physical name and changes only what the code
-   reads. See [schema-v3.1-changes.md](schema-v3.1-changes.md).
+3. **No `@map` / `@@map` anywhere.** Every Prisma model, field and enum name *is* its database
+   name. Table and column names are the Prisma defaults (`SkuClaim`, `createdAt`) rather than the
+   snake_case (`product_claims`, `created_at`) the earlier schema used. The v3.1 renames landed
+   behind `@@map` first and were made physical in v3.1.1 with `ALTER TABLE … RENAME`, so the
+   aliases are gone. Keep it that way: an alias is a second name for the same thing, and the cost
+   of one is paid every time somebody greps. See
+   [schema-v3.1-changes.md](schema-v3.1-changes.md).
+
+   Note what a rename **is**: `ALTER TABLE … RENAME` is catalog-only, constant time and loses
+   nothing. What makes renames dangerous is that `prisma migrate` cannot express one — it emits
+   DROP + CREATE — so the migration has to be hand-written. See the v3.1.1 migration for the
+   shape of it.
 
 4. **`PermissionScope` was added during this decomposition, then extended.** `Permission.scope`
    referenced it and `@@unique([resource, action, scope])` depended on it, but the enum was never

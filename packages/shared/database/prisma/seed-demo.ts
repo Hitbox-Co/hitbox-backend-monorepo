@@ -840,6 +840,13 @@ async function clearBusinessTables(): Promise<void> {
         prisma.notificationPreference.deleteMany(),
         prisma.notificationTemplate.deleteMany(),
         prisma.searchIndexJob.deleteMany(),
+        // v3.1 tables. ExceptionCase has no FKs; the other three are placed by
+        // their constraints — NfcVerification before NfcTag, NfcTag before both
+        // Sku and SupplyBatch, and CogsReconciliation before Drop, which it
+        // references ON DELETE RESTRICT and would otherwise block.
+        prisma.exceptionCase.deleteMany(),
+        prisma.nfcVerification.deleteMany(),
+        prisma.nfcTag.deleteMany(),
         prisma.wishlistItem.deleteMany(),
         prisma.follow.deleteMany(),
         prisma.supportCase.deleteMany(),
@@ -869,6 +876,7 @@ async function clearBusinessTables(): Promise<void> {
         prisma.mediaAsset.deleteMany(),
         prisma.dropPrice.deleteMany(),
         prisma.dropVariant.deleteMany(),
+        prisma.cogsReconciliation.deleteMany(),
         prisma.drop.deleteMany(),
         prisma.supplyBatch.deleteMany(),
         prisma.vendor.deleteMany(),

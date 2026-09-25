@@ -159,9 +159,9 @@ model Invoice {
   salesPriceSnapshot Decimal?  @db.Decimal(12, 2)
   /// Pointer to the priced `DropPrice` version that priced it. Plain id with
   /// NO foreign key: an invoice must never be blocked from being issued by a
-  /// pricing table it does not own. Renamed from `productCostId` in v3.1; the
-  /// column keeps its original name via @map, so nothing is migrated.
-  dropPriceId        String?   @map("productCostId") @db.Uuid
+  /// pricing table it does not own. Renamed from `productCostId` in v3.1, and
+  /// the column itself renamed in v3.1.1.
+  dropPriceId        String?   @db.Uuid
 
   // ── The document ──────────────────────────────────────────────────────────
   /// S3 key under `tax-invoices/`, never a URL. Null between the row being
