@@ -128,11 +128,11 @@ const PRODUCTS: ProductSpec[] = [
 async function wipe() {
     // children → parents; only seed users are removed
     await prisma.blockchainLedger.deleteMany();
-    await prisma.productClaim.deleteMany();
+    await prisma.skuClaim.deleteMany();
     await prisma.buyerCollection.deleteMany();
-    await prisma.productHistory.deleteMany();
-    await prisma.productImage.deleteMany();
-    await prisma.product.deleteMany();
+    await prisma.skuHistory.deleteMany();
+    await prisma.dropImage.deleteMany();
+    await prisma.drop.deleteMany();
     await prisma.artistCollection.deleteMany();
     await prisma.artist.deleteMany();
     await prisma.user.deleteMany({ where: { clerkUserId: { startsWith: 'seed_' } } });
@@ -190,7 +190,7 @@ async function main() {
         const claimed = Boolean(spec.tag && ownerId);
         const claimedAt = new Date('2026-07-01T12:00:00Z');
 
-        const product = await prisma.product.create({
+        const product = await prisma.drop.create({
             data: {
                 productCode: spec.code,
                 name: spec.name,
@@ -220,7 +220,7 @@ async function main() {
         });
 
         if (ownerId) {
-            await prisma.productHistory.create({
+            await prisma.skuHistory.create({
                 data: {
                     productId: product.id,
                     ownerId,
@@ -261,7 +261,7 @@ async function main() {
 
         // CLAIM record (seq 1, owner = the buyer) for products a seed user owns.
         if (claimed && ownerId) {
-            const claim = await prisma.productClaim.create({
+            const claim = await prisma.skuClaim.create({
                 data: {
                     claimCode: `HBPC${String(claimNo).padStart(6, '0')}`,
                     claimedNo: claimNo,
@@ -298,10 +298,10 @@ async function main() {
         users: await prisma.user.count(),
         artists: await prisma.artist.count(),
         collections: await prisma.artistCollection.count(),
-        products: await prisma.product.count(),
-        images: await prisma.productImage.count(),
-        history: await prisma.productHistory.count(),
-        claims: await prisma.productClaim.count(),
+        products: await prisma.drop.count(),
+        images: await prisma.dropImage.count(),
+        history: await prisma.skuHistory.count(),
+        claims: await prisma.skuClaim.count(),
         ledger: await prisma.blockchainLedger.count(),
         buyerCollections: await prisma.buyerCollection.count(),
     };

@@ -357,6 +357,31 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         sourceStories: [`${AUDIT_DOC} §the-event-itself`],
     },
 
+    // ── Serialized inventory ────────────────────────────────────────────────
+    // CRITICAL rather than WARNING because of what is reachable through these
+    // two keys: a tag marked REVOKED stops an owner verifying an object they
+    // are holding, and a unit archived or resale-blocked stops it moving. They
+    // are rare, they are deliberate, and each one is a question somebody will
+    // ask again later.
+    {
+        eventType: 'sku.update',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A serialized unit's record was edited — trust flags, tag lifecycle state, " +
+            'listing or archival state. Carries before/after for the changed columns only.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/admin/sku-inventory-management.md §3'],
+    },
+    {
+        eventType: 'sku.batch-update',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'The same edit was applied to many serialized units in one transaction. ' +
+            'Carries the change and the list of units, not per-unit snapshots.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/admin/sku-inventory-management.md §4'],
+    },
+
     // ── Content ─────────────────────────────────────────────────────────────
     {
         eventType: 'content.unlock',

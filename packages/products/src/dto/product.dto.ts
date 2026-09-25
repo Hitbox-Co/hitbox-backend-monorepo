@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { ComplianceStatus, DropStatus, ProductPriceStatus } from '@hitbox/database';
+import { ComplianceStatus, DropStatus, DropPriceStatus } from '@hitbox/database';
 import {
     DEFAULT_PRODUCT_GROUP_CODE,
     PRODUCT_CODE_GROUP_LENGTH,
@@ -251,7 +251,7 @@ export const productPriceInputSchema = z
         /** Unit cost, so finance can compute margin without re-deriving it. */
         costOfGoods: money.optional(),
         /** `DISABLED` stages a price without making it live. */
-        status: upperEnum(ProductPriceStatus).default(ProductPriceStatus.ACTIVE),
+        status: upperEnum(DropPriceStatus).default(DropPriceStatus.ACTIVE),
         /**
          * Price a specific variant instead of the product as a whole.
          * Omit for the base price, which is what a market-less feed shows.
@@ -312,7 +312,7 @@ export const updateProductPriceSchema = z
         amount: money.optional(),
         isFree: bool.optional(),
         costOfGoods: money.nullish(),
-        status: upperEnum(ProductPriceStatus).optional(),
+        status: upperEnum(DropPriceStatus).optional(),
     })
     .strict()
     .refine((value) => !(value.isFree === true && value.amount !== undefined), {
@@ -475,4 +475,4 @@ export interface PaginatedResult<T> {
     };
 }
 
-export { ComplianceStatus, DropStatus, ProductPriceStatus };
+export { ComplianceStatus, DropStatus, DropPriceStatus };

@@ -47,6 +47,6 @@ function toResponse(row: ArtistRow): ArtistResponse {
         archivedAt: row.archivedAt?.toISOString() ?? null,
         organizationId: row.organizationId,
         organizationName: row.organization?.name ?? null,
-        counts: { products: row._count.products, collections: row._count.artistCollections },
+        counts: { products: row._count.drops, collections: row._count.artistCollections },
     };
 }

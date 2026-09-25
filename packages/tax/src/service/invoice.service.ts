@@ -192,10 +192,10 @@ export class InvoiceService {
                             : null,
                         customerGstin: null,
                         // The price the invoice was raised at, frozen. When the
-                        // versioned product_cost table lands, `productCostId`
+                        // versioned DropPrice row is chosen, `dropPriceId`
                         // is set here too — the column already exists for it.
                         salesPriceSnapshot: order.unitPrice,
-                        productCostId: null,
+                        dropPriceId: null,
                         status: 'ISSUED' as const,
                         issuedAt: now,
                         notes: dto.notes ?? null,
@@ -587,7 +587,10 @@ export class InvoiceService {
                     voidReason: invoice.voidReason,
                     supersedesInvoiceId: invoice.supersedesInvoiceId,
                     salesPriceSnapshot: invoice.salesPriceSnapshot?.toString() ?? null,
-                    productCostId: invoice.productCostId,
+                    // Renamed from `productCostId` in v3.1, together with the
+                    // Prisma field. Operator-only, and the column behind it is
+                    // unchanged — see docs/tax/schema.md.
+                    dropPriceId: invoice.dropPriceId,
                     createdById: invoice.createdById,
                 }
                 : {}),

@@ -17,7 +17,11 @@ model SupportCase {
   reporter       User              @relation("User_reporter", fields: [reporterId], references: [id])
   skuId          String?           @db.Uuid
   sku            Sku?              @relation(fields: [skuId], references: [id])
+  /// @deprecated — use nfcTagId
   tagId          String?
+  /// The chip the case is about, once tags are rows of their own (SD-7).
+  nfcTagId       String?           @db.Uuid
+  nfcTag         NfcTag?           @relation(fields: [nfcTagId], references: [id])
   caseType       SupportCaseType
   status         SupportCaseStatus
   description    String

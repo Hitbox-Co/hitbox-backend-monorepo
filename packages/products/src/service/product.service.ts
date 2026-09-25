@@ -772,15 +772,15 @@ export class ProductService {
     }
 
     /** The first renderable image URL for a listing row, or null. */
-    imageUrlOf(row: { productImages: { asset: { storageRef: string } }[] }): string | null {
-        const ref = row.productImages[0]?.asset.storageRef;
+    imageUrlOf(row: { dropImages: { asset: { storageRef: string } }[] }): string | null {
+        const ref = row.dropImages[0]?.asset.storageRef;
         if (!ref) return null;
         return this.deps.mediaUrls?.publicUrl(ref) ?? null;
     }
 
     /** The default-market base price of a listing row, as a decimal string. */
     priceOf(row: ProductListingRow): { amount: string | null; currency: string } | null {
-        const price = row.productPrices[0];
+        const price = row.dropPrices[0];
         if (!price) return null;
         return {
             amount: price.isFree ? '0.00' : (price.amount?.toFixed(2) ?? null),
@@ -797,7 +797,7 @@ export class ProductService {
     }
 
     private toResponse(product: ProductWithRelations): ProductResponse {
-        const price = product.productPrices[0];
+        const price = product.dropPrices[0];
         return {
             id: product.id,
             groupCode: product.groupCode,
@@ -824,7 +824,7 @@ export class ProductService {
             artistId: product.artistId,
             artistName: product.artist?.name ?? product.collection?.artist.name ?? null,
             organizationId: product.organizationId,
-            images: product.productImages
+            images: product.dropImages
                 .map((image) => this.deps.mediaUrls?.publicUrl(image.asset.storageRef) ?? null)
                 .filter((url): url is string => url !== null),
             price: price
@@ -834,7 +834,7 @@ export class ProductService {
                     isFree: price.isFree,
                 }
                 : null,
-            variants: product.productVariants.map((variant) => ({
+            variants: product.dropVariants.map((variant) => ({
                 id: variant.id,
                 label: variant.label,
                 optionName: variant.optionName,

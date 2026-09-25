@@ -1,5 +1,12 @@
 # HitBox Admin API — Frontend Reference
 
+> **Model naming (v3.1).** The Prisma models `Product` / `ProductVariant` /
+> `ProductPrice` / `ProductImage` / `ProductClaim` / `ProductHistory` are now
+> `Drop` / `DropVariant` / `DropPrice` / `DropImage` / `SkuClaim` / `SkuHistory`.
+> **The tables keep their original names**, so every `Product…` below still
+> reads correctly as the table, and no route or response changed. The mapping
+> is in [schema-v3.1-changes.md](../schema-v3.1-changes.md).
+
 > Everything a frontend needs to build the admin surface: endpoints, query
 > parameters, response shapes, per-role differences, and error handling.
 >
@@ -16,6 +23,9 @@
 > [product-upload-api.md](product-upload-api.md).
 > Minting SKU units, NFC tag manifests, and per-role unit visibility:
 > [sku-api.md](sku-api.md).
+> Editing units afterwards — trust flags, tag lifecycle, archival, batch edits
+> and the full inventory filter set:
+> [sku-inventory-management.md](sku-inventory-management.md).
 > Session handling and the Clerk flow are in
 > [authentication.md](authentication.md).
 >

@@ -18,9 +18,9 @@ model Order {
   buyerId        String          @db.Uuid
   buyer          User            @relation(fields: [buyerId], references: [id])
   productId      String          @db.Uuid
-  product        Product         @relation(fields: [productId], references: [id])
+  drop           Drop            @relation(fields: [productId], references: [id])
   variantId      String?         @db.Uuid
-  variant        ProductVariant? @relation(fields: [variantId], references: [id])
+  variant        DropVariant?    @relation(fields: [variantId], references: [id])
   skuId          String?         @db.Uuid
   sku            Sku?            @relation(fields: [skuId], references: [id])
   quantity       Int
@@ -35,7 +35,7 @@ model Order {
   gateway        PaymentGateway
   /// When the buyer accepted the drop's terms — evidence for disputes.
   termsAcceptedAt DateTime?
-  /// The ProductClaim that took ownership of this order's unit, and when.
+  /// The SkuClaim that took ownership of this order's unit, and when.
   /// Payment and ownership are decoupled: an order is PAID on day 1 and may be
   /// claimed on day 6, or never. Royalty accrues at the claim, so this is the
   /// column that says whether this order has earned anyone anything yet.
@@ -43,6 +43,9 @@ model Order {
   /// must never be blocked by an order row pointing at it.
   claimId         String?   @db.Uuid
   claimedAt       DateTime?
+  /// When payment settled. Distinct from `placedAt`: an order can sit
+  /// PENDING_PAYMENT, and revenue is recognised on this column, not that one.
+  paidAt          DateTime?
   shippedAt       DateTime?
   deliveredAt     DateTime?
   trackingNote    String?

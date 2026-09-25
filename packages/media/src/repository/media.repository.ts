@@ -153,7 +153,7 @@ export class MediaRepository {
     // request body — that is what makes the scope check meaningful.
 
     async organizationOfProduct(productId: string): Promise<string | null> {
-        const row = await this.prisma.product.findUnique({
+        const row = await this.prisma.drop.findUnique({
             where: { id: productId },
             select: { organizationId: true },
         });

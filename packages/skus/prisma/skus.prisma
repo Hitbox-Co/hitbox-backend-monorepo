@@ -2,26 +2,33 @@
 // SKUS MODULE SCHEMA  (packages/skus/prisma/skus.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: Sku
+// Owns: Sku, NfcTag, NfcVerification
 //
 // The serialized-item registry: one row per physical collectible, its NFC tag
 // binding, and its current owner. This is the platform's most security-
 // sensitive table — the digital twin of an object in someone's hands — which
 // is why it is its own module rather than a folder inside products.
+//
+// TAG CUSTODY (v3.1): a chip used to be five columns on Sku. It is now a row
+// of its own (NfcTag), because a chip has a life the item does not: it is QC'd
+// before it is bound, it can be replaced while the item keeps its history, and
+// its UID has to stay unique for ever even after it is retired. The old
+// columns are still here, still written, still read — see the @deprecated
+// notes — and nothing is migrated off them by this change.
 // ============================================================================
 
-/// One serialized unit of a product. `serialNumber` is unique within the
-/// product ("#014 of 500"). Ownership, NFC tag custody and resale eligibility
-/// all live on this row; the provenance history is append-only in the claims
-/// module (ProductHistory + BlockchainLedger).
+/// One serialized unit of a drop. `serialNumber` is unique within the drop
+/// ("#014 of 500"). Ownership, NFC tag custody and resale eligibility all live
+/// on this row; the provenance history is append-only in the claims module
+/// (SkuHistory + BlockchainLedger).
 model Sku {
   id          String  @id @db.Uuid
   skuCode     String  @unique
   productId   String  @db.Uuid
-  product     Product @relation(fields: [productId], references: [id])
+  drop        Drop    @relation(fields: [productId], references: [id])
   variantId   String? @db.Uuid
-  variant     ProductVariant? @relation(fields: [variantId], references: [id])
-  /// Position within the product's edition; unique per product (see @@unique).
+  variant     DropVariant? @relation(fields: [variantId], references: [id])
+  /// Position within the drop's edition; unique per drop (see @@unique).
   serialNumber Int
   /// Current holder. Null until first claimed.
   ownerId      String?       @db.Uuid
@@ -31,18 +38,34 @@ model Sku {
   // ── NFC tag custody ───────────────────────────────────────────────────────
   /// Physical tag UID. Unique platform-wide — two SKUs can never claim the
   /// same tag, which is the primary defence against cloned tags.
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
   tagId                 String?           @unique
   /// Vendor provisioning batch reference. Not a foreign key: batches are
   /// recorded by the supply module and tags may arrive before that row exists.
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
   provisioningBatchId   String?
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
   tagLifecycleState     TagLifecycleState
   vendorId              String?           @db.Uuid
   vendor                Vendor?           @relation(fields: [vendorId], references: [id])
   vendorAuthenticatedAt DateTime?
 
+  /// The chip currently embedded in this item. Unique the other way round
+  /// too: a chip is in at most one item at a time.
+  currentNfcTagId  String?            @unique @db.Uuid
+  currentNfcTag    NfcTag?            @relation("SkuCurrentTag", fields: [currentNfcTagId], references: [id])
+  /// Every chip this item has ever carried, including the current one.
+  nfcTagHistory    NfcTag[]           @relation("SkuTagHistory")
+  nfcVerifications NfcVerification[]
+
+  /// The consignment this unit arrived in — see packages/supply.
+  supplyBatchId String?      @db.Uuid
+  supplyBatch   SupplyBatch? @relation(fields: [supplyBatchId], references: [id])
+
   // ── One-shot claim token ──────────────────────────────────────────────────
   /// Single-use token minted on tap and burned on claim. Unique so a token can
-  /// never be replayed against a second SKU.
+  /// never be replayed against a second SKU. Stays on the item, not the chip:
+  /// it authorises a claim of *this unit*, and survives a chip replacement.
   claimToken         String?   @unique
   claimTokenIssuedAt DateTime?
   claimTokenUsedAt   DateTime?
@@ -52,7 +75,9 @@ model Sku {
   resaleBlockedReason String?
   /// Monotonic NFC tap counter — a counter that goes backwards indicates a
   /// replayed or cloned tag.
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
   lastTapCounter      Int
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
   tamperStatus        String?
 
   isActive   Boolean
@@ -61,10 +86,10 @@ model Sku {
   updatedAt  DateTime
 
   // ── Cross-module back-relations ───────────────────────────────────────────
-  productClaims         ProductClaim[]
+  skuClaims             SkuClaim[]
   blockchainLedgers     BlockchainLedger[]
   buyerCollections      BuyerCollection[]
-  productHistorys       ProductHistory[]
+  skuHistories          SkuHistory[]
   contentUnlocks        ContentUnlock[]
   evolutionEvents       EvolutionEvent[]
   orders                Order[]
@@ -73,6 +98,60 @@ model Sku {
   supportCases          SupportCase[]
 
   @@unique([productId, serialNumber])
+}
+
+/// NFC tag master — one row per physical chip, created from the vendor's Excel
+/// upload. A chip has a life of its own: vendor QC before binding, can be
+/// replaced while the old chip keeps its history, UID unique for ever, keys and
+/// tap counter belong to the chip.
+model NfcTag {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  nfcTagCode      String            @unique @db.VarChar(10) // NT
+  supplyBatchId   String            @db.Uuid
+  supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
+  /// The item this chip is (or was) embedded in.
+  skuId           String?           @db.Uuid
+  sku             Sku?              @relation("SkuTagHistory", fields: [skuId], references: [id])
+  currentFor      Sku?              @relation("SkuCurrentTag")
+  /// Chip UID stored only hashed + encrypted.
+  tagUidHash      String            @unique @db.Char(64) // HMAC-SHA256 lookup key
+  tagUidEncrypted String            // AES-256-GCM, key in KMS
+  qcStatus        QcStatus          @default(PENDING)
+  qcReportedAt    DateTime?
+  qcNotes         String?
+  lifecycleState  TagLifecycleState @default(UNPROVISIONED)
+  keyReference    String?           // KMS pointer — never a key
+  lastTapCounter  Int               @default(0)
+  tamperStatus    String?
+  personalizedAt  DateTime?
+  boundAt         DateTime?
+  activatedAt     DateTime?
+  retiredAt       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  verifications   NfcVerification[]
+  ledgerEntries   BlockchainLedger[]
+  supportCases    SupportCase[]
+
+  @@index([skuId])
+}
+
+/// Append-only log of every tap verification. The single-use claim token stays on Sku.claimToken.
+model NfcVerification {
+  id               String             @id @default(uuid(7)) @db.Uuid
+  verificationCode String             @unique @db.VarChar(10) // NV
+  nfcTagId         String?            @db.Uuid
+  nfcTag           NfcTag?            @relation(fields: [nfcTagId], references: [id])
+  skuId            String?            @db.Uuid
+  sku              Sku?               @relation(fields: [skuId], references: [id])
+  counter          Int?
+  result           VerificationResult
+  reasonCode       String?            // internal only
+  requestId        String
+  createdAt        DateTime           @default(now())
+
+  @@index([skuId, createdAt])
 }
 
 /// Whether the item has been claimed by an owner. IN_TRANSFER blocks
@@ -95,4 +174,17 @@ enum TagLifecycleState {
   LOST
   REVOKED
   DISPUTED
+}
+
+/// Vendor quality control on a chip, recorded before it is bound to anything.
+enum QcStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+/// Outcome of one tap verification.
+enum VerificationResult {
+  VERIFIED
+  REJECTED
 }

@@ -235,7 +235,7 @@ export class ReleaseService {
             eventType: 'release.amend',
             actorId: view.actor.userId,
             actorType: auditActorType(approval, view.actor),
-            organizationId: approval.product.organizationId,
+            organizationId: approval.drop.organizationId,
             approvalId: id,
             productId: approval.productId,
             result: 'SUCCESS',
@@ -283,7 +283,7 @@ export class ReleaseService {
                 eventType: approving ? 'release.approve' : 'release.reject',
                 actorId: input.actorId,
                 actorType: auditActorType(approval, input.view.actor),
-                organizationId: approval.product.organizationId,
+                organizationId: approval.drop.organizationId,
                 approvalId: approval.id,
                 productId: approval.productId,
                 result: 'DENIED',
@@ -331,14 +331,14 @@ export class ReleaseService {
         const oddsRef = input.dto.oddsDisclosureRef ?? approval.oddsDisclosureRef ?? undefined;
 
         if (approving) {
-            if (approval.product.isAgeSpecific && approval.product.minimumAge === null) {
+            if (approval.drop.isAgeSpecific && approval.drop.minimumAge === null) {
                 throw AppError.badRequest(
                     'This drop is age-restricted but carries no minimum age. Set one before approving.',
                     RELEASES_ERROR_CODES.COMPLIANCE_INCOMPLETE,
                     { field: 'minimumAge' },
                 );
             }
-            if (complianceStatus === ComplianceStatus.CLEARED && !oddsRef && approval.product.oddsDisclosureRef === null) {
+            if (complianceStatus === ComplianceStatus.CLEARED && !oddsRef && approval.drop.oddsDisclosureRef === null) {
                 // Only enforced when the reviewer is clearing compliance —
                 // a non-randomised drop legitimately has no odds disclosure,
                 // so this is a warning-shaped refusal the caller can bypass by
@@ -374,7 +374,7 @@ export class ReleaseService {
             eventType: approving ? 'release.approve' : 'release.reject',
             actorId: input.actorId,
             actorType: auditActorType(approval, input.view.actor),
-            organizationId: approval.product.organizationId,
+            organizationId: approval.drop.organizationId,
             approvalId: input.id,
             productId: approval.productId,
             result: 'SUCCESS',
@@ -443,7 +443,7 @@ export class ReleaseService {
                 eventType: 'release.reopen',
                 actorId: input.actorId,
             actorType: auditActorType(approval, input.view.actor),
-                organizationId: approval.product.organizationId,
+                organizationId: approval.drop.organizationId,
                 approvalId: approval.id,
                 productId: approval.productId,
                 result: 'DENIED',
@@ -496,7 +496,7 @@ export class ReleaseService {
             eventType: 'release.reopen',
             actorId: input.actorId,
             actorType: auditActorType(approval, input.view.actor),
-            organizationId: approval.product.organizationId,
+            organizationId: approval.drop.organizationId,
             approvalId: reopened.id,
             productId: approval.productId,
             result: 'SUCCESS',
@@ -537,8 +537,8 @@ export class ReleaseService {
         const visible =
             approval !== null &&
             (view.organizationIds === null ||
-                (approval.product.organizationId !== null &&
-                    view.organizationIds.includes(approval.product.organizationId)));
+                (approval.drop.organizationId !== null &&
+                    view.organizationIds.includes(approval.drop.organizationId)));
 
         if (!visible) {
             throw AppError.notFound('Release approval not found.', RELEASES_ERROR_CODES.NOT_FOUND);
@@ -587,17 +587,17 @@ function toListItem(row: ReleaseApprovalRow): ReleaseApprovalListItem {
         reopenedAt: row.reopenedAt?.toISOString() ?? null,
         reopenReason: row.reopenReason,
         product: {
-            id: row.product.id,
-            groupCode: row.product.groupCode,
-            name: row.product.name,
-            status: row.product.status,
-            complianceStatus: row.product.complianceStatus,
-            isAgeSpecific: row.product.isAgeSpecific,
-            minimumAge: row.product.minimumAge,
-            oddsDisclosureRef: row.product.oddsDisclosureRef,
-            totalSupply: row.product.totalSupply,
-            organizationId: row.product.organizationId,
-            artistId: row.product.artistId,
+            id: row.drop.id,
+            groupCode: row.drop.groupCode,
+            name: row.drop.name,
+            status: row.drop.status,
+            complianceStatus: row.drop.complianceStatus,
+            isAgeSpecific: row.drop.isAgeSpecific,
+            minimumAge: row.drop.minimumAge,
+            oddsDisclosureRef: row.drop.oddsDisclosureRef,
+            totalSupply: row.drop.totalSupply,
+            organizationId: row.drop.organizationId,
+            artistId: row.drop.artistId,
         },
     };
 }

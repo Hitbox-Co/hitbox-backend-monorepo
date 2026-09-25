@@ -1,14 +1,17 @@
+import { randomUUID } from 'node:crypto';
 import type { Request, RequestHandler } from 'express';
 import { asyncHandler } from '@hitbox/shared';
 import { buildSkuAccess } from '../domain/sku-access';
 import type { SkuAccess, SkuPrincipal } from '../domain/sku-access';
 import {
+    batchUpdateSkusSchema,
     bindTagSchema,
     bulkBindTagsSchema,
     listSkusQuerySchema,
     mintSkusSchema,
+    updateSkuSchema,
 } from '../dto/sku.dto';
-import type { SkuService } from '../service/sku.service';
+import type { SkuMutationContext, SkuService } from '../service/sku.service';
 
 /**
  * Reads the caller's grants off the request. Bootstrap supplies the adapter,
@@ -58,6 +61,38 @@ export class SkuController {
         const dto = bindTagSchema.parse(req.body);
         res.json({
             data: await this.service.bindTag(access, req.params.skuId as string, dto),
+        });
+    });
+
+    /** PATCH /admin/skus/:skuId — edit one unit's record. */
+    update: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = updateSkuSchema.parse(req.body);
+        res.json({
+            data: await this.service.update(
+                await this.mutation(req),
+                req.params.skuId as string,
+                dto,
+            ),
+        });
+    });
+
+    /**
+     * PATCH /admin/skus/batch
+     * PATCH /admin/products/:productId/skus/batch
+     *
+     * One set of changes, many units, one transaction. The nested form takes
+     * the drop from the path — which is also what makes the batch reachable by
+     * an organization-scoped caller, since the cross-drop router has no
+     * organization to check a grant against and admits global grants only.
+     */
+    batchUpdate: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = batchUpdateSkusSchema.parse(req.body);
+        res.json({
+            data: await this.service.batchUpdate(
+                await this.mutation(req),
+                req.params.productId,
+                dto,
+            ),
         });
     });
 
@@ -114,5 +149,22 @@ export class SkuController {
      */
     private async access(req: Request): Promise<SkuAccess> {
         return buildSkuAccess(await this.resolvePrincipal(req));
+    }
+
+    /**
+     * The same view, plus the correlation id every write is recorded under.
+     *
+     * Read off the request rather than imported from the audit module — the
+     * correlation middleware sets the property, and a plain property read is
+     * not a dependency. The fallback matters: an audit row with a fresh id is
+     * still a row, whereas one that threw because the middleware was not
+     * mounted is a lost edit.
+     */
+    private async mutation(req: Request): Promise<SkuMutationContext> {
+        const correlated = req as Request & { correlationId?: string };
+        return {
+            access: await this.access(req),
+            correlationId: correlated.correlationId ?? randomUUID(),
+        };
     }
 }

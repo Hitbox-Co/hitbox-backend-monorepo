@@ -33,7 +33,7 @@ const categoryToStorageCategories: Record<MarketplaceCategory, string[]> = {
     [MarketplaceCategory.OTHER]: ['BOOK', 'AUTOGRAPH', 'GAME_BOX', 'OTHER'],
 };
 
-const sortToOrderBy: Record<MarketplaceSort, Prisma.ProductOrderByWithRelationInput> = {
+const sortToOrderBy: Record<MarketplaceSort, Prisma.DropOrderByWithRelationInput> = {
     newest: { createdAt: 'desc' },
     popular: { skus: { _count: 'desc' } },
 };
@@ -45,7 +45,7 @@ export class MarketplaceListingAdapter implements IListingCatalog {
     ) { }
 
     async findListings(query: MarketplaceListingsQuery): Promise<MarketplaceListingsResult> {
-        const where: Prisma.ProductWhereInput = {
+        const where: Prisma.DropWhereInput = {
             ...PUBLIC_PRODUCT_WHERE,
             // "Featured" was `marketplaceStatus != null`, a curation column the
             // restructure removed. The nearest honest equivalent is a drop
@@ -74,10 +74,10 @@ export class MarketplaceListingAdapter implements IListingCatalog {
     }
 
     private toItem(row: ProductListingRow): MarketplaceListingItem {
-        const ref = row.productImages[0]?.asset.storageRef;
+        const ref = row.dropImages[0]?.asset.storageRef;
         // At most one row: the base price (variantId null) of the default
         // market, guaranteed unique by @@unique([productId, variantId, marketId]).
-        const price = row.productPrices[0];
+        const price = row.dropPrices[0];
         return {
             id: row.id,
             name: row.name,

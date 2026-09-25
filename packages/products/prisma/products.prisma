@@ -2,18 +2,25 @@
 // PRODUCTS MODULE SCHEMA  (packages/products/prisma/products.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: Product, ProductVariant, ProductImage, ProductPrice
+// Owns: Drop, DropVariant, DropImage, DropPrice
 //
 // This module is the CATALOG — the definition of what is for sale. The
 // serialized physical items are the skus module (Sku); the two are deliberately
 // separate so catalog editing and item/tag custody can scale apart.
+//
+// NAMING (v3.1): these models were called Product / ProductVariant /
+// ProductImage / ProductPrice. The rename is a Prisma-side rename only — every
+// model keeps an @@map to its original table and every renamed scalar keeps an
+// @map to its original column, so the database is untouched. "Drop" is what the
+// business calls this record everywhere else, and the old name kept reading as
+// "a physical thing", which is the Sku.
 // ============================================================================
 
 /// A drop: one sellable product definition. `totalSupply` is the number of
 /// serialized SKUs that will exist. `status` drives the release workflow
 /// (DRAFT → SUBMITTED → IN_REVIEW → APPROVED → PUBLISHED → ACTIVE → ENDED),
 /// with the decisions themselves recorded in the releases module.
-model Product {
+model Drop {
   id                String            @id @db.Uuid
   groupCode         String            @unique
   name              String
@@ -33,6 +40,9 @@ model Product {
   releaseStart      DateTime?
   releaseEnd        DateTime?
   status            DropStatus
+  /// When the drop becomes visible. Distinct from `publishedAt`, which records
+  /// when it actually was: this is the scheduled intent, set ahead of time.
+  publishAt         DateTime?
   publishedAt       DateTime?
   complianceStatus  ComplianceStatus
   /// Pointer to the published odds disclosure (required for randomised drops).
@@ -45,13 +55,13 @@ model Product {
   updatedAt         DateTime
 
   // ── Own-module back-relations ─────────────────────────────────────────────
-  productImages   ProductImage[]
-  productVariants ProductVariant[]
-  productPrices   ProductPrice[]
+  dropImages   DropImage[]
+  dropVariants DropVariant[]
+  dropPrices   DropPrice[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   skus             Sku[]
-  productClaims    ProductClaim[]
+  skuClaims        SkuClaim[]
   releaseApprovals ReleaseApproval[]
   mediaAssets      MediaAsset[]
   contentBundles   ContentBundle[]
@@ -61,21 +71,32 @@ model Product {
   wishlistItems    WishlistItem[]
   /// Per-product GST/sales-tax rates and HSN codes — see packages/tax.
   taxConfigurations TaxConfiguration[]
+  /// Monthly COGS variance reviews for this drop — see packages/finance.
+  cogsReconciliations CogsReconciliation[]
+  /// Vendor consignments received against this drop — see packages/supply.
+  supplyBatches       SupplyBatch[]
+
+  @@map("Product")
 }
 
-/// A purchasable option of a product — size, colourway, edition. Modelled as a
+/// A purchasable option of a drop — size, colourway, edition. Modelled as a
 /// single name/value pair per row, with the composite unique preventing the
-/// same option value twice on one product.
-model ProductVariant {
+/// same option value twice on one drop.
+model DropVariant {
   id          String    @id @db.Uuid
+  /// Kept as `productId` rather than renamed to `dropId`: the rename this
+  /// release asks for is of *models* and *relation fields*, and renaming this
+  /// scalar too would churn the compound key `productId_optionName_optionValue`
+  /// through every call site for no behavioural gain. DropPrice is the one
+  /// exception, because its unique key is being changed anyway.
   productId   String    @db.Uuid
-  product     Product   @relation(fields: [productId], references: [id])
+  drop        Drop      @relation(fields: [productId], references: [id])
   variantCode String    @unique
   label       String
   optionName  String
   optionValue String
   position    Int
-  /// Per-variant supply cap; null = drawn from the product's totalSupply.
+  /// Per-variant supply cap; null = drawn from the drop's totalSupply.
   totalSupply Int?
   isActive    Boolean
   archivedAt  DateTime?
@@ -83,7 +104,7 @@ model ProductVariant {
   updatedAt   DateTime
 
   // ── Own-module back-relations ─────────────────────────────────────────────
-  productPrices ProductPrice[]
+  dropPrices DropPrice[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   skus          Sku[]
@@ -91,15 +112,17 @@ model ProductVariant {
   wishlistItems WishlistItem[]
 
   @@unique([productId, optionName, optionValue])
+  @@map("ProductVariant")
 }
 
-/// Joins a product to a media asset for gallery display. The asset itself is
+/// Joins a drop to a media asset for gallery display. The asset itself is
 /// owned by the media module; this row only carries the placement (position,
 /// primary flag, alt text).
-model ProductImage {
+model DropImage {
   id         String     @id @db.Uuid
+  /// See the note on DropVariant.productId.
   productId  String     @db.Uuid
-  product    Product    @relation(fields: [productId], references: [id])
+  drop       Drop       @relation(fields: [productId], references: [id])
   assetId    String     @db.Uuid
   asset      MediaAsset @relation(fields: [assetId], references: [id])
   position   Int
@@ -109,28 +132,46 @@ model ProductImage {
   createdAt  DateTime
 
   @@unique([productId, assetId])
+  @@map("ProductImage")
 }
 
-/// Price of a product (optionally a specific variant) in one market. The
-/// composite unique guarantees a single active price point per
-/// product/variant/market triple. `costOfGoods` is stored here so the finance
-/// ledger can compute margin without re-deriving it.
-model ProductPrice {
-  id          String             @id @db.Uuid
-  productId   String             @db.Uuid
-  product     Product            @relation(fields: [productId], references: [id])
-  variantId   String?            @db.Uuid
-  variant     ProductVariant?    @relation(fields: [variantId], references: [id])
-  marketId    String             @db.Uuid
-  market      Market             @relation(fields: [marketId], references: [id])
-  amount      Decimal?           @db.Decimal(12, 2)
-  isFree      Boolean
-  costOfGoods Decimal?           @db.Decimal(12, 2)
-  status      ProductPriceStatus
-  createdAt   DateTime
-  updatedAt   DateTime
+/// Price of a drop (optionally a specific variant) in one market.
+/// `costOfGoods` is stored here so the finance ledger can compute margin
+/// without re-deriving it.
+///
+/// Prices are **versioned** rather than mutable: `effectiveFrom` /
+/// `effectiveTo` bound the window a row is in force for, and the composite
+/// unique includes `effectiveFrom` so the same drop/variant/market triple can
+/// hold its whole price history. The invariant that used to be enforced by the
+/// three-column unique — one active price per triple — is now a query
+/// condition (`effectiveFrom <= now AND (effectiveTo IS NULL OR effectiveTo >
+/// now)`), because a unique index cannot express "at most one *open* row".
+model DropPrice {
+  id            String          @id @db.Uuid
+  dropId        String          @map("productId") @db.Uuid
+  drop          Drop            @relation(fields: [dropId], references: [id])
+  variantId     String?         @db.Uuid
+  variant       DropVariant?    @relation(fields: [variantId], references: [id])
+  marketId      String          @db.Uuid
+  market        Market          @relation(fields: [marketId], references: [id])
+  amount        Decimal?        @db.Decimal(12, 2)
+  isFree        Boolean
+  costOfGoods   Decimal?        @db.Decimal(12, 2)
+  status        DropPriceStatus
+  /// Start of this price point's window. Defaults to now so an insert that
+  /// does not care about versioning behaves exactly as it did before.
+  effectiveFrom DateTime        @default(now())
+  /// Null while the price is current; set when a newer row supersedes it.
+  effectiveTo   DateTime?
+  /// Approver's user id. No foreign key — a price record must outlive the
+  /// account that signed it off, same rule as RoyaltyPayout.approvedById.
+  approvedById  String?         @db.Uuid
+  approvedAt    DateTime?
+  createdAt     DateTime
+  updatedAt     DateTime
 
-  @@unique([productId, variantId, marketId])
+  @@unique([dropId, variantId, marketId, effectiveFrom])
+  @@map("ProductPrice")
 }
 
 /// Lifecycle state of a drop. APPROVED means cleared for release; PUBLISHED
@@ -148,7 +189,9 @@ enum DropStatus {
 }
 
 /// Whether a price point is currently in effect.
-enum ProductPriceStatus {
+enum DropPriceStatus {
   ACTIVE
   DISABLED
+
+  @@map("ProductPriceStatus")
 }

@@ -13,11 +13,22 @@
 model Vendor {
   id           String     @id @db.Uuid
   name         String
+  /// Registered entity name, where it differs from the trading name we use.
+  legalName    String?
+  /// ISO 3166-1 alpha-2. Two characters, because a tag consignment crossing a
+  /// border is a customs question before it is a supply one.
+  country      String?    @db.VarChar(2)
   vendorType   VendorType
+  contactName  String?
   contactEmail String?
+  contactPhone String?
+  notes        String?
   isActive     Boolean
   archivedAt   DateTime?
   createdAt    DateTime
+  /// Defaulted rather than required so the column can be added to a table that
+  /// already has rows; @updatedAt keeps it current from here on.
+  updatedAt    DateTime   @default(now()) @updatedAt
 
   // ── Own-module back-relations ─────────────────────────────────────────────
   supplyBatchs SupplyBatch[]
@@ -44,6 +55,29 @@ model SupplyBatch {
   enteredBy     User           @relation(fields: [enteredById], references: [id])
   notes         String?
   createdAt     DateTime
+
+  // ── Vendor supply per drop (v3.1) ─────────────────────────────────────────
+  // A consignment is ordered *for* a drop, and the upload that creates it is
+  // validated row by row before anyone accepts it — hence the three counts and
+  // the status, which together are the whole of the vendor intake screen.
+  //
+  // TODO: make required after backfill (target: String)
+  dropId              String?           @db.Uuid
+  drop                Drop?             @relation(fields: [dropId], references: [id])
+  /// Defaulted so the column can be added to a table that already has rows.
+  batchDate           DateTime          @default(now()) @db.Date
+  status              SupplyBatchStatus @default(UPLOADED)
+  rowsReceived        Int               @default(0)
+  rowsAccepted        Int               @default(0)
+  rowsRejected        Int               @default(0)
+  vendorInvoiceRef    String?
+  /// Pointer to the stored validation report for the upload.
+  validationReportRef String?
+  updatedAt           DateTime          @default(now()) @updatedAt
+
+  // ── Own- and cross-module back-relations ──────────────────────────────────
+  skus    Sku[]
+  nfcTags NfcTag[]
 }
 
 /// What kind of supplier this is.
@@ -53,8 +87,21 @@ enum VendorType {
   OTHER
 }
 
-/// What a supply batch contains.
+/// What a supply batch contains. `COLLECTIBLE` is appended, never inserted —
+/// an enum value's position is part of the physical type in Postgres.
 enum SupplyItemType {
   NFC_TAG
   MERCHANDISE
+  /// A finished serialized item, chip already embedded.
+  COLLECTIBLE
+}
+
+/// Where a vendor consignment is in its intake review. UPLOADED is the raw
+/// file; VALIDATED means the rows parsed and passed their checks; ACCEPTED is
+/// a human's decision to take delivery.
+enum SupplyBatchStatus {
+  UPLOADED
+  VALIDATED
+  ACCEPTED
+  REJECTED
 }

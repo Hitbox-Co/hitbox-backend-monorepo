@@ -51,8 +51,8 @@ model Artist {
   releaseApprovals  ReleaseApproval[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
-  products      Product[]
-  productClaims ProductClaim[]
+  drops         Drop[]
+  skuClaims     SkuClaim[]
   mediaAssets   MediaAsset[]
   royaltyRules  RoyaltyRule[]
   follows       Follow[]
@@ -87,8 +87,8 @@ model ArtistCollection {
   updatedAt      DateTime
 
   // ── Cross-module back-relations ───────────────────────────────────────────
-  products       Product[]
-  productClaims  ProductClaim[]
+  drops          Drop[]
+  skuClaims      SkuClaim[]
   mediaAssets    MediaAsset[]
   contentBundles ContentBundle[]
   evolutionRules EvolutionRule[]

@@ -4,7 +4,7 @@
 //
 // Owns: Organization
 //
-// The tenant root. Almost every commercial record (product, order, media,
+// The tenant root. Almost every commercial record (drop, order, media,
 // royalty rule, gateway config) carries an optional organizationId, and
 // RoleAssignment uses an Organization id as its ORG scope.
 // ============================================================================
@@ -25,7 +25,7 @@ model Organization {
   artists               Artist[]
   releaseApprovals      ReleaseApproval[]
   artistCollections     ArtistCollection[]
-  products              Product[]
+  drops                 Drop[]
   artistBrandLinks      ArtistBrandLink[]
   roleAssignments       RoleAssignment[]
   mediaAssets           MediaAsset[]

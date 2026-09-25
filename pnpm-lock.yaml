@@ -1121,6 +1121,9 @@ importers:
       '@hitbox/access-control':
         specifier: workspace:*
         version: link:../../access-control
+      '@hitbox/audit':
+        specifier: workspace:*
+        version: link:../../audit
       '@prisma/client':
         specifier: ^6.12.0
         version: 6.19.3(prisma@6.19.3(typescript@5.9.3))(typescript@5.9.3)

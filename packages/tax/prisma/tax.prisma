@@ -46,7 +46,7 @@ model TaxConfiguration {
   /// Null means "the default for this jurisdiction", used when no
   /// product-specific row exists. Products are the specific case.
   productId      String?    @db.Uuid
-  product        Product?   @relation(fields: [productId], references: [id])
+  drop           Drop?      @relation(fields: [productId], references: [id])
   /// ISO 3166-1 alpha-2. 'IN' or 'US' today.
   countryCode    String     @db.VarChar(2)
   /// US only: the state whose rate this is ('CA'). Null for country-level rows
@@ -157,11 +157,11 @@ model Invoice {
   /// Guide v1.1 §8.1: a later re-versioning of the drop's pricing must never
   /// retroactively change an already-issued invoice.
   salesPriceSnapshot Decimal?  @db.Decimal(12, 2)
-  /// Pointer to the `product_cost` version that priced it. Plain id with NO
-  /// foreign key: that table is introduced by the COGS/Sales-Price change and
-  /// does not exist in this schema yet, and an invoice must never be blocked
-  /// from being issued by a pricing table it does not own. Null until it lands.
-  productCostId      String?   @db.Uuid
+  /// Pointer to the priced `DropPrice` version that priced it. Plain id with
+  /// NO foreign key: an invoice must never be blocked from being issued by a
+  /// pricing table it does not own. Renamed from `productCostId` in v3.1; the
+  /// column keeps its original name via @map, so nothing is migrated.
+  dropPriceId        String?   @map("productCostId") @db.Uuid
 
   // ── The document ──────────────────────────────────────────────────────────
   /// S3 key under `tax-invoices/`, never a URL. Null between the row being

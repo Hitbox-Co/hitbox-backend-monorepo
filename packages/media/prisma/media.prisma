@@ -5,7 +5,7 @@
 // Owns: MediaAsset
 //
 // The single upload registry for the whole platform. Nothing else stores a
-// storage path: products reference assets via ProductImage, content bundles via
+// storage path: drops reference assets via DropImage, content bundles via
 // ContentBundleItem. One place to enforce virus scanning and one place to
 // revoke a file.
 // ============================================================================
@@ -33,7 +33,7 @@ model MediaAsset {
   artistId       String?           @db.Uuid
   artist         Artist?           @relation(fields: [artistId], references: [id])
   productId      String?           @db.Uuid
-  product        Product?          @relation(fields: [productId], references: [id])
+  drop           Drop?             @relation(fields: [productId], references: [id])
   collectionId   String?           @db.Uuid
   collection     ArtistCollection? @relation(fields: [collectionId], references: [id])
 
@@ -41,7 +41,7 @@ model MediaAsset {
   createdAt  DateTime
 
   // ── Cross-module back-relations ───────────────────────────────────────────
-  productImages      ProductImage[]
+  dropImages         DropImage[]
   contentBundleItems ContentBundleItem[]
 }
 

@@ -52,6 +52,8 @@ function toResponse(row: OrganizationRow): OrganizationResponse {
         slug: row.slug,
         isActive: row.isActive,
         archivedAt: row.archivedAt?.toISOString() ?? null,
-        counts: { artists: row._count.artists, products: row._count.products },
+        // `products` stays as the response-body key — the Prisma relation was
+        // renamed to `drops`, the public shape was not.
+        counts: { artists: row._count.artists, products: row._count.drops },
     };
 }

@@ -90,7 +90,7 @@ export function toCollectionItem(
     mediaUrls?: IMediaUrlResolver | undefined,
 ): CollectionItemDto {
     const { sku } = row;
-    const storageRef = sku.product.productImages[0]?.asset.storageRef;
+    const storageRef = sku.drop.dropImages[0]?.asset.storageRef;
     return {
         id: row.id,
         visibility: row.visibility,
@@ -102,10 +102,10 @@ export function toCollectionItem(
             claimedStatus: sku.claimedStatus,
         },
         product: {
-            id: sku.product.id,
-            name: sku.product.name,
+            id: sku.drop.id,
+            name: sku.drop.name,
             imageUrl: storageRef ? (mediaUrls?.publicUrl(storageRef) ?? null) : null,
-            rarity: sku.product.rarity,
+            rarity: sku.drop.rarity,
         },
     };
 }

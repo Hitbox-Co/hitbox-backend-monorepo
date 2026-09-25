@@ -73,7 +73,7 @@ export class OrderWriteRepository {
      * UPDATE` that would serialise every checkout on the drop.
      */
     async placeOrder(params: PlaceOrderParams): Promise<PlaceOrderResult> {
-        const product = (await this.prisma.product.findUnique({
+        const product = (await this.prisma.drop.findUnique({
             where: { id: params.productId },
             select: {
                 id: true,
@@ -116,11 +116,18 @@ export class OrderWriteRepository {
         // drop has no price row for is not a market it is sold in, and
         // falling back to another market's number would charge someone in the
         // wrong currency.
-        const price = await this.prisma.productPrice.findFirst({
+        // Prices are versioned as of v3.1, so "the price" is the row whose
+        // effective window contains `now` — newest first, because two rows can
+        // legitimately share a window boundary. Before versioning this was the
+        // only row the three-column unique allowed; the condition below is what
+        // preserves that meaning now that history is kept alongside it.
+        const price = await this.prisma.dropPrice.findFirst({
             where: {
-                productId: params.productId,
+                dropId: params.productId,
                 variantId: params.variantId,
                 status: 'ACTIVE',
+                effectiveFrom: { lte: params.now },
+                OR: [{ effectiveTo: null }, { effectiveTo: { gt: params.now } }],
                 ...(params.marketId ? { marketId: params.marketId } : {}),
             },
             select: {
@@ -130,7 +137,7 @@ export class OrderWriteRepository {
                 marketId: true,
                 market: { select: { id: true, currency: true } },
             },
-            orderBy: { updatedAt: 'desc' },
+            orderBy: [{ effectiveFrom: 'desc' }, { updatedAt: 'desc' }],
         });
 
         if (!price || (!price.isFree && price.amount === null)) {
@@ -386,7 +393,7 @@ export class OrderWriteRepository {
                 amount: true,
                 currency: true,
                 gateway: true,
-                product: { select: { collectionId: true, artistId: true } },
+                drop: { select: { collectionId: true, artistId: true } },
             },
         });
     }
@@ -394,9 +401,9 @@ export class OrderWriteRepository {
     /**
      * The settled order behind a serialized unit, with its cost of goods.
      *
-     * Reaches `product.productPrices` — two hops into another module's
+     * Reaches `drop.dropPrices` — two hops into another module's
      * partial. The same documented shortcut collections takes through
-     * `sku.product`, and for the same reason: COGS lives on the price row, the
+     * `sku.drop`, and for the same reason: COGS lives on the price row, the
      * accrual needs it, and a port for one decimal would be ceremony. On
      * extraction this hop becomes a call to the catalog service.
      */
@@ -417,11 +424,11 @@ export class OrderWriteRepository {
                 quantity: true,
                 amount: true,
                 currency: true,
-                product: {
+                drop: {
                     select: {
                         collectionId: true,
                         artistId: true,
-                        productPrices: {
+                        dropPrices: {
                             where: { status: 'ACTIVE' },
                             select: {
                                 marketId: true,
@@ -450,11 +457,11 @@ export class OrderWriteRepository {
                 quantity: true,
                 amount: true,
                 currency: true,
-                product: {
+                drop: {
                     select: {
                         collectionId: true,
                         artistId: true,
-                        productPrices: {
+                        dropPrices: {
                             where: { status: 'ACTIVE' },
                             select: {
                                 marketId: true,
@@ -491,7 +498,7 @@ export class OrderWriteRepository {
                 amount: true,
                 currency: true,
                 placedAt: true,
-                product: { select: { name: true } },
+                drop: { select: { name: true } },
                 buyer: { select: { fullName: true, email: true } },
                 orderAddresss: {
                     // Billing, and only billing: the invoice states where the

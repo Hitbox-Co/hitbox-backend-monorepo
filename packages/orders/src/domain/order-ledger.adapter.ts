@@ -126,10 +126,10 @@ export class OrderRevenueAdapter {
         quantity: number;
         amount: Prisma.Decimal;
         currency: string;
-        product: {
+        drop: {
             collectionId: string | null;
             artistId: string | null;
-            productPrices: {
+            dropPrices: {
                 marketId: string;
                 variantId: string | null;
                 costOfGoods: Prisma.Decimal | null;
@@ -137,10 +137,10 @@ export class OrderRevenueAdapter {
         };
     }) {
         const priceRow =
-            order.product.productPrices.find(
+            order.drop.dropPrices.find(
                 (row) => row.marketId === order.marketId && row.variantId === order.variantId,
             ) ??
-            order.product.productPrices.find((row) => row.marketId === order.marketId) ??
+            order.drop.dropPrices.find((row) => row.marketId === order.marketId) ??
             null;
 
         const unitCost = priceRow?.costOfGoods ?? null;
@@ -151,8 +151,8 @@ export class OrderRevenueAdapter {
             buyerId: order.buyerId,
             organizationId: order.organizationId,
             productId: order.productId,
-            collectionId: order.product.collectionId,
-            artistId: order.product.artistId,
+            collectionId: order.drop.collectionId,
+            artistId: order.drop.artistId,
             marketId: order.marketId,
             grossRevenue: order.amount.toFixed(2),
             // Cost is per unit in the catalog; the order's gross covers
@@ -188,7 +188,7 @@ export class OrderInvoicingAdapter {
             organizationId: order.organizationId,
             productId: order.productId,
             skuId: order.skuId,
-            productName: order.product.name,
+            productName: order.drop.name,
             quantity: order.quantity,
             unitPrice: order.unitPrice.toFixed(2),
             amount: order.amount.toFixed(2),

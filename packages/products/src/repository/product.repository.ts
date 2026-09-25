@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { DropStatus, Prisma, ProductPriceStatus } from '@hitbox/database';
+import { DropStatus, Prisma, DropPriceStatus } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
 import type { ProductCache } from '../cache/product-cache';
 import type { ListProductsQuery } from '../dto/product.dto';
@@ -25,12 +25,12 @@ const imageArgs = {
     where: { archivedAt: null },
     orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
     select: { asset: { select: { storageRef: true } } },
-} satisfies Prisma.Product$productImagesArgs;
+} satisfies Prisma.Drop$dropImagesArgs;
 
 /** The one base price a market-less feed can legitimately show. */
 const basePriceArgs = {
     where: {
-        status: ProductPriceStatus.ACTIVE,
+        status: DropPriceStatus.ACTIVE,
         variantId: null,
         market: { isDefault: true, isActive: true },
     },
@@ -40,36 +40,36 @@ const basePriceArgs = {
         isFree: true,
         market: { select: { currency: true, code: true } },
     },
-} satisfies Prisma.Product$productPricesArgs;
+} satisfies Prisma.Drop$dropPricesArgs;
 
 const listInclude = {
-    productImages: imageArgs,
-    productPrices: basePriceArgs,
-    productVariants: { where: { archivedAt: null }, orderBy: { position: 'asc' } },
+    dropImages: imageArgs,
+    dropPrices: basePriceArgs,
+    dropVariants: { where: { archivedAt: null }, orderBy: { position: 'asc' } },
     collection: { include: { artist: true } },
     artist: true,
-} satisfies Prisma.ProductInclude;
+} satisfies Prisma.DropInclude;
 
-export type ProductWithRelations = Prisma.ProductGetPayload<{ include: typeof listInclude }>;
+export type ProductWithRelations = Prisma.DropGetPayload<{ include: typeof listInclude }>;
 
 const discoverSelect = {
     id: true,
     name: true,
-    productImages: { ...imageArgs, take: 1 },
-} satisfies Prisma.ProductSelect;
+    dropImages: { ...imageArgs, take: 1 },
+} satisfies Prisma.DropSelect;
 
-export type ProductDiscoverRow = Prisma.ProductGetPayload<{ select: typeof discoverSelect }>;
+export type ProductDiscoverRow = Prisma.DropGetPayload<{ select: typeof discoverSelect }>;
 
 const marketplaceSelect = {
     id: true,
     name: true,
-    productImages: { ...imageArgs, take: 1 },
-    productPrices: basePriceArgs,
+    dropImages: { ...imageArgs, take: 1 },
+    dropPrices: basePriceArgs,
     collection: { select: { artist: { select: { name: true } } } },
     artist: { select: { name: true } },
-} satisfies Prisma.ProductSelect;
+} satisfies Prisma.DropSelect;
 
-export type ProductListingRow = Prisma.ProductGetPayload<{ select: typeof marketplaceSelect }>;
+export type ProductListingRow = Prisma.DropGetPayload<{ select: typeof marketplaceSelect }>;
 
 /** One gallery placement, with the asset it points at. */
 const productImageSelect = {
@@ -80,9 +80,9 @@ const productImageSelect = {
     altText: true,
     createdAt: true,
     asset: { select: { storageRef: true } },
-} satisfies Prisma.ProductImageSelect;
+} satisfies Prisma.DropImageSelect;
 
-export type ProductImageRow = Prisma.ProductImageGetPayload<{
+export type ProductImageRow = Prisma.DropImageGetPayload<{
     select: typeof productImageSelect;
 }>;
 
@@ -98,9 +98,9 @@ const productPriceSelect = {
     createdAt: true,
     updatedAt: true,
     market: { select: { code: true, name: true, currency: true } },
-} satisfies Prisma.ProductPriceSelect;
+} satisfies Prisma.DropPriceSelect;
 
-export type ProductPriceRow = Prisma.ProductPriceGetPayload<{
+export type ProductPriceRow = Prisma.DropPriceGetPayload<{
     select: typeof productPriceSelect;
 }>;
 
@@ -111,7 +111,7 @@ export interface NormalisedPrice {
     amount: string | null;
     isFree: boolean;
     costOfGoods: string | null;
-    status: ProductPriceStatus;
+    status: DropPriceStatus;
 }
 
 /** A gallery entry after the service has resolved order and the primary flag. */
@@ -176,7 +176,7 @@ export interface ProductPerformance {
 export const PRODUCT_SORTS = {
     newest: { createdAt: 'desc' },
     popular: { skus: { _count: 'desc' } },
-} satisfies Record<string, Prisma.ProductOrderByWithRelationInput>;
+} satisfies Record<string, Prisma.DropOrderByWithRelationInput>;
 
 export type ProductSort = keyof typeof PRODUCT_SORTS;
 
@@ -188,7 +188,7 @@ export type ProductSort = keyof typeof PRODUCT_SORTS;
  * enough — `isActive` is a separate kill switch and `archivedAt` is the soft
  * delete, and a row can carry any combination.
  */
-export const PUBLIC_PRODUCT_WHERE: Prisma.ProductWhereInput = {
+export const PUBLIC_PRODUCT_WHERE: Prisma.DropWhereInput = {
     status: DropStatus.ACTIVE,
     isActive: true,
     archivedAt: null,
@@ -207,7 +207,7 @@ export class ProductRepository {
         const cached = await this.cache.getList<Result>('catalog', query);
         if (cached) return cached;
 
-        const where: Prisma.ProductWhereInput = {
+        const where: Prisma.DropWhereInput = {
             // An explicit status filter overrides the public default, so admin
             // tooling can list DRAFT/IN_REVIEW drops through the same method.
             ...(query.status ? { isActive: true, archivedAt: null, status: query.status } : PUBLIC_PRODUCT_WHERE),
@@ -222,14 +222,14 @@ export class ProductRepository {
         };
 
         const [items, total] = await this.prisma.$transaction([
-            this.prisma.product.findMany({
+            this.prisma.drop.findMany({
                 where,
                 include: listInclude,
                 orderBy: PRODUCT_SORTS[query.sort],
                 skip: (query.page - 1) * query.limit,
                 take: query.limit,
             }),
-            this.prisma.product.count({ where }),
+            this.prisma.drop.count({ where }),
         ]);
 
         const result: Result = { items, total };
@@ -239,8 +239,8 @@ export class ProductRepository {
 
     /** Minimal card projection for the discover feed — no joins beyond one image. */
     async findForDiscover(params: {
-        where: Prisma.ProductWhereInput;
-        orderBy: Prisma.ProductOrderByWithRelationInput;
+        where: Prisma.DropWhereInput;
+        orderBy: Prisma.DropOrderByWithRelationInput;
         skip: number;
         take: number;
     }): Promise<{ items: ProductDiscoverRow[]; total: number }> {
@@ -249,14 +249,14 @@ export class ProductRepository {
         if (cached) return cached;
 
         const [items, total] = await this.prisma.$transaction([
-            this.prisma.product.findMany({
+            this.prisma.drop.findMany({
                 where: params.where,
                 select: discoverSelect,
                 orderBy: params.orderBy,
                 skip: params.skip,
                 take: params.take,
             }),
-            this.prisma.product.count({ where: params.where }),
+            this.prisma.drop.count({ where: params.where }),
         ]);
 
         const result: Result = { items, total };
@@ -266,8 +266,8 @@ export class ProductRepository {
 
     /** Listing card projection for the marketplace feed — price + artist name. */
     async findForMarketplace(params: {
-        where: Prisma.ProductWhereInput;
-        orderBy: Prisma.ProductOrderByWithRelationInput;
+        where: Prisma.DropWhereInput;
+        orderBy: Prisma.DropOrderByWithRelationInput;
         skip: number;
         take: number;
     }): Promise<{ items: ProductListingRow[]; total: number }> {
@@ -276,14 +276,14 @@ export class ProductRepository {
         if (cached) return cached;
 
         const [items, total] = await this.prisma.$transaction([
-            this.prisma.product.findMany({
+            this.prisma.drop.findMany({
                 where: params.where,
                 select: marketplaceSelect,
                 orderBy: params.orderBy,
                 skip: params.skip,
                 take: params.take,
             }),
-            this.prisma.product.count({ where: params.where }),
+            this.prisma.drop.count({ where: params.where }),
         ]);
 
         const result: Result = { items, total };
@@ -295,7 +295,7 @@ export class ProductRepository {
         const cached = await this.cache.getEntity<ProductWithRelations>('id', id);
         if (cached) return cached;
 
-        const product = await this.prisma.product.findUnique({
+        const product = await this.prisma.drop.findUnique({
             where: { id },
             include: listInclude,
         });
@@ -313,7 +313,7 @@ export class ProductRepository {
         const cached = await this.cache.getEntity<ProductWithRelations>('code', groupCode);
         if (cached) return cached;
 
-        const product = await this.prisma.product.findUnique({
+        const product = await this.prisma.drop.findUnique({
             where: { groupCode },
             include: listInclude,
         });
@@ -427,23 +427,23 @@ export class ProductRepository {
      * with an edition that was supposed to be minted and was not.
      */
     async create(
-        data: Prisma.ProductCreateInput,
+        data: Prisma.DropCreateInput,
         onCreated?: (
             tx: Prisma.TransactionClient,
             product: { id: string; groupCode: string; totalSupply: number },
         ) => Promise<void>,
     ): Promise<ProductWithRelations> {
         if (!onCreated) {
-            return this.prisma.product.create({ data, include: listInclude });
+            return this.prisma.drop.create({ data, include: listInclude });
         }
         return this.prisma.$transaction(
             async (tx) => {
-                const created = await tx.product.create({ data, include: listInclude });
+                const created = await tx.drop.create({ data, include: listInclude });
                 await onCreated(tx, created);
                 // Re-read inside the transaction: `created` was projected before
                 // the callback ran, so a gallery written by it is absent from that
                 // snapshot and the response would claim the drop has no images.
-                return (await tx.product.findUniqueOrThrow({
+                return (await tx.drop.findUniqueOrThrow({
                     where: { id: created.id },
                     include: listInclude,
                 })) as ProductWithRelations;
@@ -470,8 +470,8 @@ export class ProductRepository {
         );
     }
 
-    async update(id: string, data: Prisma.ProductUpdateInput): Promise<ProductWithRelations> {
-        const product = await this.prisma.product.update({
+    async update(id: string, data: Prisma.DropUpdateInput): Promise<ProductWithRelations> {
+        const product = await this.prisma.drop.update({
             where: { id },
             data: { ...data, updatedAt: new Date() },
             include: listInclude,
@@ -487,7 +487,7 @@ export class ProductRepository {
 
     /** Live placements for one product, ordered as they render. */
     listImages(productId: string): Promise<ProductImageRow[]> {
-        return this.prisma.productImage.findMany({
+        return this.prisma.dropImage.findMany({
             where: { productId, archivedAt: null },
             select: productImageSelect,
             orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
@@ -495,7 +495,7 @@ export class ProductRepository {
     }
 
     findImage(productId: string, imageId: string): Promise<ProductImageRow | null> {
-        return this.prisma.productImage.findFirst({
+        return this.prisma.dropImage.findFirst({
             where: { id: imageId, productId, archivedAt: null },
             select: productImageSelect,
         });
@@ -530,14 +530,14 @@ export class ProductRepository {
             const keepAssetIds = entries.map((entry) => entry.assetId);
 
             if (mode === 'replace') {
-                await client.productImage.updateMany({
+                await client.dropImage.updateMany({
                     where: { productId, archivedAt: null, assetId: { notIn: keepAssetIds } },
                     data: { archivedAt: now },
                 });
             }
 
             for (const entry of entries) {
-                await client.productImage.upsert({
+                await client.dropImage.upsert({
                     where: { productId_assetId: { productId, assetId: entry.assetId } },
                     create: {
                         id: randomUUID(),
@@ -562,7 +562,7 @@ export class ProductRepository {
             // claims it is demoted here rather than left as a second primary.
             const primary = entries.find((entry) => entry.isPrimary);
             if (primary) {
-                await client.productImage.updateMany({
+                await client.dropImage.updateMany({
                     where: {
                         productId,
                         archivedAt: null,
@@ -580,7 +580,7 @@ export class ProductRepository {
         // would report an empty gallery.
         if (tx) {
             await run(tx);
-            return tx.productImage.findMany({
+            return tx.dropImage.findMany({
                 where: { productId, archivedAt: null },
                 select: productImageSelect,
                 orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
@@ -594,9 +594,28 @@ export class ProductRepository {
 
     // ── Prices ──────────────────────────────────────────────────────────
 
+    /**
+     * "The price that is in force right now", as a where-clause.
+     *
+     * `DropPrice` is versioned as of v3.1: `@@unique([dropId, variantId,
+     * marketId, effectiveFrom])` lets one drop/variant/market triple hold its
+     * whole price history, which means a unique index can no longer express
+     * "at most one active price" — a superseded row is still a row. Every read
+     * below that used to mean "the price" now says so explicitly.
+     *
+     * Existing rows all have `effectiveTo` null and an `effectiveFrom` of the
+     * migration time, so they all satisfy this and behaviour is unchanged.
+     */
+    private static currentPrice(now = new Date()): Prisma.DropPriceWhereInput {
+        return {
+            effectiveFrom: { lte: now },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+        };
+    }
+
     listPrices(productId: string): Promise<ProductPriceRow[]> {
-        return this.prisma.productPrice.findMany({
-            where: { productId },
+        return this.prisma.dropPrice.findMany({
+            where: { dropId: productId, ...ProductRepository.currentPrice() },
             select: productPriceSelect,
             // Base prices (variantId null) before variant overrides, then by
             // market code — the order a pricing table reads in.
@@ -605,8 +624,8 @@ export class ProductRepository {
     }
 
     findPrice(productId: string, priceId: string): Promise<ProductPriceRow | null> {
-        return this.prisma.productPrice.findFirst({
-            where: { id: priceId, productId },
+        return this.prisma.dropPrice.findFirst({
+            where: { id: priceId, dropId: productId },
             select: productPriceSelect,
         });
     }
@@ -614,13 +633,10 @@ export class ProductRepository {
     /**
      * Writes the price list for one product.
      *
-     * `mode: 'replace'` deletes price points not in `entries`. Deletion rather
-     * than soft-archive because `@@unique([productId, variantId, marketId])`
-     * spans every row: a soft-archived price would permanently block that
-     * market from ever being priced again, and unlike a gallery placement a
-     * price point carries no history worth keeping — an *order* snapshots what
-     * it charged at purchase time, so nothing downstream reads back through
-     * this row.
+     * `mode: 'replace'` deletes price points not in `entries`, and only ones
+     * currently in force. Deletion rather than soft-archive because an *order*
+     * snapshots what it charged at purchase time, so nothing downstream reads
+     * back through this row.
      */
     async writePrices(
         productId: string,
@@ -636,17 +652,18 @@ export class ProductRepository {
                     marketId: entry.marketId,
                     variantId: entry.variantId,
                 }));
-                await client.productPrice.deleteMany({
+                await client.dropPrice.deleteMany({
                     where: {
-                        productId,
+                        dropId: productId,
+                        ...ProductRepository.currentPrice(now),
                         ...(keep.length > 0 ? { NOT: { OR: keep } } : {}),
                     },
                 });
             }
 
-            // Matched by hand rather than through `upsert`, because
-            // `@@unique([productId, variantId, marketId])` cannot be used as a
-            // lookup key here: `variantId` is nullable, and in Postgres NULLs
+            // Matched by hand rather than through `upsert`, because the
+            // compound unique cannot be used as a lookup key here:
+            // `variantId` is nullable, and in Postgres NULLs
             // never collide in a unique index. So the constraint does NOT
             // actually prevent two *base* prices (variantId NULL) for the same
             // market, and Prisma will not accept null in the compound key
@@ -654,8 +671,8 @@ export class ProductRepository {
             // `marketId::variantId` handles both cases and is the only place
             // that uniqueness is genuinely enforced — which is why the service
             // rejects duplicates in the payload before we get here.
-            const current = await client.productPrice.findMany({
-                where: { productId },
+            const current = await client.dropPrice.findMany({
+                where: { dropId: productId, ...ProductRepository.currentPrice(now) },
                 select: { id: true, marketId: true, variantId: true },
             });
             const existing = new Map(
@@ -674,12 +691,12 @@ export class ProductRepository {
                 };
 
                 if (id) {
-                    await client.productPrice.update({ where: { id }, data: values });
+                    await client.dropPrice.update({ where: { id }, data: values });
                 } else {
-                    await client.productPrice.create({
+                    await client.dropPrice.create({
                         data: {
                             id: randomUUID(),
-                            productId,
+                            dropId: productId,
                             variantId: entry.variantId,
                             marketId: entry.marketId,
                             createdAt: now,
@@ -694,8 +711,8 @@ export class ProductRepository {
         // committed, so `this.prisma` would see none of these rows.
         if (tx) {
             await run(tx);
-            return tx.productPrice.findMany({
-                where: { productId },
+            return tx.dropPrice.findMany({
+                where: { dropId: productId, ...ProductRepository.currentPrice() },
                 select: productPriceSelect,
                 orderBy: [{ variantId: 'asc' }, { market: { code: 'asc' } }],
             });
@@ -709,9 +726,9 @@ export class ProductRepository {
     async updatePrice(
         productId: string,
         priceId: string,
-        data: Prisma.ProductPriceUpdateInput,
+        data: Prisma.DropPriceUpdateInput,
     ): Promise<ProductPriceRow[]> {
-        await this.prisma.productPrice.update({
+        await this.prisma.dropPrice.update({
             where: { id: priceId },
             data: { ...data, updatedAt: new Date() },
         });
@@ -720,18 +737,20 @@ export class ProductRepository {
     }
 
     async deletePrice(productId: string, priceId: string): Promise<ProductPriceRow[]> {
-        await this.prisma.productPrice.delete({ where: { id: priceId } });
+        await this.prisma.dropPrice.delete({ where: { id: priceId } });
         await Promise.all([this.cache.invalidateEntity(productId), this.cache.invalidateLists()]);
         return this.listPrices(productId);
     }
 
     countPrices(productId: string): Promise<number> {
-        return this.prisma.productPrice.count({ where: { productId } });
+        return this.prisma.dropPrice.count({
+            where: { dropId: productId, ...ProductRepository.currentPrice() },
+        });
     }
 
     /** Which variant ids actually belong to this product. */
     async variantIdsOf(productId: string): Promise<string[]> {
-        const rows = await this.prisma.productVariant.findMany({
+        const rows = await this.prisma.dropVariant.findMany({
             where: { productId },
             select: { id: true },
         });
@@ -741,7 +760,7 @@ export class ProductRepository {
     /** Soft-removes one placement. The `MediaAsset` itself is untouched. */
     async archiveImage(productId: string, imageId: string): Promise<ProductImageRow[]> {
         await this.prisma.$transaction(async (tx) => {
-            const removed = await tx.productImage.update({
+            const removed = await tx.dropImage.update({
                 where: { id: imageId },
                 data: { archivedAt: new Date(), isPrimary: false },
                 select: { isPrimary: true },
@@ -749,13 +768,13 @@ export class ProductRepository {
             // Removing the primary promotes the next image rather than leaving
             // the drop with a gallery and no card image.
             if (removed.isPrimary) {
-                const next = await tx.productImage.findFirst({
+                const next = await tx.dropImage.findFirst({
                     where: { productId, archivedAt: null },
                     orderBy: { position: 'asc' },
                     select: { id: true },
                 });
                 if (next) {
-                    await tx.productImage.update({
+                    await tx.dropImage.update({
                         where: { id: next.id },
                         data: { isPrimary: true },
                     });
@@ -776,7 +795,7 @@ export class ProductRepository {
      */
     async archive(id: string): Promise<ProductWithRelations> {
         const now = new Date();
-        const product = await this.prisma.product.update({
+        const product = await this.prisma.drop.update({
             where: { id },
             data: { isActive: false, archivedAt: now, status: DropStatus.ARCHIVED, updatedAt: now },
             include: listInclude,

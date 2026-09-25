@@ -40,10 +40,10 @@ describe('cache codec', () => {
             releaseStart: new Date('2026-10-01T09:00:00.000Z'),
             releaseEnd: null,
             createdAt: new Date('2026-09-01T00:00:00.000Z'),
-            productPrices: [
+            dropPrices: [
                 { amount: new Prisma.Decimal('1999.00'), isFree: false, market: { code: 'IN' } },
             ],
-            productImages: [{ asset: { storageRef: 'drop-images/a.jpg' } }],
+            dropImages: [{ asset: { storageRef: 'drop-images/a.jpg' } }],
         };
         const back = deserialise<typeof row>(serialise(row));
 
@@ -54,9 +54,9 @@ describe('cache codec', () => {
         // so `new Decimal('1999.00').toString()` is `'1999'`. That is faithful
         // round-tripping, not data loss, but it is also why the API formats
         // money with toFixed(2) rather than toString().
-        expect(back.productPrices[0]!.amount.toFixed(2)).toBe('1999.00');
-        expect(back.productPrices[0]!.amount.equals(new Prisma.Decimal('1999'))).toBe(true);
-        expect(back.productImages[0]!.asset.storageRef).toBe('drop-images/a.jpg');
+        expect(back.dropPrices[0]!.amount.toFixed(2)).toBe('1999.00');
+        expect(back.dropPrices[0]!.amount.equals(new Prisma.Decimal('1999'))).toBe(true);
+        expect(back.dropImages[0]!.asset.storageRef).toBe('drop-images/a.jpg');
         expect(back.name).toBe('Neon Drift');
     });
 

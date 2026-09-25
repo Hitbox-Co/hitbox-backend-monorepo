@@ -6,6 +6,10 @@
 > How much of a unit you get back depends on **your grants**, not on the
 > endpoint. Section 6 is the matrix.
 >
+> **Editing units after they exist** — trust flags, tag lifecycle state,
+> archival, the batch endpoint, and the full filter set — is
+> [sku-inventory-management.md](sku-inventory-management.md).
+>
 > Creating the drop itself, the accepted request formats (and the `422`
 > troubleshooting table), and the image gallery:
 > [product-upload-api.md](product-upload-api.md).
@@ -368,21 +372,38 @@ waiting for one. That pair is how an operator drives a partial rollout.
 (`manage` satisfies `read`, so every role holding `collectible-instance:manage`
 qualifies without listing both.)
 
+The most-used filters are below. **The full set — serial ranges, owner, vendor
+and provisioning-batch, tamper state, date windows, `archivedOnly`, and the
+extra sorts — is
+[sku-inventory-management.md 5](sku-inventory-management.md).**
+
 | Query param | Type | Default | Notes |
 |---|---|---|---|
 | `page` / `limit` | int | `1` / `50` | `limit` max `200` |
-| `claimedStatus` | `UNCLAIMED` \| `CLAIMED` \| `IN_TRANSFER` \| `FLAGGED` | — | |
-| `tagLifecycleState` | `UNPROVISIONED` \| `BOUND` \| `ACTIVE` \| `LOST` \| `REVOKED` \| `DISPUTED` | — | |
+| `claimedStatus` | `UNCLAIMED` \| `CLAIMED` \| `IN_TRANSFER` \| `FLAGGED` | — | repeatable: `?claimedStatus=UNCLAIMED,FLAGGED` |
+| `tagLifecycleState` | `UNPROVISIONED` \| `BOUND` \| `ACTIVE` \| `LOST` \| `REVOKED` \| `DISPUTED` | — | repeatable |
 | `variantId` | uuid | — | |
+| `serialFrom` / `serialTo` | int | — | inclusive |
 | `tagged` | boolean | — | `true` = has a tag bound, `false` = awaiting one |
-| `resaleBlocked` | boolean | — | |
+| `resaleBlocked` | boolean | — | needs the trust block — see 6 |
+| `isActive` | boolean | — | |
 | `includeArchived` | boolean | `false` | |
 | `search` | string | — | matches serial number, `skuCode` fragment, or a full tag UID |
-| `sort` | `serial_asc` \| `serial_desc` \| `newest` | `serial_asc` | |
+| `sort` | `serial_asc` \| `serial_desc` \| `newest` \| `oldest` \| `recently_updated` \| `code_asc` | `serial_asc` | |
 
 A digits-only `search` term is matched against the serial number as well as the
 code, because an operator holding the physical item reads "#14" off the card,
-not `123456780042-000014`.
+not `123456780042-000014`. The tag-UID branch of `search` is only applied for a
+caller who may read tag UIDs.
+
+**Booleans mean what they say.** `?tagged=false` lists the *untagged* units.
+This used to be parsed with `Boolean(input)`, under which `Boolean('false')` is
+`true` and every `=false` meant its opposite — see
+[sku-inventory-management.md 5.3](sku-inventory-management.md).
+
+**A filter is a read of the column it names**, so a caller who is not shown tag
+UIDs may not filter by one. The gated list is in
+[sku-inventory-management.md 5.2](sku-inventory-management.md).
 
 **Response** — this is a **System Admin** view; see 6 for what other roles get:
 
@@ -398,6 +419,7 @@ not `123456780042-000014`.
       "isActive": true,
       "archivedAt": null,
       "createdAt": "2026-09-15T10:04:22.118Z",
+      "updatedAt": "2026-09-22T11:20:03.774Z",
       "trust": {
         "resaleBlocked": false,
         "resaleBlockedReason": null,
@@ -465,6 +487,7 @@ printed on the item, the UUID is not written anywhere physical.
     "isActive": true,
     "archivedAt": null,
     "createdAt": "2026-09-15T10:04:22.118Z",
+    "updatedAt": "2026-09-22T11:20:03.774Z",
 
     "product": {
       "productId": "0f1e2d3c-4b5a-6978-8766-554433221100",
@@ -476,7 +499,9 @@ printed on the item, the UUID is not written anywhere physical.
     },
 
     "trust":  { "resaleBlocked": false, "resaleBlockedReason": null, "tamperStatus": null },
-    "tag":    { "tagId": "04A39B2C5D6E80", "tagLifecycleState": "ACTIVE", "lastTapCounter": 7 },
+    "tag":    { "tagId": "04A39B2C5D6E80", "tagLifecycleState": "ACTIVE", "lastTapCounter": 7,
+                "vendorId": null, "provisioningBatchId": "BATCH-2026-09-41",
+                "vendorAuthenticatedAt": null },
     "owner":  { "ownerId": "7788…", "email": "jane.doe@example.com", "handle": "janedrifts" },
 
     "provenance": {
@@ -524,9 +549,9 @@ each is gated by its own resource rather than by one "can you see SKUs" flag:
 
 | Block | Gated by | Contains |
 |---|---|---|
-| *(identity)* | always present | `skuId`, `skuCode`, `serialNumber`, `claimedStatus`, `variantId`, `isActive`, `createdAt` |
+| *(identity)* | always present | `skuId`, `skuCode`, `serialNumber`, `claimedStatus`, `variantId`, `isActive`, `createdAt`, `updatedAt` |
 | `trust` | `collectible-instance` at **FULL** | `resaleBlocked`, `resaleBlockedReason`, `tamperStatus` |
-| `tag` | `nfc-tag-claim` | `tagId`, `tagLifecycleState`, `lastTapCounter` (FULL only) |
+| `tag` | `nfc-tag-claim` | `tagId`, `tagLifecycleState`; `lastTapCounter`, `vendorId`, `provisioningBatchId`, `vendorAuthenticatedAt` (FULL only) |
 | `owner` | `buyer-profile` | `ownerId`, `email`, `handle` |
 | `provenance` | `nfc-tag-claim` | claim count, ledger length, holder timestamps |
 | `commerce` | `order` | allocated order, reservation status |
@@ -644,6 +669,10 @@ All errors use the platform envelope:
 | `409` | `SKUS_TAG_REPLACE_REFUSED` | re-tagging a claimed unit whose tag is still healthy |
 | `422` | `VALIDATION_ERROR` | schema failure — e.g. `tagIds` length ≠ `count` |
 
+The edit and batch endpoints add `SKUS_NO_CHANGES`, `SKUS_UPDATE_FORBIDDEN`,
+`SKUS_FILTER_FORBIDDEN`, `SKUS_UPDATE_REFUSED`, `SKUS_BATCH_REJECTED` and
+`SKUS_BATCH_EMPTY` — [sku-inventory-management.md 8](sku-inventory-management.md).
+
 **Out-of-scope records return `404`, not `403`.** A `403` confirms the id
 exists, which is itself a fact about another brand's catalog.
 
@@ -682,10 +711,13 @@ name will be wrong the moment an operator defines a new role.
 
 ## 9. Not built
 
+The first three gaps this section used to list — changing a tag's lifecycle
+state, blocking resale, and archiving a unit — are now built. They are
+[sku-inventory-management.md](sku-inventory-management.md), along with a batch
+form of all three. What remains:
+
 | Gap | Note |
 |---|---|
-| Change a tag's lifecycle state | No endpoint sets `LOST` / `REVOKED` / `DISPUTED`, which means the re-tag path in 3a rule 5 cannot currently be unblocked for a claimed unit. This is the most useful next addition |
-| Block / unblock resale on a unit | `resaleBlocked` + `resaleBlockedReason` are readable and set to `false` at mint; nothing writes them |
-| Archive a unit | `Sku.archivedAt` is readable and filterable; nothing sets it |
 | Transfer ownership administratively | ownership moves only through the claims module today |
 | Link a binding to a `SupplyBatch` | `provisioningBatchId` is a free-text reference, not a foreign key — the `supply` module owns `SupplyBatch` and nothing joins the two |
+| Bulk *rebinding* of tags | The batch endpoint edits lifecycle state, not `tagId`. Rebinding stays on the manifest endpoint (3a), which carries the clone-prevention rules |

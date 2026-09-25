@@ -30,7 +30,7 @@ const approvalSelect = {
     approver: { select: { email: true, fullName: true } },
     requiredArtist: { select: { name: true } },
     requiredOrganization: { select: { name: true } },
-    product: {
+    drop: {
         select: {
             id: true, groupCode: true, name: true, status: true,
             complianceStatus: true, isAgeSpecific: true, minimumAge: true,
@@ -64,7 +64,7 @@ export class ReleaseRepository {
         const where: Prisma.ReleaseApprovalWhereInput = {
             ...(query.organizationIds === null
                 ? {}
-                : { product: { organizationId: { in: query.organizationIds } } }),
+                : { drop: { organizationId: { in: query.organizationIds } } }),
             ...(query.status ? { status: query.status } : {}),
             ...(query.complianceStatus ? { complianceStatus: query.complianceStatus } : {}),
             ...(query.productId ? { productId: query.productId } : {}),
@@ -106,7 +106,7 @@ export class ReleaseRepository {
         artistId: string | null;
         artistUserId: string | null;
     } | null> {
-        const product = await this.prisma.product.findUnique({
+        const product = await this.prisma.drop.findUnique({
             where: { id: productId },
             select: {
                 organizationId: true,
@@ -193,7 +193,7 @@ export class ReleaseRepository {
                     updatedAt: now,
                 },
             });
-            await tx.product.update({
+            await tx.drop.update({
                 where: { id: input.productId },
                 data: { status: DropStatus.SUBMITTED, updatedAt: now },
             });
@@ -276,7 +276,7 @@ export class ReleaseRepository {
             });
             if (result.count === 0) return 0;
 
-            await tx.product.update({
+            await tx.drop.update({
                 where: { id: input.productId },
                 data: {
                     complianceStatus: input.complianceStatus,

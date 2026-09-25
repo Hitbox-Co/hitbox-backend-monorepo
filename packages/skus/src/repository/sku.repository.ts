@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { ClaimedStatus, Prisma, TagLifecycleState } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
 import { SKU_SERIAL_PAD } from '../constants/skus.constant';
-import type { ListSkusQuery } from '../dto/sku.dto';
+import type { BatchTargetsDto, ListSkusQuery } from '../dto/sku.dto';
 
 /**
  * The only place in this module that touches Prisma.
@@ -20,16 +20,16 @@ import type { ListSkusQuery } from '../dto/sku.dto';
  */
 
 /** Everything the mint path needs to know about the target drop. */
-const productSelect = {
+const dropSelect = {
     id: true,
     groupCode: true,
     name: true,
     organizationId: true,
     status: true,
     totalSupply: true,
-} satisfies Prisma.ProductSelect;
+} satisfies Prisma.DropSelect;
 
-export type MintTargetProduct = Prisma.ProductGetPayload<{ select: typeof productSelect }>;
+export type MintTargetProduct = Prisma.DropGetPayload<{ select: typeof dropSelect }>;
 
 /**
  * One unit as the repository reads it.
@@ -64,6 +64,7 @@ const skuSelect = {
     isActive: true,
     archivedAt: true,
     createdAt: true,
+    updatedAt: true,
     owner: { select: { id: true, email: true, handle: true, fullName: true } },
 } satisfies Prisma.SkuSelect;
 
@@ -71,15 +72,15 @@ export type SkuRow = Prisma.SkuGetPayload<{ select: typeof skuSelect }>;
 
 const detailSelect = {
     ...skuSelect,
-    product: { select: productSelect },
+    drop: { select: dropSelect },
     vendor: { select: { id: true, name: true } },
-    _count: { select: { productClaims: true, blockchainLedgers: true } },
-    productClaims: {
+    _count: { select: { skuClaims: true, blockchainLedgers: true } },
+    skuClaims: {
         orderBy: { claimedNo: 'asc' },
         take: 1,
         select: { claimedAt: true },
     },
-    productHistorys: {
+    skuHistories: {
         where: { isCurrent: true },
         take: 1,
         select: { startedAt: true, price: true, currency: true, acquiredVia: true },
@@ -98,6 +99,37 @@ const detailSelect = {
 } satisfies Prisma.SkuSelect;
 
 export type SkuDetailRow = Prisma.SkuGetPayload<{ select: typeof detailSelect }>;
+
+/**
+ * The columns the update rules read, plus the owning organization.
+ *
+ * Narrower than `skuSelect` on purpose: an update decides from the unit's own
+ * state, and loading the owner relation and the four `take: 1` sub-queries of
+ * `detailSelect` for every unit in a 1000-row batch would be most of the cost
+ * of the request for none of the answer.
+ */
+const updateSelect = {
+    id: true,
+    skuCode: true,
+    serialNumber: true,
+    productId: true,
+    variantId: true,
+    claimedStatus: true,
+    ownerId: true,
+    tagId: true,
+    tagLifecycleState: true,
+    vendorId: true,
+    provisioningBatchId: true,
+    vendorAuthenticatedAt: true,
+    resaleBlocked: true,
+    resaleBlockedReason: true,
+    tamperStatus: true,
+    isActive: true,
+    archivedAt: true,
+    drop: { select: { id: true, organizationId: true } },
+} satisfies Prisma.SkuSelect;
+
+export type SkuUpdateRow = Prisma.SkuGetPayload<{ select: typeof updateSelect }>;
 
 /** The subset of a unit the tag-binding rules need to decide. */
 export interface TagBindTarget {
@@ -132,15 +164,15 @@ export class SkuRepository {
     constructor(private readonly prisma: PrismaClient) { }
 
     findProduct(productId: string): Promise<MintTargetProduct | null> {
-        return this.prisma.product.findUnique({
+        return this.prisma.drop.findUnique({
             where: { id: productId },
-            select: productSelect,
+            select: dropSelect,
         });
     }
 
     /** The product's organization, for the route's access context. */
     async findProductOrganization(productId: string): Promise<string | null | undefined> {
-        const product = await this.prisma.product.findUnique({
+        const product = await this.prisma.drop.findUnique({
             where: { id: productId },
             select: { organizationId: true },
         });
@@ -151,9 +183,9 @@ export class SkuRepository {
     async findSkuOrganization(skuId: string): Promise<string | null | undefined> {
         const sku = await this.prisma.sku.findUnique({
             where: { id: skuId },
-            select: { product: { select: { organizationId: true } } },
+            select: { drop: { select: { organizationId: true } } },
         });
-        return sku?.product.organizationId;
+        return sku?.drop.organizationId;
     }
 
     /** Which of these tag UIDs are already bound, and to what. */
@@ -166,7 +198,7 @@ export class SkuRepository {
 
     /** Does this variant belong to this product? */
     async variantBelongsTo(variantId: string, productId: string): Promise<boolean> {
-        const variant = await this.prisma.productVariant.findUnique({
+        const variant = await this.prisma.dropVariant.findUnique({
             where: { id: variantId },
             select: { productId: true },
         });
@@ -349,29 +381,94 @@ export class SkuRepository {
         return tx.sku.count({ where: { productId } });
     }
 
+    // ── Updating ────────────────────────────────────────────────────────────
+
+    findForUpdate(skuId: string): Promise<SkuUpdateRow | null> {
+        return this.prisma.sku.findUnique({ where: { id: skuId }, select: updateSelect });
+    }
+
+    /**
+     * Resolves a batch selector to rows, in one query.
+     *
+     * Organization isolation is part of the `where`, not a filter over the
+     * result, for the same reason it is on `list`: a caller confined to one
+     * brand must not learn that a `skuCode` exists by seeing it counted as
+     * "matched" and then refused.
+     *
+     * Archived units are included deliberately — un-archiving is one of the
+     * things a batch edit is for.
+     */
+    findBatchTargets(input: {
+        productId: string | undefined;
+        organizationIds: string[] | null;
+        targets: BatchTargetsDto;
+    }): Promise<SkuUpdateRow[]> {
+        const { targets } = input;
+        const where: Prisma.SkuWhereInput = {
+            ...(input.productId ? { productId: input.productId } : {}),
+            ...(input.organizationIds
+                ? { drop: { organizationId: { in: input.organizationIds } } }
+                : {}),
+            ...(targets.skuIds ? { id: { in: targets.skuIds } } : {}),
+            ...(targets.skuCodes ? { skuCode: { in: targets.skuCodes } } : {}),
+            ...(targets.serialNumbers ? { serialNumber: { in: targets.serialNumbers } } : {}),
+            ...(targets.serialFrom !== undefined && targets.serialTo !== undefined
+                ? { serialNumber: { gte: targets.serialFrom, lte: targets.serialTo } }
+                : {}),
+        };
+        return this.prisma.sku.findMany({
+            where,
+            select: updateSelect,
+            orderBy: { serialNumber: 'asc' },
+        });
+    }
+
+    /**
+     * Writes a batch, all or nothing.
+     *
+     * Units sharing a patch are written with one `updateMany`, which is what
+     * keeps "block resale on 800 units" to a couple of statements rather than
+     * 800 round trips inside a transaction that would time out long before it
+     * finished. Patches genuinely differ per unit — unflagging resolves to
+     * CLAIMED or UNCLAIMED depending on the row — so they are grouped by
+     * content rather than assumed identical.
+     */
+    applyUpdates(
+        updates: { skuId: string; patch: Record<string, unknown> }[],
+        now: Date,
+    ): Promise<void> {
+        const groups = new Map<string, { patch: Record<string, unknown>; ids: string[] }>();
+        for (const update of updates) {
+            const key = JSON.stringify(update.patch);
+            const group = groups.get(key);
+            if (group) group.ids.push(update.skuId);
+            else groups.set(key, { patch: update.patch, ids: [update.skuId] });
+        }
+
+        return this.prisma.$transaction(
+            async (tx) => {
+                for (const group of groups.values()) {
+                    await tx.sku.updateMany({
+                        where: { id: { in: group.ids } },
+                        data: { ...(group.patch as Prisma.SkuUpdateManyMutationInput), updatedAt: now },
+                    });
+                }
+            },
+            // Same figures as the mint path: a remote database and a batch of
+            // up to 1000 units make the default 5s ceiling too tight.
+            { maxWait: 10_000, timeout: 20_000 },
+        );
+    }
+
     async list(input: {
         productId?: string | undefined;
         organizationIds: string[] | null;
         query: ListSkusQuery;
+        /** False for a caller who may not see tag UIDs — see sku-filters.ts. */
+        allowTagSearch: boolean;
     }): Promise<{ total: number; items: SkuRow[] }> {
         const { query } = input;
-        const where: Prisma.SkuWhereInput = {
-            ...(input.productId ? { productId: input.productId } : {}),
-            // Organization isolation is applied to the query, not to the
-            // result: a caller confined to one brand must not be able to page
-            // through another brand's edition and infer its size from the
-            // total, which is exactly what post-filtering would leak.
-            ...(input.organizationIds
-                ? { product: { organizationId: { in: input.organizationIds } } }
-                : {}),
-            ...(query.includeArchived ? {} : { archivedAt: null }),
-            ...(query.claimedStatus ? { claimedStatus: query.claimedStatus } : {}),
-            ...(query.tagLifecycleState ? { tagLifecycleState: query.tagLifecycleState } : {}),
-            ...(query.variantId ? { variantId: query.variantId } : {}),
-            ...(query.tagged === undefined ? {} : { tagId: query.tagged ? { not: null } : null }),
-            ...(query.resaleBlocked === undefined ? {} : { resaleBlocked: query.resaleBlocked }),
-            ...(query.search ? searchWhere(query.search) : {}),
-        };
+        const where = buildSkuWhere(input);
 
         const [total, items] = await Promise.all([
             this.prisma.sku.count({ where }),
@@ -432,7 +529,90 @@ const SKU_SORTS = {
     serial_asc: { serialNumber: 'asc' },
     serial_desc: { serialNumber: 'desc' },
     newest: { createdAt: 'desc' },
+    oldest: { createdAt: 'asc' },
+    /** What an operator wants after a batch edit: "show me what I just did". */
+    recently_updated: { updatedAt: 'desc' },
+    code_asc: { skuCode: 'asc' },
 } satisfies Record<string, Prisma.SkuOrderByWithRelationInput>;
+
+/**
+ * The inventory filter, as SQL.
+ *
+ * Built as an `AND` array rather than one object literal because two different
+ * filters narrow `product` — the caller's organization isolation and an
+ * explicit `organizationId` — and spreading both into one object would silently
+ * drop the first. The AND form cannot lose a clause, which matters when the
+ * clause it would lose is the one confining a brand to its own catalog.
+ */
+function buildSkuWhere(input: {
+    productId?: string | undefined;
+    organizationIds: string[] | null;
+    query: ListSkusQuery;
+    allowTagSearch: boolean;
+}): Prisma.SkuWhereInput {
+    const { query } = input;
+    const and: Prisma.SkuWhereInput[] = [];
+
+    if (input.productId) and.push({ productId: input.productId });
+    if (query.productId) and.push({ productId: query.productId });
+
+    // Organization isolation is applied to the query, not to the result: a
+    // caller confined to one brand must not be able to page through another
+    // brand's edition and infer its size from the total, which is exactly what
+    // post-filtering would leak.
+    if (input.organizationIds) {
+        and.push({ drop: { organizationId: { in: input.organizationIds } } });
+    }
+    if (query.organizationId) {
+        and.push({ drop: { organizationId: query.organizationId } });
+    }
+
+    // Archival. `archivedOnly` implies including them, so it is checked first.
+    if (query.archivedOnly) and.push({ archivedAt: { not: null } });
+    else if (!query.includeArchived) and.push({ archivedAt: null });
+
+    if (query.claimedStatus) and.push({ claimedStatus: { in: query.claimedStatus } });
+    if (query.tagLifecycleState) {
+        and.push({ tagLifecycleState: { in: query.tagLifecycleState } });
+    }
+    if (query.variantId) and.push({ variantId: query.variantId });
+    if (query.hasVariant !== undefined) {
+        and.push({ variantId: query.hasVariant ? { not: null } : null });
+    }
+    if (query.serialFrom !== undefined) and.push({ serialNumber: { gte: query.serialFrom } });
+    if (query.serialTo !== undefined) and.push({ serialNumber: { lte: query.serialTo } });
+    if (query.skuCode) and.push({ skuCode: { in: query.skuCode } });
+
+    if (query.tagged !== undefined) {
+        and.push({ tagId: query.tagged ? { not: null } : null });
+    }
+    if (query.tagId) and.push({ tagId: query.tagId });
+    if (query.vendorId) and.push({ vendorId: query.vendorId });
+    if (query.provisioningBatchId) {
+        and.push({ provisioningBatchId: query.provisioningBatchId });
+    }
+
+    if (query.resaleBlocked !== undefined) and.push({ resaleBlocked: query.resaleBlocked });
+    if (query.tampered !== undefined) {
+        and.push({ tamperStatus: query.tampered ? { not: null } : null });
+    }
+    if (query.tamperStatus) and.push({ tamperStatus: query.tamperStatus });
+
+    if (query.ownerId) and.push({ ownerId: query.ownerId });
+    if (query.hasOwner !== undefined) {
+        and.push({ ownerId: query.hasOwner ? { not: null } : null });
+    }
+
+    if (query.isActive !== undefined) and.push({ isActive: query.isActive });
+    if (query.createdFrom) and.push({ createdAt: { gte: query.createdFrom } });
+    if (query.createdTo) and.push({ createdAt: { lte: query.createdTo } });
+    if (query.updatedFrom) and.push({ updatedAt: { gte: query.updatedFrom } });
+    if (query.updatedTo) and.push({ updatedAt: { lte: query.updatedTo } });
+
+    if (query.search) and.push(searchWhere(query.search, input.allowTagSearch));
+
+    return and.length === 0 ? {} : { AND: and };
+}
 
 /** `123456780000-000014` — the drop's group code plus the padded serial. */
 export function formatSkuCode(groupCode: string, serialNumber: number): string {
@@ -445,14 +625,19 @@ export function formatSkuCode(groupCode: string, serialNumber: number): string {
  * A digits-only term is treated as a serial number as well as a code fragment,
  * because an operator holding the physical item reads "#14" off the card, not
  * `123456780000-000014`.
+ *
+ * The tag branch is included only for a caller who may read tag UIDs.
+ * Otherwise `?search=04A39B2C5D6E80` is `?tagId=04A39B2C5D6E80` spelled
+ * differently: one row back confirms which unit carries that tag, which is the
+ * fact the response projection goes to some trouble to withhold.
  */
-function searchWhere(search: string): Prisma.SkuWhereInput {
+function searchWhere(search: string, allowTagSearch: boolean): Prisma.SkuWhereInput {
     const serial = /^\d+$/.test(search) ? Number(search) : null;
     const normalisedTag = search.replace(/[:\- ]/g, '').toUpperCase();
     return {
         OR: [
             { skuCode: { contains: search, mode: Prisma.QueryMode.insensitive } },
-            { tagId: normalisedTag },
+            ...(allowTagSearch ? [{ tagId: normalisedTag }] : []),
             ...(serial !== null && Number.isSafeInteger(serial) ? [{ serialNumber: serial }] : []),
         ],
     };

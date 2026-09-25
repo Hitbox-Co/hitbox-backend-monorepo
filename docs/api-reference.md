@@ -1,5 +1,12 @@
 # HitBox Backend — API Reference
 
+> **Model naming (v3.1).** The Prisma models `Product` / `ProductVariant` /
+> `ProductPrice` / `ProductImage` / `ProductClaim` / `ProductHistory` are now
+> `Drop` / `DropVariant` / `DropPrice` / `DropImage` / `SkuClaim` / `SkuHistory`.
+> **The tables keep their original names**, so every `Product…` below still
+> reads correctly as the table, and no route or response changed. The mapping
+> is in [schema-v3.1-changes.md](schema-v3.1-changes.md).
+
 Base URL (local): `http://localhost:<PORT>` (`PORT` from the root `.env`).
 All module routes are versioned under **`/api/v1`**.
 

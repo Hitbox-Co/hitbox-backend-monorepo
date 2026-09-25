@@ -141,7 +141,7 @@ Scope decides which rows; it also decides which fields.
 | Invoice figures, line items, supplier, customer | ✅ | ✅ | ✅ |
 | `pdfStorageRef`, `pdfSha256` | ❌ | ❌ | ✅ |
 | `buyerId`, `organizationId`, `createdById` | ❌ | ❌ | ✅ |
-| `salesPriceSnapshot`, `productCostId` | ❌ | ❌ | ✅ |
+| `salesPriceSnapshot`, `dropPriceId` | ❌ | ❌ | ✅ |
 | Artist document `documentNumber` (PAN/GSTIN) | n/a | ✅ own only | ✅ |
 | Artist document `documentStorageRef` | n/a | ❌ | ❌ |
 

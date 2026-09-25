@@ -121,11 +121,11 @@ export class MarketService {
                 MARKETS_ERROR_CODES.DEFAULT_REQUIRED,
             );
         }
-        if (current._count.productPrices > 0) {
+        if (current._count.dropPrices > 0) {
             throw AppError.conflict(
-                `${current._count.productPrices} product price(s) still reference this market.`,
+                `${current._count.dropPrices} product price(s) still reference this market.`,
                 MARKETS_ERROR_CODES.IN_USE,
-                { productPrices: current._count.productPrices },
+                { productPrices: current._count.dropPrices },
             );
         }
 
@@ -169,7 +169,7 @@ function toResponse(market: MarketRow): MarketResponse {
         isDefault: market.isDefault,
         countryCodes: market.marketCountrys.map((row) => row.countryCode),
         usage: {
-            productPrices: market._count.productPrices,
+            productPrices: market._count.dropPrices,
             orders: market._count.orders,
         },
         archivedAt: market.archivedAt?.toISOString() ?? null,

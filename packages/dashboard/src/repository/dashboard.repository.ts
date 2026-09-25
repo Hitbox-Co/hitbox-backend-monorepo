@@ -397,9 +397,9 @@ export class DashboardRepository {
     async productCounts(period: ResolvedPeriod, orgIds: OrgFilter) {
         const base = { archivedAt: null, ...orgWhere('organizationId', orgIds) };
         const [grouped, total, newProducts] = await Promise.all([
-            this.prisma.product.groupBy({ by: ['status'], where: base, _count: { _all: true } }),
-            this.prisma.product.count({ where: base }),
-            this.prisma.product.count({
+            this.prisma.drop.groupBy({ by: ['status'], where: base, _count: { _all: true } }),
+            this.prisma.drop.count({ where: base }),
+            this.prisma.drop.count({
                 where: { ...base, createdAt: { gte: period.from, lt: period.to } },
             }),
         ]);
@@ -414,14 +414,14 @@ export class DashboardRepository {
         skip: number;
         take: number;
     }) {
-        const where: Prisma.ProductWhereInput = {
+        const where: Prisma.DropWhereInput = {
             archivedAt: null,
             ...orgWhere('organizationId', input.orgIds),
             ...(input.status ? { status: input.status as Prisma.EnumDropStatusFilter['equals'] } : {}),
         };
         const [total, items] = await Promise.all([
-            this.prisma.product.count({ where }),
-            this.prisma.product.findMany({
+            this.prisma.drop.count({ where }),
+            this.prisma.drop.findMany({
                 where, orderBy: { createdAt: 'desc' }, skip: input.skip, take: input.take,
                 select: {
                     id: true, groupCode: true, name: true, status: true, totalSupply: true,
@@ -513,7 +513,7 @@ export class DashboardRepository {
                     id: true, productId: true, status: true, version: true, comment: true,
                     complianceStatus: true, oddsDisclosureRef: true, decidedAt: true,
                     createdAt: true,
-                    product: {
+                    drop: {
                         select: { name: true, isAgeSpecific: true, minimumAge: true, status: true },
                     },
                 },
@@ -526,7 +526,7 @@ export class DashboardRepository {
 
     async provenanceSummary(orgIds: OrgFilter) {
         const skuWhere: Prisma.SkuWhereInput =
-            orgIds === null ? {} : { product: { organizationId: { in: orgIds } } };
+            orgIds === null ? {} : { drop: { organizationId: { in: orgIds } } };
         const [byClaimed, byLifecycle, resaleBlocked, tampered, openCases] = await Promise.all([
             this.prisma.sku.groupBy({ by: ['claimedStatus'], where: skuWhere, _count: { _all: true } }),
             this.prisma.sku.groupBy({ by: ['tagLifecycleState'], where: skuWhere, _count: { _all: true } }),

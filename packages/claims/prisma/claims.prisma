@@ -2,22 +2,22 @@
 // CLAIMS MODULE SCHEMA  (packages/claims/prisma/claims.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: ProductClaim, BlockchainLedger, ProductHistory
+// Owns: SkuClaim, BlockchainLedger, SkuHistory
 //
 // Provenance. Three append-only views of the same truth:
-//   ProductClaim     — the act of claiming (who tapped, when, which drop)
-//   ProductHistory   — the ownership timeline (queryable "who held it when")
+//   SkuClaim         — the act of claiming (who tapped, when, which drop)
+//   SkuHistory       — the ownership timeline (queryable "who held it when")
 //   BlockchainLedger — the tamper-evident hash chain (verifiable, not queried)
 // Nothing here is ever updated in place except the two revocation columns and
-// ProductHistory.isCurrent/endedAt when a period closes.
+// SkuHistory.isCurrent/endedAt when a period closes.
 // ============================================================================
 
 /// A successful claim of one SKU by one user. `claimedNo` counts claims on that
 /// SKU (1 = first owner, 2 = second, …), so the composite unique makes a
 /// duplicate claim at the same position impossible. artistId/collectionId are
-/// denormalised snapshots so the claim reads correctly even if the product is
+/// denormalised snapshots so the claim reads correctly even if the drop is
 /// later re-filed.
-model ProductClaim {
+model SkuClaim {
   id            String            @id @db.Uuid
   claimCode     String            @unique
   claimedNo     Int
@@ -27,7 +27,7 @@ model ProductClaim {
   skuId         String            @db.Uuid
   sku           Sku               @relation(fields: [skuId], references: [id])
   productId     String            @db.Uuid
-  product       Product           @relation(fields: [productId], references: [id])
+  drop          Drop              @relation(fields: [productId], references: [id])
   artistId      String?           @db.Uuid
   artist        Artist?           @relation(fields: [artistId], references: [id])
   collectionId  String?           @db.Uuid
@@ -36,6 +36,7 @@ model ProductClaim {
   revokedReason String?
 
   @@unique([skuId, claimedNo])
+  @@map("ProductClaim")
 }
 
 /// Append-only hash chain per SKU. Each row commits to the previous one
@@ -56,6 +57,37 @@ model BlockchainLedger {
   payload                Json?
   createdAt              DateTime
 
+  // ── Platform signing (v3.1) ───────────────────────────────────────────────
+  // The party signatures above prove the *counterparties* consented. These
+  // prove the *platform* wrote the row: without them a chain is only as
+  // trustworthy as the database it sits in, and "the hash matches" says
+  // nothing about who computed it.
+  //
+  // `hashVersion` defaults to 1 so every existing row reads as "computed by
+  // the original algorithm". The ledger writer is unchanged and still emits
+  // version 1 — a later algorithm bumps this, and verification dispatches on
+  // it rather than assuming.
+  /// Which hash algorithm produced `currentHash`. 1 = the original.
+  hashVersion       Int       @default(1) @db.SmallInt
+  /// Detached platform signature over the row. Null on rows written before
+  /// signing existed, and on any row the signer was unavailable for.
+  platformSignature String?
+  /// Which signing key produced it, so a rotated key can still be verified.
+  signingKeyVersion String?
+  /// Who caused this entry. SYSTEM for the ordinary claim/transfer path.
+  actorType         ActorType @default(SYSTEM)
+  /// The acting user or admin, when there was one. No FK — the chain must
+  /// outlive the account, same rule as the rest of the provenance tables.
+  actorRef          String?   @db.Uuid
+  /// Why, for the entries where that is not obvious from `txType` — a REVOKE
+  /// or a REISSUE is a decision somebody has to be able to account for.
+  reason            String?
+  /// When the event happened, as distinct from when the row was written.
+  occurredAt        DateTime  @default(now())
+  /// The physical chip involved, once tags are rows of their own (SD-7).
+  nfcTagId          String?   @db.Uuid
+  nfcTag            NfcTag?   @relation(fields: [nfcTagId], references: [id])
+
   @@unique([skuId, sequenceNo])
 }
 
@@ -63,7 +95,7 @@ model BlockchainLedger {
 /// `isCurrent = true`, with `endedAt` null; closing a period sets both. `price`
 /// + `currency` record what the holder paid, which is what makes resale and
 /// royalty analytics possible.
-model ProductHistory {
+model SkuHistory {
   id          String            @id @db.Uuid
   skuId       String            @db.Uuid
   sku         Sku               @relation(fields: [skuId], references: [id])
@@ -75,17 +107,37 @@ model ProductHistory {
   startedAt   DateTime
   endedAt     DateTime?
   isCurrent   Boolean
+
+  @@map("ProductHistory")
 }
 
 /// Kind of ownership event on the provenance chain. Each SKU's ledger runs
 /// MINT (origin) → CLAIM (first buyer) → TRANSFER (0..n owner changes), with
 /// FLAG / UNFLAG recording fraud holds without rewriting history.
+/// REVOKE and REISSUE are appended, never inserted among the others: an enum
+/// value's position is part of the physical type in Postgres, and reordering
+/// is the one edit to an enum that is not additive.
 enum LedgerTxType {
   MINT
   CLAIM
   TRANSFER
   FLAG
   UNFLAG
+  /// A claim was withdrawn — counterfeit finding, support resolution. The
+  /// original entries stay; this records the withdrawal as its own event.
+  REVOKE
+  /// The item was re-tagged or re-issued to the same holder, so the chain
+  /// continues across a physical chip replacement.
+  REISSUE
+}
+
+/// Who a ledger entry is attributable to. SYSTEM is the ordinary path — a
+/// buyer tapping a tag produces an entry the platform wrote on their behalf,
+/// not one they signed.
+enum ActorType {
+  USER
+  SYSTEM
+  ADMIN
 }
 
 /// How a holder came to own the item: a first-party CLAIM, a peer TRANSFER, or

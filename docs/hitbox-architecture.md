@@ -1,5 +1,12 @@
 # HitBox Backend — Architecture
 
+> **Model naming (v3.1).** The Prisma models `Product` / `ProductVariant` /
+> `ProductPrice` / `ProductImage` / `ProductClaim` / `ProductHistory` are now
+> `Drop` / `DropVariant` / `DropPrice` / `DropImage` / `SkuClaim` / `SkuHistory`.
+> **The tables keep their original names**, so every `Product…` below still
+> reads correctly as the table, and no route or response changed. The mapping
+> is in [schema-v3.1-changes.md](schema-v3.1-changes.md).
+
 > The single document that explains **how the backend is built, why it is built that way, and how every piece talks to every other piece.**
 
 > **This document covers the mobile platform domain only** (`/api/v1/*`). The same `apps/backend`
@@ -71,7 +78,7 @@ hitbox-backend/
 ├── packages/
 │   ├── auth/                     # Clerk auth, webhooks, requireAuth middleware
 │   ├── users/                    # User profiles (local projection of Clerk users)
-│   ├── products/                 # Catalog: Product, ProductVariant, ProductImage, ProductPrice
+│   ├── products/                 # Catalog: Drop, DropVariant, DropImage, DropPrice
 │   ├── artist/                   # Owns Artist + ArtistCollection
 │   │   └── src/{profile,collection}/   # profile = reserved; collection = capacity port
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
@@ -291,7 +298,7 @@ shared. That is the same call discover and marketplace already make: each
 consumer owns its port, so none of the three grows a dependency on another
 feature package for a one-method interface. Bootstrap injects the same adapter
 into all three — a closure that returns a public URL for a key under a publicly
-readable prefix and `null` otherwise. It exists because `ProductImage` stores an
+readable prefix and `null` otherwise. It exists because `DropImage` stores an
 object-storage **key**, not a URL, and only the media module knows the bucket,
 region and which prefixes are public (see
 [media/s3-configuration.md](media/s3-configuration.md)).
@@ -354,10 +361,10 @@ packages/shared/database/prisma/base.prisma    ← generator + datasource (poole
 packages/shared/database/prisma/enums.prisma   ← shared enums (used across modules)
 packages/auth/prisma/auth.prisma               ← AuthWebhookEvent
 packages/users/prisma/users.prisma             ← User
-packages/products/prisma/products.prisma       ← Product, ProductVariant, ProductImage, ProductPrice
+packages/products/prisma/products.prisma       ← Drop, DropVariant, DropImage, DropPrice
 packages/artist/prisma/artist.prisma           ← Artist, ArtistCollection (has maximumLimit)
 packages/skus/prisma/skus.prisma               ← Sku (owns the NFC tag + claim state)
-packages/claims/prisma/claims.prisma           ← ProductClaim, BlockchainLedger, ProductHistory
+packages/claims/prisma/claims.prisma           ← SkuClaim, BlockchainLedger, SkuHistory
 packages/collections/prisma/collections.prisma ← BuyerCollection
 packages/media/prisma/media.prisma             ← MediaAsset (the upload registry)
 ```
@@ -447,10 +454,10 @@ document. The short version, because it changes how three modules read:
 | Product identity | `Product.productCode` | `Product.groupCode` |
 | Catalog facets | `ProductType` / `ProductCategory` / `ProductGenre` / `ProductRarity` enums | `vertical` / `category` / `rarity` free-form `String?`; genre removed |
 | Lifecycle | `Product.state` (`ProductState`) | `Product.status` (`DropStatus`) + `isActive` + `archivedAt` |
-| Price | `Product.priceInDollars` | `ProductPrice` rows, per (product, variant, market) |
-| Images | `ProductImage.url` | `ProductImage.assetId` → `MediaAsset.storageRef` |
+| Price | `Product.priceInDollars` | `DropPrice` rows, per (drop, variant, market), versioned by `effectiveFrom` |
+| Images | `ProductImage.url` | `DropImage.assetId` → `MediaAsset.storageRef` |
 | NFC tag, claim state, owner | `Product.tagId` / `claimedStatus` / `ownerId` | `Sku.tagId` / `claimedStatus` / `ownerId` |
-| Provenance | `ProductHistory.productId`, one ledger per product | `ProductHistory.skuId`, one ledger chain per **SKU** |
+| Provenance | `ProductHistory.productId`, one ledger per product | `SkuHistory.skuId`, one ledger chain per **SKU** |
 | Buyer shelf | `BuyerCollection.productId` | `BuyerCollection.skuId` |
 | Ledger participants | `fromUser` / `toUser` FKs, `originProductId` | `skuId` + a `payload` JSON column |
 

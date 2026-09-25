@@ -9,7 +9,7 @@ const organizationSelect = {
     slug: true,
     isActive: true,
     archivedAt: true,
-    _count: { select: { artists: true, products: true } },
+    _count: { select: { artists: true, drops: true } },
 } satisfies Prisma.OrganizationSelect;
 
 export type OrganizationRow = Prisma.OrganizationGetPayload<{

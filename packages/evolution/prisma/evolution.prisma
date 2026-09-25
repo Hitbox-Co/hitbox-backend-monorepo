@@ -18,7 +18,7 @@ model EvolutionRule {
   collectionId    String?                @db.Uuid
   collection      ArtistCollection?      @relation(fields: [collectionId], references: [id])
   productId       String?                @db.Uuid
-  product         Product?               @relation(fields: [productId], references: [id])
+  drop            Drop?                  @relation(fields: [productId], references: [id])
   thresholdType   EvolutionThresholdType
   thresholdValue  Int
   thresholdConfig Json?

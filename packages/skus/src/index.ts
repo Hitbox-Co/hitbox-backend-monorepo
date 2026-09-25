@@ -24,33 +24,65 @@ export {
     SKU_READ_CAPABILITY,
     SKU_TAG_CAPABILITY,
     SKU_WRITE_CAPABILITY,
+    SKU_AUDIT_EVENTS,
+    SKU_BATCH_UPDATE_MAX,
     SKU_EVENTS,
     SKUS_ERROR_CODES,
     SKUS_MODULE,
 } from './constants/skus.constant';
 
 export {
+    batchTargetsSchema,
+    batchUpdateSkusSchema,
     bindTagSchema,
     bulkBindTagsSchema,
     listSkusQuerySchema,
     mintSkusSchema,
+    skuChangesSchema,
+    updateSkuSchema,
 } from './dto/sku.dto';
 export type {
+    BatchTargetsDto,
+    BatchUpdateItem,
+    BatchUpdateResult,
+    BatchUpdateSkusDto,
     BindTagDto,
     BulkBindResult,
     BulkBindTagsDto,
     ListSkusQuery,
     MintResult,
     MintSkusDto,
+    SkuChangesDto,
     SkuDetail,
     SkuListItem,
     SkuSummary,
+    UpdateSkuDto,
 } from './dto/sku.dto';
 
 export { buildSkuAccess, resolveAccess } from './domain/sku-access';
 export type { SkuAccess, SkuPrincipal } from './domain/sku-access';
 
-export type { SkuService, InlineMintSpec } from './service/sku.service';
+/**
+ * The inventory-edit rules and the filter gate, exported because they are the
+ * authority on what an operator may change and what they may ask about — and
+ * a console that wants to grey out a field should read the same list the API
+ * enforces rather than keep a second copy of it.
+ */
+export {
+    assertChangesUsable,
+    assertFieldsWritable,
+    planSkuUpdate,
+    EDITABLE_FIELDS,
+    TAG_CUSTODY_FIELDS,
+} from './domain/sku-update';
+export type { SkuUpdateChanges, SkuUpdatePlan, SkuUpdateTarget } from './domain/sku-update';
+
+export { assertFiltersPermitted, forbiddenFilters, GATED_FILTERS } from './domain/sku-filters';
+
+export { NOOP_SKU_AUDIT } from './domain/interfaces/sku-audit.interface';
+export type { ISkuAudit, SkuAuditInput } from './domain/interfaces/sku-audit.interface';
+
+export type { SkuService, InlineMintSpec, SkuMutationContext } from './service/sku.service';
 export { formatSkuCode } from './repository/sku.repository';
 export type { MintOutcome } from './repository/sku.repository';
 

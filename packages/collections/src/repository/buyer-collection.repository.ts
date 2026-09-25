@@ -8,12 +8,12 @@ import type { ListCollectionQueryDto } from '../dto/collection.dto';
  * **A shelf row points at a SKU, not a product.** `BuyerCollection.productId`
  * became `skuId` in the restructure, which is the correct shape: a buyer owns
  * serialized item #14 of an edition, not "the product" in the abstract. The
- * product card is therefore reached as `sku.product`, one hop further than
+ * drop card is therefore reached as `sku.drop`, one hop further than
  * before.
  *
  * `BuyerCollection` declares the `sku` relation in its OWN partial
  * (collections.prisma), so traversing that is reading this module's own
- * schema. `sku.product` crosses into the skus and products partials — a
+ * schema. `sku.drop` crosses into the skus and products partials — a
  * documented, deliberate shortcut at the database layer. On extraction both
  * hops become a port call and only this file changes.
  */
@@ -24,13 +24,13 @@ const itemInclude = {
             skuCode: true,
             serialNumber: true,
             claimedStatus: true,
-            product: {
+            drop: {
                 select: {
                     id: true,
                     name: true,
                     rarity: true,
                     collectionId: true,
-                    productImages: {
+                    dropImages: {
                         where: { archivedAt: null },
                         orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
                         take: 1,
@@ -81,8 +81,8 @@ export class BuyerCollectionRepository {
 
     /**
      * Aggregation feeding the Collections stats section. Counts are derived
-     * from the actual rows, and reach `product.collectionId` through
-     * `sku.product` — the same two hops the item projection uses.
+     * from the actual rows, and reach `drop.collectionId` through
+     * `sku.drop` — the same two hops the item projection uses.
      *
      * A user's collection is bounded (tens–hundreds of items), so one
      * projected findMany is cheaper than several round-trips; if it ever
@@ -95,13 +95,13 @@ export class BuyerCollectionRepository {
     }> {
         const rows = await this.prisma.buyerCollection.findMany({
             where: { userId, archivedAt: null },
-            select: { sku: { select: { product: { select: { collectionId: true } } } } },
+            select: { sku: { select: { drop: { select: { collectionId: true } } } } },
         });
 
         const collectionIds = new Set<string>();
         let ownedInCollections = 0;
         for (const row of rows) {
-            const collectionId = row.sku.product.collectionId;
+            const collectionId = row.sku.drop.collectionId;
             if (collectionId) {
                 collectionIds.add(collectionId);
                 ownedInCollections += 1;

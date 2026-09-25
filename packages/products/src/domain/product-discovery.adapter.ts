@@ -28,7 +28,7 @@ import { PUBLIC_PRODUCT_WHERE } from '../repository/product.repository';
  * curation column, or sales/view counters — not a different arbitrary sort.
  */
 
-const sectionToOrderBy: Record<DiscoverSection, Prisma.ProductOrderByWithRelationInput> = {
+const sectionToOrderBy: Record<DiscoverSection, Prisma.DropOrderByWithRelationInput> = {
     [DiscoverSection.TRENDING]: { skus: { _count: 'desc' } },
     [DiscoverSection.NEW_RELEASES]: { createdAt: 'desc' },
     [DiscoverSection.TOP_CREATORS]: { skus: { _count: 'desc' } },
@@ -41,7 +41,7 @@ export class ProductDiscoveryAdapter implements IProductDiscovery {
     ) { }
 
     async findProducts(query: DiscoverProductsQuery): Promise<DiscoverProductsResult> {
-        const where: Prisma.ProductWhereInput = {
+        const where: Prisma.DropWhereInput = {
             ...PUBLIC_PRODUCT_WHERE,
             ...(query.search && {
                 name: { contains: query.search, mode: Prisma.QueryMode.insensitive },
@@ -59,7 +59,7 @@ export class ProductDiscoveryAdapter implements IProductDiscovery {
     }
 
     private toItem(row: ProductDiscoverRow): DiscoverProductItem {
-        const ref = row.productImages[0]?.asset.storageRef;
+        const ref = row.dropImages[0]?.asset.storageRef;
         return {
             id: row.id,
             name: row.name,

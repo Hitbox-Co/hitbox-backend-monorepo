@@ -25,7 +25,7 @@ const artistSelect = {
     invitationId: true,
     organizationId: true,
     organization: { select: { name: true } },
-    _count: { select: { products: true, artistCollections: true } },
+    _count: { select: { drops: true, artistCollections: true } },
 } satisfies Prisma.ArtistSelect;
 
 export type ArtistRow = Prisma.ArtistGetPayload<{ select: typeof artistSelect }>;

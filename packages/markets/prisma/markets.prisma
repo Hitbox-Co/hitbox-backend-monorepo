@@ -4,8 +4,8 @@
 //
 // Owns: Market, MarketCountry
 //
-// A market is the pricing/currency region a buyer shops in. Products carry one
-// ProductPrice row per market; orders record which market they were placed in.
+// A market is the pricing/currency region a buyer shops in. Drops carry one
+// DropPrice row per market; orders record which market they were placed in.
 // ============================================================================
 
 /// A selling region with a single settlement currency. Exactly one row should
@@ -26,7 +26,7 @@ model Market {
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   users         User[]
-  productPrices ProductPrice[]
+  dropPrices DropPrice[]
   orders        Order[]
 }
 

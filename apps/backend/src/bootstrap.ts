@@ -173,6 +173,36 @@ export function bootstrap(): Bootstrapped {
         eventBus,
         guard: accessControlModule.guard,
         resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
+        // Adapted onto the real recorder, which is constructed further down —
+        // the lambda closes over it and only runs per request, so the order of
+        // the two `const`s here does not matter. Same arrangement as releases.
+        audit: {
+            record: (input: {
+                eventType: string;
+                actorId: string;
+                organizationId: string | null;
+                skuId: string | null;
+                result: 'SUCCESS' | 'DENIED';
+                correlationId: string;
+                before?: Record<string, unknown> | undefined;
+                after?: Record<string, unknown> | undefined;
+                metadata?: Record<string, unknown> | undefined;
+            }) =>
+                auditModule.recorder.record({
+                    eventType: input.eventType,
+                    actor: { type: 'HITBOX_ADMIN', id: input.actorId },
+                    result: input.result,
+                    organizationId: input.organizationId,
+                    resource: { type: 'Sku', id: input.skuId },
+                    // Cast at the boundary: the port speaks plain records so
+                    // skus never imports Prisma's JSON types, and everything it
+                    // puts in them is JSON-serialisable by construction.
+                    ...(input.before ? { beforeState: input.before as Prisma.InputJsonValue } : {}),
+                    ...(input.after ? { afterState: input.after as Prisma.InputJsonValue } : {}),
+                    correlationId: input.correlationId,
+                    metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
+                }),
+        },
     });
 
     /**

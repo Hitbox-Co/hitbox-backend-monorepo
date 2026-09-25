@@ -6,6 +6,9 @@
 >
 > Session handling and the Clerk flow: [authentication.md](authentication.md).
 > Endpoint-by-module reference: [admin-api-reference.md](admin-api-reference.md).
+> Serialized-unit writes — minting and tag binding in
+> [sku-api.md](sku-api.md), editing units and batch inventory edits in
+> [sku-inventory-management.md](sku-inventory-management.md).
 
 ---
 
@@ -63,6 +66,10 @@ role check here.
 | SKU unit read (list, summary, detail) | `collectible-instance:read` | no |
 | SKU unit mint | `collectible-instance:manage` | no — a Brand Admin mints their own drop's edition |
 | SKU **NFC tag binding** | `nfc-tag-claim:manage` | no — checked in addition to the mint gate |
+| SKU unit edit (`PATCH /admin/skus/:skuId`) | `collectible-instance:manage` | no — against the drop's own organization |
+| SKU **batch** edit, nested under a drop | `collectible-instance:manage` | no — against the drop's own organization |
+| SKU **batch** edit, cross-drop | `collectible-instance:manage` | implicit — no product in the path, so only global grants match |
+| SKU **tag lifecycle / vendor fields** | `nfc-tag-claim:manage` | no — checked per *field*, in addition to the edit gate |
 | Product gallery read | `drop:read` | no |
 | Product gallery attach / replace / remove | `drop:manage` | **yes** |
 | Product price read | `drop:read` | no |

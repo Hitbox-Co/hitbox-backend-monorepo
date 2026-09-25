@@ -26,7 +26,7 @@ const listSelect = {
     amount: true,
     currency: true,
     buyer: { select: { email: true, fullName: true } },
-    product: { select: { groupCode: true, name: true } },
+    drop: { select: { groupCode: true, name: true } },
 } satisfies Prisma.OrderSelect;
 
 export type OrderListRow = Prisma.OrderGetPayload<{ select: typeof listSelect }>;
@@ -102,7 +102,7 @@ export class OrderRepository {
             ...(query.buyerEmail
                 ? { buyer: { email: { contains: query.buyerEmail, mode: Prisma.QueryMode.insensitive } } }
                 : {}),
-            ...(query.productCode ? { product: { groupCode: query.productCode } } : {}),
+            ...(query.productCode ? { drop: { groupCode: query.productCode } } : {}),
             ...(query.from || query.to
                 ? {
                     placedAt: {

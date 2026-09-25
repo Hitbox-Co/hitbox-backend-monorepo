@@ -35,9 +35,9 @@ model User {
   // ── Cross-module back-relations (see docs/database-architecture.md §6) ─────
   artists                  Artist?
   skus                     Sku[]
-  productClaims            ProductClaim[]
+  skuClaims                SkuClaim[]
   buyerCollections         BuyerCollection[]
-  productHistorys          ProductHistory[]
+  skuHistories             SkuHistory[]
   roleAssignment_user      RoleAssignment[]        @relation("User_user")
   roleAssignment_grantedBy RoleAssignment[]        @relation("User_grantedBy")
   releaseApproval_approver ReleaseApproval[]       @relation("User_approver")

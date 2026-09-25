@@ -52,11 +52,11 @@ Every model has exactly one owning module. The merge script enforces this — a 
 | **Access control** | `@hitbox/access-control` | `Role`, `Permission`, `RolePermission`, `RoleAssignment` | Authorisation: who may do what, at what scope. |
 | **Organizations** | `@hitbox/organizations` | `Organization` | The tenant root — HitBox, brands, artist-individuals. |
 | **Artist** | `@hitbox/artist` | `Artist`, `ArtistCollection`, `ArtistBrandLink` | Creator identity, curated series, artist↔brand deals. |
-| **Products** | `@hitbox/products` | `Product`, `ProductVariant`, `ProductImage`, `ProductPrice` | The catalog — what is for sale, in which options, at what price. |
+| **Products** | `@hitbox/products` | `Drop`, `DropVariant`, `DropImage`, `DropPrice` | The catalog — what is for sale, in which options, at what price. Tables are still `Product*`; see [v3.1](schema-v3.1-changes.md). |
 | **Markets** | `@hitbox/markets` | `Market`, `MarketCountry` | Pricing/currency regions and country→market resolution. |
-| **Releases** | `@hitbox/releases` | `ReleaseApproval` | The review workflow that gates `Product.status`. |
-| **SKUs** | `@hitbox/skus` | `Sku` | The serialized-item registry: one row per physical collectible + its NFC tag. |
-| **Claims** | `@hitbox/claims` | `ProductClaim`, `ProductHistory`, `BlockchainLedger` | Provenance — claiming, the ownership timeline, the hash chain. |
+| **Releases** | `@hitbox/releases` | `ReleaseApproval` | The review workflow that gates `Drop.status`. |
+| **SKUs** | `@hitbox/skus` | `Sku`, `NfcTag`, `NfcVerification` | The serialized-item registry: one row per physical collectible, one per physical chip, one per tap. |
+| **Claims** | `@hitbox/claims` | `SkuClaim`, `SkuHistory`, `BlockchainLedger` | Provenance — claiming, the ownership timeline, the hash chain. |
 | **Collections** | `@hitbox/collections` | `BuyerCollection` | The buyer's shelf and its share/visibility rules. |
 | **Media** | `@hitbox/media` | `MediaAsset` | The single upload registry for the whole platform. |
 | **Content** | `@hitbox/content` | `ContentBundle`, `ContentBundleItem`, `ContentUnlock` | Exclusive content and the per-user grants that open it. |
@@ -86,9 +86,9 @@ stops being a read model.
 Most of the map above is obvious once you see it. These five splits are the ones a reader will
 question, so here is the reasoning.
 
-### 3.1 `Product` and `Sku` are different modules
+### 3.1 `Drop` and `Sku` are different modules
 
-`Product` is the *catalog definition* — "Ronin Vol. 1 hoodie, 500 units, ships in March". `Sku` is
+`Drop` (table `Product`) is the *catalog definition* — "Ronin Vol. 1 hoodie, 500 units, ships in March". `Sku` is
 *one physical object* — "#014 of 500, tag `04:A2:…`, owned by user X, tap counter 37".
 
 They have opposite characteristics. The catalog is low-volume, edited by brand staff, and read
@@ -104,8 +104,8 @@ The claims module writes the same truth three ways, on purpose:
 
 | Table | Question it answers | Access pattern |
 |---|---|---|
-| `ProductClaim` | "Who claimed this, when, under which drop?" | Written once per claim; read for receipts. |
-| `ProductHistory` | "Who held this between March and July?" | Range-queried for timelines and analytics. |
+| `SkuClaim` | "Who claimed this, when, under which drop?" | Written once per claim; read for receipts. |
+| `SkuHistory` | "Who held this between March and July?" | Range-queried for timelines and analytics. |
 | `BlockchainLedger` | "Prove none of the above was edited." | Append-only hash chain; verified, rarely queried. |
 
 A single table cannot be simultaneously a fast timeline query, a normalised claim record, and a
@@ -120,7 +120,7 @@ not denormalisation for speed — it is correctness. An order must always show w
 sent, even after the buyer edits or archives that address book entry. `sourceAddressId` is kept as a
 nullable provenance pointer only.
 
-The same reasoning covers `Order.unitPrice`/`amount`/`currency`/`gateway`, `ProductClaim`'s
+The same reasoning covers `Order.unitPrice`/`amount`/`currency`/`gateway`, `SkuClaim`'s
 `artistId`/`collectionId`, and `AuditEvent.actorRoleSnapshot`: **anything that must remain true about
 a past event is snapshotted, never joined.**
 
@@ -172,7 +172,7 @@ you to disambiguate with named relations:
 | `RefundRequest` | `User_requestedBy`, `User_approvedBy` | Financial four-eyes: requester ≠ approver. |
 | `SupportCase` | `User_reporter`, `User_resolvedBy` | Reporter is a buyer; resolver is staff. |
 
-The other structural hubs are `Product` (12 back-relations), `Sku` (10) and `Organization` (9).
+The other structural hubs are `Drop` (14 back-relations), `Sku` (13) and `Organization` (9).
 
 ### Polymorphic pointers
 
@@ -293,12 +293,15 @@ These are deliberate records of what the schema does *not* yet do, not a backlog
 2. **No secondary indexes.** Postgres does **not** auto-index foreign keys, and there are 96 of
    them. `@@unique` constraints are indexed; nothing else is. Expect to add `@@index` on the hot FK
    columns before load matters — `Sku.productId`/`ownerId`, `Order.buyerId`/`status`,
-   `AuditEvent.correlationId`/`occurredAt`, `ProductHistory.skuId` + `isCurrent`,
+   `AuditEvent.correlationId`/`occurredAt`, `SkuHistory.skuId` + `isCurrent`,
    `SearchIndexJob.status`, `Notification.userId` + `status`.
 
-3. **No `@map` / `@@map`.** Table and column names are the Prisma defaults (`ProductClaim`,
-   `createdAt`) rather than the snake_case (`product_claims`, `created_at`) the earlier schema used.
-   Renaming later is a mechanical but genuinely destructive migration, so decide now if it matters.
+3. **`@map` / `@@map` is used for renames only.** Table and column names are the Prisma defaults
+   (`ProductClaim`, `createdAt`) rather than the snake_case (`product_claims`, `created_at`) the
+   earlier schema used. The v3.1 model renames are carried entirely by `@@map`/`@map` precisely
+   because renaming a table for real is a genuinely destructive migration — so
+   `model Drop { … @@map("Product") }` keeps the physical name and changes only what the code
+   reads. See [schema-v3.1-changes.md](schema-v3.1-changes.md).
 
 4. **`PermissionScope` was added during this decomposition, then extended.** `Permission.scope`
    referenced it and `@@unique([resource, action, scope])` depended on it, but the enum was never

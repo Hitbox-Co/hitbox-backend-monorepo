@@ -4,7 +4,7 @@
 //
 // Owns: ReleaseApproval
 //
-// The review workflow that gates Product.status. Separated from products
+// The review workflow that gates Drop.status. Separated from products
 // because it is a different actor's surface (HitBox reviewer / compliance)
 // with its own audit expectations.
 // ============================================================================
@@ -16,7 +16,7 @@
 model ReleaseApproval {
   id                String           @id @db.Uuid
   productId         String           @db.Uuid
-  product           Product          @relation(fields: [productId], references: [id])
+  drop              Drop             @relation(fields: [productId], references: [id])
   approverId        String           @db.Uuid
   approver          User             @relation("User_approver", fields: [approverId], references: [id])
   status            ApprovalStatus

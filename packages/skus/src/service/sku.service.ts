@@ -3,22 +3,36 @@ import { ClaimedStatus, Prisma, TagLifecycleState } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import {
+    SKU_AUDIT_EVENTS,
     SKU_EVENTS,
     SKU_MINT_MAX_ATTEMPTS,
     SKUS_ERROR_CODES,
 } from '../constants/skus.constant';
 import { Visibility, maskEmail, maskId, maskTag } from '../domain/sku-access';
 import type { SkuAccess } from '../domain/sku-access';
+import { assertFiltersPermitted, searchMayMatchTag } from '../domain/sku-filters';
+import {
+    assertChangesUsable,
+    assertFieldsWritable,
+    planSkuUpdate,
+} from '../domain/sku-update';
+import type { SkuUpdatePlan, SkuUpdateTarget } from '../domain/sku-update';
+import type { ISkuAudit } from '../domain/interfaces/sku-audit.interface';
 import type {
+    BatchUpdateItem,
+    BatchUpdateResult,
+    BatchUpdateSkusDto,
     BindTagDto,
     BulkBindResult,
     BulkBindTagsDto,
     ListSkusQuery,
     MintResult,
     MintSkusDto,
+    SkuChangesDto,
     SkuDetail,
     SkuListItem,
     SkuSummary,
+    UpdateSkuDto,
 } from '../dto/sku.dto';
 import type {
     MintOutcome,
@@ -26,6 +40,7 @@ import type {
     SkuDetailRow,
     SkuRepository,
     SkuRow,
+    SkuUpdateRow,
     TagBindTarget,
 } from '../repository/sku.repository';
 
@@ -42,8 +57,25 @@ const REPLACEABLE_TAG_STATES: TagLifecycleState[] = [
 interface SkuServiceDeps {
     skus: SkuRepository;
     eventBus: IEventBus;
+    audit: ISkuAudit;
     logger: Logger;
 }
+
+/**
+ * A write request: who is asking, and which request it belongs to.
+ *
+ * `correlationId` is carried rather than generated so the audit row for an
+ * edit can be joined to the ledger write, the event, and the request log it
+ * came from. An audit entry nobody can join to anything is most of the trail's
+ * value lost.
+ */
+export interface SkuMutationContext {
+    access: SkuAccess;
+    correlationId: string;
+}
+
+/** The most refusals named in one batch error before it stops being readable. */
+const MAX_REPORTED_PROBLEMS = 20;
 
 /** What the products module passes when it mints an edition with a new drop. */
 export interface InlineMintSpec {
@@ -405,6 +437,266 @@ export class SkuService {
         return error;
     }
 
+    // ── Inventory edits ─────────────────────────────────────────────────────
+
+    /**
+     * Edits one unit's record.
+     *
+     * Three gates, in increasing cost: the caller's grants decide which fields
+     * they may write at all, the body has to name at least one of them, and
+     * only then is the unit loaded and its own state consulted. A caller who
+     * may not touch tag custody learns that without a database read.
+     *
+     * A body that resolves to no change is **not** an error. Re-sending an edit
+     * that already landed — a retried request, a form submitted twice — returns
+     * the unit unchanged, so the endpoint is safe to retry.
+     */
+    async update(
+        context: SkuMutationContext,
+        skuId: string,
+        dto: UpdateSkuDto,
+    ): Promise<SkuDetail> {
+        const { access } = context;
+        assertFieldsWritable(dto, access);
+        assertChangesUsable(dto);
+
+        const row = await this.deps.skus.findForUpdate(skuId);
+        if (!row || !reaches(access, row.drop.organizationId)) {
+            throw AppError.notFound('Unit not found', SKUS_ERROR_CODES.NOT_FOUND);
+        }
+
+        const now = new Date();
+        const outcome = planSkuUpdate(toUpdateTarget(row), dto, now);
+        if (!outcome.ok) {
+            await this.recordDenial(context, row, dto, `${row.skuCode}: ${outcome.problem}`);
+            throw AppError.conflict(
+                `${row.skuCode}: ${outcome.problem}`,
+                SKUS_ERROR_CODES.UPDATE_REFUSED,
+            );
+        }
+
+        await this.assertVariantUsable(outcome.plan, row.productId);
+
+        const fields = Object.keys(outcome.plan.patch);
+        if (fields.length === 0) return this.getDetail(access, skuId);
+
+        await this.deps.skus.applyUpdates([{ skuId, patch: outcome.plan.patch }], now);
+
+        // Awaited, and allowed to throw. These are the edits a fraud review
+        // goes looking for; one that happened with no trail is worse than one
+        // that failed loudly.
+        await this.deps.audit.record({
+            eventType: SKU_AUDIT_EVENTS.UPDATE,
+            actorId: access.userId,
+            organizationId: row.drop.organizationId,
+            skuId,
+            result: 'SUCCESS',
+            correlationId: context.correlationId,
+            before: outcome.plan.before,
+            after: outcome.plan.after,
+            metadata: {
+                skuCode: row.skuCode,
+                productId: row.productId,
+                ...(dto.reason ? { reason: dto.reason } : {}),
+            },
+        });
+
+        await this.deps.eventBus.publish(SKU_EVENTS.SKU_UPDATED, {
+            skuId,
+            skuCode: row.skuCode,
+            productId: row.productId,
+            fields,
+        });
+
+        return this.getDetail(access, skuId);
+    }
+
+    /**
+     * Applies one set of changes to many units, all or nothing.
+     *
+     * The shape of this endpoint follows from what an inventory screen does:
+     * an operator filters a list, selects rows, and acts on the selection. So
+     * it takes one `changes` object and a selector, not a list of per-unit
+     * edits — the per-unit case is a tag manifest and already has an endpoint.
+     *
+     * **Every refusal is reported at once and nothing is written.** A partially
+     * applied batch leaves an operator working out which of 800 units took the
+     * change, which is not a question the database can answer afterwards. The
+     * same reasoning as the tag manifest, for the same reason.
+     *
+     * Units already in the requested state are counted as `unchanged`, not
+     * refused: selecting 200 rows of which 13 are already blocked is ordinary,
+     * and failing the whole batch over it would make the endpoint unusable.
+     */
+    async batchUpdate(
+        context: SkuMutationContext,
+        productId: string | undefined,
+        dto: BatchUpdateSkusDto,
+    ): Promise<BatchUpdateResult> {
+        const { access } = context;
+        assertFieldsWritable(dto.changes, access);
+        assertChangesUsable(dto.changes);
+
+        const drop = productId ?? dto.productId;
+        const { targets } = dto;
+        const bySerial = targets.serialNumbers !== undefined || targets.serialFrom !== undefined;
+        if (bySerial && !drop) {
+            throw AppError.badRequest(
+                'Targeting units by serial number needs a productId — a serial is a ' +
+                "position within one drop's edition, not a platform-wide identifier.",
+                SKUS_ERROR_CODES.PRODUCT_NOT_FOUND,
+            );
+        }
+        // Resolves reachability and 404s an out-of-scope drop before anything
+        // is counted, so a refused caller cannot learn an edition's size.
+        if (drop) await this.requireProduct(access, drop);
+
+        const rows = await this.deps.skus.findBatchTargets({
+            productId: drop,
+            organizationIds: access.organizationIds,
+            targets,
+        });
+
+        const problems = namedButMissing(targets, rows);
+        if (rows.length === 0 && problems.length === 0) {
+            throw AppError.notFound(
+                'That selection matched no units.',
+                SKUS_ERROR_CODES.BATCH_EMPTY,
+            );
+        }
+
+        const now = new Date();
+        const plans: { row: SkuUpdateRow; plan: SkuUpdatePlan }[] = [];
+        for (const row of rows) {
+            const outcome = planSkuUpdate(toUpdateTarget(row), dto.changes, now);
+            if (!outcome.ok) problems.push(`${row.skuCode}: ${outcome.problem}`);
+            else plans.push({ row, plan: outcome.plan });
+        }
+
+        if (problems.length > 0) {
+            await this.recordBatchDenial(context, drop ?? null, dto, problems);
+            throw AppError.conflict(
+                `Batch rejected, nothing was written. ${summarise(problems)}`,
+                SKUS_ERROR_CODES.BATCH_REJECTED,
+            );
+        }
+
+        // A variant belongs to exactly one product, so a batch setting one has
+        // to be confined to that product — otherwise the foreign key would
+        // happily attach another drop's variant to these units.
+        if (plans[0]) await this.assertVariantUsable(plans[0].plan, plans[0].row.productId);
+        if (dto.changes.variantId && new Set(rows.map((row) => row.productId)).size > 1) {
+            throw AppError.badRequest(
+                'A variant belongs to one drop, so a batch that sets variantId cannot ' +
+                'span several. Narrow the selection to one product.',
+                SKUS_ERROR_CODES.VARIANT_MISMATCH,
+            );
+        }
+
+        const writes = plans.filter(({ plan }) => Object.keys(plan.patch).length > 0);
+        const items: BatchUpdateItem[] = plans.map(({ row, plan }) => ({
+            skuId: row.id,
+            skuCode: row.skuCode,
+            serialNumber: row.serialNumber,
+            changed: Object.keys(plan.patch),
+        }));
+
+        const result: BatchUpdateResult = {
+            productId: drop ?? null,
+            requested: countRequested(targets),
+            matched: rows.length,
+            changed: writes.length,
+            unchanged: plans.length - writes.length,
+            dryRun: dto.dryRun,
+            items,
+        };
+
+        if (dto.dryRun || writes.length === 0) return result;
+
+        await this.deps.skus.applyUpdates(
+            writes.map(({ row, plan }) => ({ skuId: row.id, patch: plan.patch })),
+            now,
+        );
+
+        await this.deps.audit.record({
+            eventType: SKU_AUDIT_EVENTS.BATCH_UPDATE,
+            actorId: access.userId,
+            organizationId: writes[0]?.row.drop.organizationId ?? null,
+            skuId: null,
+            result: 'SUCCESS',
+            correlationId: context.correlationId,
+            // Field names, not per-unit values: a thousand before/after pairs
+            // would bury the one fact a review needs, which is what changed and
+            // on which units.
+            after: { changes: dto.changes as Record<string, unknown> },
+            metadata: {
+                productId: drop ?? null,
+                matched: result.matched,
+                changed: result.changed,
+                unchanged: result.unchanged,
+                skuIds: writes.map(({ row }) => row.id),
+                ...(dto.changes.reason ? { reason: dto.changes.reason } : {}),
+            },
+        });
+
+        await this.deps.eventBus.publish(SKU_EVENTS.SKUS_BATCH_UPDATED, {
+            productId: drop ?? null,
+            changed: result.changed,
+            fields: [...new Set(writes.flatMap(({ plan }) => Object.keys(plan.patch)))],
+        });
+
+        return result;
+    }
+
+    /** Confirms a newly attached variant belongs to the unit's own drop. */
+    private async assertVariantUsable(plan: SkuUpdatePlan, productId: string): Promise<void> {
+        if (!plan.variantToVerify) return;
+        if (await this.deps.skus.variantBelongsTo(plan.variantToVerify, productId)) return;
+        throw AppError.badRequest(
+            'variantId does not belong to this product',
+            SKUS_ERROR_CODES.VARIANT_MISMATCH,
+        );
+    }
+
+    private recordDenial(
+        context: SkuMutationContext,
+        row: SkuUpdateRow,
+        changes: SkuChangesDto,
+        problem: string,
+    ): Promise<void> {
+        return this.deps.audit.record({
+            eventType: SKU_AUDIT_EVENTS.UPDATE,
+            actorId: context.access.userId,
+            organizationId: row.drop.organizationId,
+            skuId: row.id,
+            result: 'DENIED',
+            correlationId: context.correlationId,
+            metadata: { skuCode: row.skuCode, problem, attempted: changes as Record<string, unknown> },
+        });
+    }
+
+    private recordBatchDenial(
+        context: SkuMutationContext,
+        productId: string | null,
+        dto: BatchUpdateSkusDto,
+        problems: string[],
+    ): Promise<void> {
+        return this.deps.audit.record({
+            eventType: SKU_AUDIT_EVENTS.BATCH_UPDATE,
+            actorId: context.access.userId,
+            organizationId: null,
+            skuId: null,
+            result: 'DENIED',
+            correlationId: context.correlationId,
+            metadata: {
+                productId,
+                problems: problems.slice(0, MAX_REPORTED_PROBLEMS),
+                problemCount: problems.length,
+                attempted: dto.changes as Record<string, unknown>,
+            },
+        });
+    }
+
     // ── Reads ───────────────────────────────────────────────────────────────
 
     async listForProduct(
@@ -421,10 +713,15 @@ export class SkuService {
         productId: string | undefined,
         query: ListSkusQuery,
     ): Promise<{ data: SkuListItem[]; meta: { page: number; limit: number; total: number; totalPages: number } }> {
+        // Filtering a column is a read of it: a caller who is not shown tag
+        // UIDs may not ask yes/no questions about one either.
+        assertFiltersPermitted(query as unknown as Record<string, unknown>, access);
+
         const { total, items } = await this.deps.skus.list({
             productId,
             organizationIds: access.organizationIds,
             query,
+            allowTagSearch: searchMayMatchTag(access),
         });
         return {
             data: items.map((row) => this.toListItem(row, access)),
@@ -489,7 +786,7 @@ export class SkuService {
     }
 
     private requireReachable(row: SkuDetailRow | null, access: SkuAccess): SkuDetailRow {
-        if (!row || !reaches(access, row.product.organizationId)) {
+        if (!row || !reaches(access, row.drop.organizationId)) {
             throw AppError.notFound('Unit not found', SKUS_ERROR_CODES.NOT_FOUND);
         }
         return row;
@@ -513,6 +810,7 @@ export class SkuService {
             isActive: row.isActive,
             archivedAt: row.archivedAt?.toISOString() ?? null,
             createdAt: row.createdAt.toISOString(),
+            updatedAt: row.updatedAt.toISOString(),
         };
 
         // Trust flags say *why* an item is frozen. Support sees the unit at
@@ -530,7 +828,17 @@ export class SkuService {
             item.tag = {
                 tagId: row.tagId === null ? null : full ? row.tagId : maskTag(row.tagId),
                 tagLifecycleState: row.tagLifecycleState,
-                ...(full ? { lastTapCounter: row.lastTapCounter } : {}),
+                // Provisioning provenance identifies the consignment a UID came
+                // from, so it travels with the UID's own visibility rather than
+                // with the fact that a tag exists.
+                ...(full
+                    ? {
+                        lastTapCounter: row.lastTapCounter,
+                        vendorId: row.vendorId,
+                        provisioningBatchId: row.provisioningBatchId,
+                        vendorAuthenticatedAt: row.vendorAuthenticatedAt?.toISOString() ?? null,
+                    }
+                    : {}),
             };
         }
 
@@ -552,21 +860,21 @@ export class SkuService {
         const detail: SkuDetail = {
             ...this.toListItem(row, access),
             product: {
-                productId: row.product.id,
-                groupCode: row.product.groupCode,
-                name: row.product.name,
-                organizationId: row.product.organizationId,
-                status: row.product.status,
-                totalSupply: row.product.totalSupply,
+                productId: row.drop.id,
+                groupCode: row.drop.groupCode,
+                name: row.drop.name,
+                organizationId: row.drop.organizationId,
+                status: row.drop.status,
+                totalSupply: row.drop.totalSupply,
             },
         };
 
         if (access.tag) {
-            const history = row.productHistorys[0];
+            const history = row.skuHistories[0];
             detail.provenance = {
-                claimCount: row._count.productClaims,
+                claimCount: row._count.skuClaims,
                 ledgerEntries: row._count.blockchainLedgers,
-                firstClaimedAt: row.productClaims[0]?.claimedAt.toISOString() ?? null,
+                firstClaimedAt: row.skuClaims[0]?.claimedAt.toISOString() ?? null,
                 currentHolderSince: history?.startedAt.toISOString() ?? null,
             };
             // What the current holder paid is a monetary figure like any
@@ -596,6 +904,62 @@ export class SkuService {
 
         return detail;
     }
+}
+
+/** The update rules read the unit alone; the product relation is not theirs. */
+function toUpdateTarget(row: SkuUpdateRow): SkuUpdateTarget {
+    const { drop: _drop, ...unit } = row;
+    return unit;
+}
+
+/**
+ * Targets the caller named by hand that did not resolve to a unit.
+ *
+ * A serial *range* is exempt: `#401–500` over an edition that only reached 460
+ * is a perfectly ordinary way to say "the tail of this drop", and refusing it
+ * would make the range selector useless for exactly the case it exists for. An
+ * explicitly listed id, code or serial that is not there is an operator
+ * mistake, and is reported as one.
+ */
+function namedButMissing(targets: BatchUpdateSkusDto['targets'], rows: SkuUpdateRow[]): string[] {
+    if (targets.skuIds) {
+        const found = new Set(rows.map((row) => row.id));
+        return targets.skuIds.filter((id) => !found.has(id)).map((id) => `${id}: no such unit`);
+    }
+    if (targets.skuCodes) {
+        const found = new Set(rows.map((row) => row.skuCode));
+        return targets.skuCodes
+            .filter((code) => !found.has(code))
+            .map((code) => `${code}: no such unit`);
+    }
+    if (targets.serialNumbers) {
+        const found = new Set(rows.map((row) => row.serialNumber));
+        return targets.serialNumbers
+            .filter((serial) => !found.has(serial))
+            .map((serial) => `#${serial}: not a unit of this drop`);
+    }
+    return [];
+}
+
+/** How many units the selector named, before anything was looked up. */
+function countRequested(targets: BatchUpdateSkusDto['targets']): number {
+    if (targets.skuIds) return targets.skuIds.length;
+    if (targets.skuCodes) return targets.skuCodes.length;
+    if (targets.serialNumbers) return targets.serialNumbers.length;
+    if (targets.serialFrom !== undefined && targets.serialTo !== undefined) {
+        return targets.serialTo - targets.serialFrom + 1;
+    }
+    /* c8 ignore next */
+    return 0;
+}
+
+/** The first few refusals plus a count — a 400-line message helps nobody. */
+function summarise(problems: string[]): string {
+    const shown = problems.slice(0, MAX_REPORTED_PROBLEMS).join('; ');
+    const rest = problems.length > MAX_REPORTED_PROBLEMS
+        ? ` (and ${problems.length - MAX_REPORTED_PROBLEMS} more)`
+        : '';
+    return `${shown}${rest}`;
 }
 
 /** Does the caller's scope reach a record owned by this organization? */

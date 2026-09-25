@@ -68,12 +68,12 @@ export class ClaimsService {
             skuId: sku.id,
             skuCode: sku.skuCode,
             serialNumber: sku.serialNumber,
-            productId: sku.product.id,
-            groupCode: sku.product.groupCode,
-            name: sku.product.name,
+            productId: sku.drop.id,
+            groupCode: sku.drop.groupCode,
+            name: sku.drop.name,
             claimed: sku.claimedStatus === 'CLAIMED',
             claimedStatus: sku.claimedStatus,
-            status: sku.product.status,
+            status: sku.drop.status,
             owner: this.ownerView(sku.owner),
             ledgerLength: ledger.length,
             verifiedAt: new Date().toISOString(),
@@ -131,12 +131,12 @@ export class ClaimsService {
                 tagId: sku.tagId,
             },
             product: {
-                id: sku.product.id,
-                groupCode: sku.product.groupCode,
-                name: sku.product.name,
+                id: sku.drop.id,
+                groupCode: sku.drop.groupCode,
+                name: sku.drop.name,
                 priceInDollars: price?.amount ?? null,
                 currency: price?.currency ?? null,
-                status: sku.product.status,
+                status: sku.drop.status,
                 imageUrl: this.imageUrlOf(sku),
             },
             owner: this.ownerView(sku.owner),
@@ -183,14 +183,14 @@ export class ClaimsService {
                 await this.deps.eventBus.publish(CLAIMS_EVENTS.PRODUCT_CLAIMED, {
                     claimId: result.claim.id,
                     skuId: sku.id,
-                    productId: sku.product.id,
+                    productId: sku.drop.id,
                     userId,
                 });
 
                 return {
                     outcome: CLAIM_OUTCOME.CLAIMED,
                     claimedByYou: true,
-                    message: `You claimed "${sku.product.name}". You now own it.`,
+                    message: `You claimed "${sku.drop.name}". You now own it.`,
                     owner: this.ownerView(me) ?? { id: userId, handle: null, displayName: null },
                     sku: {
                         id: sku.id,
@@ -200,9 +200,9 @@ export class ClaimsService {
                         claimedStatus: 'CLAIMED',
                     },
                     product: {
-                        id: sku.product.id,
-                        groupCode: sku.product.groupCode,
-                        name: sku.product.name,
+                        id: sku.drop.id,
+                        groupCode: sku.drop.groupCode,
+                        name: sku.drop.name,
                     },
                     claimedAt: result.claim.claimedAt.toISOString(),
                     claim: {
@@ -238,8 +238,8 @@ export class ClaimsService {
             outcome: CLAIM_OUTCOME.ALREADY_CLAIMED,
             claimedByYou,
             message: claimedByYou
-                ? `You already own "${sku.product.name}".`
-                : `"${sku.product.name}" is already claimed by ${ownerName}.`,
+                ? `You already own "${sku.drop.name}".`
+                : `"${sku.drop.name}" is already claimed by ${ownerName}.`,
             owner: this.ownerView(owner) ?? { id: '', handle: null, displayName: null },
             sku: {
                 id: sku.id,
@@ -249,9 +249,9 @@ export class ClaimsService {
                 claimedStatus: 'CLAIMED',
             },
             product: {
-                id: sku.product.id,
-                groupCode: sku.product.groupCode,
-                name: sku.product.name,
+                id: sku.drop.id,
+                groupCode: sku.drop.groupCode,
+                name: sku.drop.name,
             },
             claimedAt: this.claimedAtOf(sku),
             claim: null,
@@ -340,11 +340,11 @@ export class ClaimsService {
 
     /** `Sku` has no claimedAt column — the most recent claim row is the record. */
     private claimedAtOf(sku: SkuForTag): string | null {
-        return sku.productClaims[0]?.claimedAt.toISOString() ?? null;
+        return sku.skuClaims[0]?.claimedAt.toISOString() ?? null;
     }
 
     private imageUrlOf(sku: SkuForTag): string | null {
-        const ref = sku.product.productImages[0]?.asset.storageRef;
+        const ref = sku.drop.dropImages[0]?.asset.storageRef;
         if (!ref) return null;
         return this.deps.mediaUrls?.publicUrl(ref) ?? null;
     }
@@ -362,7 +362,7 @@ export class ClaimsService {
         return {
             sequenceNo: row.sequenceNo,
             txType: row.txType,
-            productId: row.sku.product.groupCode,
+            productId: row.sku.drop.groupCode,
             tag: row.sku.tagId,
             ownerId: payload.ownerLabel,
             dateTime: row.createdAt.toISOString(),

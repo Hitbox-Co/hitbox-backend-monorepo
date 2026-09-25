@@ -4,7 +4,7 @@ import type { Currency, PrismaClient } from '@hitbox/database';
 
 const marketInclude = {
     marketCountrys: { select: { countryCode: true }, orderBy: { countryCode: 'asc' } },
-    _count: { select: { productPrices: true, orders: true } },
+    _count: { select: { dropPrices: true, orders: true } },
 } satisfies Prisma.MarketInclude;
 
 export type MarketRow = Prisma.MarketGetPayload<{ include: typeof marketInclude }>;

@@ -74,6 +74,10 @@ model RolePermission {
   fieldAllowlist String[]
   isInferred     Boolean
   sourceCitation String?
+  /// True when exercising this grant must carry a written reason — the
+  /// high-consequence permissions (a refund override, a tag revocation) where
+  /// "who did it" is not enough and "why" has to be on the audit row too.
+  requiresReason Boolean    @default(false)
   createdAt      DateTime
 
   @@unique([roleId, permissionId])

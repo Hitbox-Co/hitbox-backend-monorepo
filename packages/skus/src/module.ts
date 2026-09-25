@@ -11,6 +11,8 @@ import {
 } from './constants/skus.constant';
 import { SkuController } from './controller/sku.controller';
 import type { SkuPrincipalResolver } from './controller/sku.controller';
+import { NOOP_SKU_AUDIT } from './domain/interfaces/sku-audit.interface';
+import type { ISkuAudit } from './domain/interfaces/sku-audit.interface';
 import { SkuRepository } from './repository/sku.repository';
 import { SkuService } from './service/sku.service';
 
@@ -30,6 +32,12 @@ export interface SkusModuleDeps {
     eventBus: IEventBus;
     guard: SkusPermissionGuard;
     resolvePrincipal: SkuPrincipalResolver;
+    /**
+     * The compliance trail for inventory edits. Optional so a test harness can
+     * build the module without one; a server must pass the real recorder, or
+     * a tag revocation happens with nothing to show for it.
+     */
+    audit?: ISkuAudit;
 }
 
 export interface SkusModule {
@@ -47,7 +55,12 @@ export interface SkusModule {
 export function createSkusModule(deps: SkusModuleDeps): SkusModule {
     const logger = createModuleLogger(SKUS_MODULE);
     const skus = new SkuRepository(deps.prisma);
-    const service = new SkuService({ skus, eventBus: deps.eventBus, logger });
+    const service = new SkuService({
+        skus,
+        eventBus: deps.eventBus,
+        audit: deps.audit ?? NOOP_SKU_AUDIT,
+        logger,
+    });
     const controller = new SkuController(service, deps.resolvePrincipal);
 
     /**
@@ -117,6 +130,22 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
                 controller.bulkBindTags,
             );
 
+            /**
+             * Batch inventory edits, confined to one drop.
+             *
+             * Gated on the unit capability rather than tag custody, and a body
+             * touching tag-custody fields is refused inside the service — so a
+             * Brand Admin can archive half an edition and still cannot revoke
+             * a single tag. The nested form exists precisely for them: the
+             * cross-drop route carries no organization and admits global
+             * grants only.
+             */
+            router.patch(
+                '/batch',
+                deps.guard.requirePermission(SKU_WRITE_CAPABILITY, { context: productContext }),
+                controller.batchUpdate,
+            );
+
             return router;
         },
 
@@ -138,11 +167,37 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
                 deps.guard.requirePermission(SKU_READ_CAPABILITY),
                 controller.getByCode,
             );
+
+            // Registered before `/:skuId`, or Express matches "batch" as an id
+            // and the batch endpoint becomes a 404 for a unit that does not
+            // exist. Literal paths first is the rule for every router here.
+            router.patch(
+                '/batch',
+                deps.guard.requirePermission(SKU_WRITE_CAPABILITY),
+                controller.batchUpdate,
+            );
+
             router.get(
                 '/:skuId',
                 deps.guard.requirePermission(SKU_READ_CAPABILITY, { context: skuContext }),
                 controller.getById,
             );
+
+            /**
+             * Editing one unit's record.
+             *
+             * Checked against the drop's own organization, so a Brand Admin
+             * holding `collectible-instance:manage:organization` may edit their
+             * own units. Which *fields* they may write is a second question,
+             * answered from their grants in domain/sku-update.ts — tag custody
+             * needs `nfc-tag-claim:manage` and this route does not check it.
+             */
+            router.patch(
+                '/:skuId',
+                deps.guard.requirePermission(SKU_WRITE_CAPABILITY, { context: skuContext }),
+                controller.update,
+            );
+
             router.patch(
                 '/:skuId/tag',
                 deps.guard.requirePermission(SKU_TAG_CAPABILITY, { context: skuContext }),

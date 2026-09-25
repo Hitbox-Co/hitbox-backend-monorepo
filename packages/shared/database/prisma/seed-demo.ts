@@ -29,7 +29,7 @@ import {
     EvolutionThresholdType, FinanceDirection, GatewayConfigScope, IndexJobStatus,
     IndexOperation, LedgerEntryType, LedgerTxType, NotificationChannel,
     NotificationStatus, OrderStatus, OrganizationType, PaymentGateway,
-    PaymentTransactionStatus, Prisma, ProductPriceStatus, RefundStatus,
+    PaymentTransactionStatus, Prisma, DropPriceStatus, RefundStatus,
     ResaleStatus, ReservationStatus, RoleScopeType, RoyaltyBasis,
     SupplyItemType, SupportCaseStatus, SupportCaseType, TagLifecycleState,
     UserRole, VendorType, VirusScanStatus, Visibility,
@@ -289,7 +289,7 @@ async function main(): Promise<void> {
             live: status === DropStatus.ACTIVE || status === DropStatus.PUBLISHED,
         };
     });
-    await prisma.product.createMany({
+    await prisma.drop.createMany({
         data: products.map((p) => ({
             id: id(`product:${p.key}`), groupCode: `HB-${String(1000 + p.index)}`,
             name: `${p.artist.name} Drop #${p.index + 1}`,
@@ -310,7 +310,7 @@ async function main(): Promise<void> {
             createdAt: daysAgo(55 - p.index * 2), updatedAt: daysAgo(10),
         })),
     });
-    await prisma.productVariant.createMany({
+    await prisma.dropVariant.createMany({
         data: products.flatMap((p) =>
             ['S', 'M', 'L'].map((size, v) => ({
                 id: id(`variant:${p.key}:${size}`), productId: id(`product:${p.key}`),
@@ -321,15 +321,15 @@ async function main(): Promise<void> {
             })),
         ),
     });
-    await prisma.productPrice.createMany({
+    await prisma.dropPrice.createMany({
         data: products.flatMap((p) =>
             markets.map((m) => ({
-                id: id(`price:${p.key}:${m.key}`), productId: id(`product:${p.key}`),
+                id: id(`price:${p.key}:${m.key}`), dropId: id(`product:${p.key}`),
                 variantId: null, marketId: id(`market:${m.key}`),
                 amount: dec(m.currency === Currency.INR ? 2400 + p.index * 100 : 29 + p.index * 10),
                 isFree: false,
                 costOfGoods: dec(m.currency === Currency.INR ? 900 + p.index * 40 : 11 + p.index * 4),
-                status: ProductPriceStatus.ACTIVE,
+                status: DropPriceStatus.ACTIVE,
                 createdAt: daysAgo(55 - p.index * 2), updatedAt: daysAgo(10),
             })),
         ),
@@ -393,7 +393,7 @@ async function main(): Promise<void> {
             },
         ],
     });
-    await prisma.productImage.createMany({
+    await prisma.dropImage.createMany({
         data: products.map((p, i) => ({
             id: id(`image:${p.key}`), productId: id(`product:${p.key}`),
             assetId: id(`asset:drop:${p.key}`), position: 0, isPrimary: true,
@@ -437,7 +437,7 @@ async function main(): Promise<void> {
     console.log(`  skus: ${skus.length} (${claimedSkus.length} claimed)`);
 
     // ── Claims, ledger, ownership history, buyer collections ────────────────
-    await prisma.productClaim.createMany({
+    await prisma.skuClaim.createMany({
         data: claimedSkus.map((s, i) => ({
             id: id(`claim:${s.key}`), claimCode: `CLM-${String(10000 + i)}`,
             claimedNo: 1, claimedAt: daysAgo(30 - (i % 25)),
@@ -458,7 +458,7 @@ async function main(): Promise<void> {
             ];
         }),
     });
-    await prisma.productHistory.createMany({
+    await prisma.skuHistory.createMany({
         data: claimedSkus.map((s, i) => ({
             id: id(`history:${s.key}`), skuId: id(`sku:${s.key}`),
             ownerId: id(`user:buyer:${s.ownerIdx}`), acquiredVia: AcquisitionMethod.CLAIM,
@@ -860,16 +860,16 @@ async function clearBusinessTables(): Promise<void> {
         prisma.orderAddress.deleteMany(),
         prisma.order.deleteMany(),
         prisma.buyerCollection.deleteMany(),
-        prisma.productHistory.deleteMany(),
+        prisma.skuHistory.deleteMany(),
         prisma.blockchainLedger.deleteMany(),
-        prisma.productClaim.deleteMany(),
+        prisma.skuClaim.deleteMany(),
         prisma.sku.deleteMany(),
         prisma.releaseApproval.deleteMany(),
-        prisma.productImage.deleteMany(),
+        prisma.dropImage.deleteMany(),
         prisma.mediaAsset.deleteMany(),
-        prisma.productPrice.deleteMany(),
-        prisma.productVariant.deleteMany(),
-        prisma.product.deleteMany(),
+        prisma.dropPrice.deleteMany(),
+        prisma.dropVariant.deleteMany(),
+        prisma.drop.deleteMany(),
         prisma.supplyBatch.deleteMany(),
         prisma.vendor.deleteMany(),
         prisma.artistBrandLink.deleteMany(),

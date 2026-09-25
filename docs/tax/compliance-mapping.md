@@ -21,7 +21,7 @@ Legend: ✅ implemented · 🟡 partial · ❌ not built · ⬜ out of this modu
 | 1.4 | Invoice issued before or at the time of supply | ✅ | Issued on `payments.order.settled` — see [invoice-generation.md 2](invoice-generation.md#2-when-an-invoice-is-issued) |
 | 1.4 | Unique, sequential invoice number per fiscal year | ✅ | `InvoiceNumberSequence`, gap-free by transaction |
 | 1.4 | All eight mandatory fields | ✅ | `assertRenderable()` refuses to draw a deficient Indian invoice |
-| 1.4 | Unit price from the versioned sales price, never COGS | 🟡 | `salesPriceSnapshot` ✅ and COGS never reaches the document ✅; `productCostId` is a nullable column awaiting the `product_cost` table |
+| 1.4 | Unit price from the versioned sales price, never COGS | 🟡 | `salesPriceSnapshot` ✅ and COGS never reaches the document ✅; `dropPriceId` is a nullable column, not yet populated |
 | 1.4 | Signature / authorised stamp | ✅ | Authorised-signatory box, marked digitally issued |
 | 1.5 | GSTR-1 / GSTR-3B data, HSN-wise breakdown, due dates | ✅ (data) / ❌ (filing) | `GET /admin/tax/reports/indirect-tax` + `/export`; `filingDueDate()` derives the 11th/20th. Filing to the GST portal is done by hand and its ARN recorded. |
 
@@ -130,11 +130,11 @@ module's document model, and the port tax declares over orders
 (`IInvoiceableOrderSource`) does not expose one. That is structural, not a
 convention someone has to remember: the type simply has no such field to print.
 
-`Invoice.productCostId` is a nullable `Uuid` with **no foreign key**, waiting for
-the `product_cost` table. No FK because that table does not exist in this schema
-yet and an invoice must never be blocked from being issued by a pricing table it
-does not own. When it lands, the column is populated at issue and nothing else
-changes.
+`Invoice.dropPriceId` (column still `productCostId`) is a nullable `Uuid` with
+**no foreign key**, naming the versioned `DropPrice` row that priced the
+invoice. No FK because an invoice must never be blocked from being issued by a
+pricing table it does not own. Nothing populates it yet; when something does,
+it is set at issue and nothing else changes.
 
 ### 2. Artist-level royalty rate, fixed at artist creation
 

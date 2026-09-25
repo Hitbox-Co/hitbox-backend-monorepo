@@ -30,11 +30,11 @@ export class ArtistCollectionRepository {
         if (collectionIds.length === 0) return [];
         const rows = await this.prisma.artistCollection.findMany({
             where: { id: { in: collectionIds } },
-            select: { id: true, _count: { select: { products: true } } },
+            select: { id: true, _count: { select: { drops: true } } },
         });
         return rows.map((row) => ({
             collectionId: row.id,
-            maximumLimit: row._count.products,
+            maximumLimit: row._count.drops,
         }));
     }
 }

@@ -280,7 +280,20 @@ pnpm --filter @hitbox/audit exec jest --verbose   # test names read as the spec
 
 **Adding an event:** add a definition to `AUDIT_EVENT_CATALOG` with a severity and at least one
 `sourceStories` citation (both asserted at import time — a duplicate or uncited event fails at boot),
-re-run `seedAudit(prisma)`, then call `record()` or `emit()` from the module that does the action.
+re-run the seed, then call `record()` or `emit()` from the module that does the action.
+
+```bash
+pnpm db:seed:audit
+```
+
+**The seed is not optional, and it is not only for new events.** `AuditEvent.eventType` is a
+foreign key to `AuditEventType`, so an event the table does not know about cannot be written at
+all — and `record()` fails the operation it was describing rather than losing the trail. On a
+database that has never been seeded, *every* audited write in the platform (a release decision, a
+refund, a SKU edit) is a `500` with `AUDIT_WRITE_FAILED`. Run `pnpm db:seed:audit` on every deploy,
+alongside `pnpm db:seed:authz`. It is idempotent: event types are reconciled to the code catalog,
+rows the catalog does not know are left alone, and retention policies are only filled in where
+missing so a window widened for a legal hold survives.
 
 **Recording from a business module** — depend on the port, not the service:
 

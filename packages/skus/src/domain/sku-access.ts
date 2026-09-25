@@ -135,6 +135,18 @@ export interface SkuAccess {
     /** True when the caller may bind or rewrite a physical tag UID. */
     canManageTags: boolean;
     /**
+     * True when the caller may edit a unit's own record — trust flags, variant,
+     * listing state, archival.
+     *
+     * Resolved from `collectible-instance:manage` specifically, not from the
+     * read grant: `HITBOX_CONTENT_MANAGER` holds
+     * `collectible-instance:update:global`, and `update` neither implies `read`
+     * nor is implied by it. The route guard checks the same capability, so this
+     * is the second half of the same answer — asked here because the batch
+     * endpoints have to refuse a field, not a route.
+     */
+    canManageUnits: boolean;
+    /**
      * Organizations every query must be confined to, or null for an
      * unrestricted caller. Derived from the caller's own ORG assignments.
      */
@@ -188,6 +200,7 @@ export function buildSkuAccess(principal: SkuPrincipal): SkuAccess {
         order: resolveAccess(principal, 'order'),
         canSeeMoney: resolveAccess(principal, 'payment-royalty') !== null,
         canManageTags: resolveAccess(principal, 'nfc-tag-claim', 'manage') !== null,
+        canManageUnits: resolveAccess(principal, 'collectible-instance', 'manage') !== null,
         organizationIds,
     };
 }

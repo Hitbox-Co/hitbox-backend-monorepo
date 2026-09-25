@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { Prisma } from '@hitbox/database';
-import type { PrismaClient, ProductClaim, User } from '@hitbox/database';
+import type { PrismaClient, SkuClaim, User } from '@hitbox/database';
 import { LEDGER_ORIGIN_OWNER } from '../constants/claims.constant';
 import { computeLedgerHash } from '../domain/ledger-hash';
 
@@ -11,9 +11,9 @@ import { computeLedgerHash } from '../domain/ledger-hash';
  * `Product.tagId` to `Sku.tagId`, and with it `claimedStatus` and `ownerId` —
  * which is the correct shape: a tag is glued to one serialized item, not to a
  * catalog entry. Every lookup here starts from `Sku` and reaches the catalog
- * as `sku.product`.
+ * as `sku.drop`.
  *
- * `ProductClaim`, `ProductHistory` and `BlockchainLedger` are all keyed by
+ * `SkuClaim`, `SkuHistory` and `BlockchainLedger` are all keyed by
  * `skuId` now, so the provenance chain is per-item rather than per-drop —
  * previously every SKU of a product shared one chain, which could not
  * represent two buyers holding two copies.
@@ -28,12 +28,12 @@ const basePriceArgs = {
     },
     take: 1,
     select: { amount: true, isFree: true, market: { select: { currency: true } } },
-} satisfies Prisma.Product$productPricesArgs;
+} satisfies Prisma.Drop$dropPricesArgs;
 
 // SKU projection needed to verify a tag and drive the claim flow.
 const skuByTagInclude = {
     owner: { select: { id: true, handle: true, fullName: true } },
-    product: {
+    drop: {
         select: {
             id: true,
             groupCode: true,
@@ -41,18 +41,18 @@ const skuByTagInclude = {
             status: true,
             collectionId: true,
             collection: { select: { id: true, artistId: true } },
-            productImages: {
+            dropImages: {
                 where: { archivedAt: null },
                 orderBy: [{ isPrimary: 'desc' }, { position: 'asc' }],
                 take: 1,
                 select: { asset: { select: { storageRef: true } } },
             },
-            productPrices: basePriceArgs,
+            dropPrices: basePriceArgs,
         },
     },
     // Most recent claim, for the "claimed at" timestamp — `Sku` carries no
     // claimedAt column; the claim row is the record of when it happened.
-    productClaims: { orderBy: { claimedNo: 'desc' }, take: 1, select: { claimedAt: true } },
+    skuClaims: { orderBy: { claimedNo: 'desc' }, take: 1, select: { claimedAt: true } },
 } satisfies Prisma.SkuInclude;
 
 export type SkuForTag = Prisma.SkuGetPayload<{ include: typeof skuByTagInclude }>;
@@ -67,7 +67,7 @@ export type SkuForTag = Prisma.SkuGetPayload<{ include: typeof skuByTagInclude }
  * varies by `txType` and must not change the table's shape.
  */
 const ledgerInclude = {
-    sku: { select: { tagId: true, product: { select: { groupCode: true } } } },
+    sku: { select: { tagId: true, drop: { select: { groupCode: true } } } },
 } satisfies Prisma.BlockchainLedgerInclude;
 
 export type LedgerRowFull = Prisma.BlockchainLedgerGetPayload<{ include: typeof ledgerInclude }>;
@@ -109,7 +109,7 @@ export interface ClaimTxParams {
 }
 
 export interface ClaimTxResult {
-    claim: ProductClaim;
+    claim: SkuClaim;
     ledger: LedgerRowFull;
     ownerId: string;
 }
@@ -118,7 +118,7 @@ export interface ClaimTxResult {
 export function basePriceOf(
     sku: SkuForTag,
 ): { amount: string; currency: string } | null {
-    const price = sku.product.productPrices[0];
+    const price = sku.drop.dropPrices[0];
     if (!price) return null;
     return {
         amount: price.isFree ? '0' : (price.amount?.toString() ?? '0'),
@@ -165,7 +165,7 @@ export class ClaimsRepository {
 
         const dateTime = sku.createdAt;
         const hash = computeLedgerHash({
-            productId: sku.product.groupCode,
+            productId: sku.drop.groupCode,
             tagId: sku.tagId,
             ownerId: LEDGER_ORIGIN_OWNER,
             dateTime: dateTime.toISOString(),
@@ -231,20 +231,20 @@ export class ClaimsRepository {
             if (released.count === 0) return null;
 
             const claim = params.claimId
-                ? await tx.productClaim.findUnique({ where: { id: params.claimId } })
-                : await tx.productClaim.findFirst({
+                ? await tx.skuClaim.findUnique({ where: { id: params.claimId } })
+                : await tx.skuClaim.findFirst({
                     where: { skuId: sku.id, revokedAt: null },
                     orderBy: { claimedNo: 'desc' },
                 });
 
             if (claim && claim.revokedAt === null) {
-                await tx.productClaim.updateMany({
+                await tx.skuClaim.updateMany({
                     where: { id: claim.id, revokedAt: null },
                     data: { revokedAt: now, revokedReason: reason.slice(0, 500) },
                 });
             }
 
-            await tx.productHistory.updateMany({
+            await tx.skuHistory.updateMany({
                 where: { skuId: sku.id, isCurrent: true },
                 data: { isCurrent: false, endedAt: now },
             });
@@ -265,7 +265,7 @@ export class ClaimsRepository {
                 orderBy: { sequenceNo: 'desc' },
             });
             const hash = computeLedgerHash({
-                productId: sku.product.groupCode,
+                productId: sku.drop.groupCode,
                 tagId: sku.tagId,
                 ownerId: LEDGER_ORIGIN_OWNER,
                 dateTime: now.toISOString(),
@@ -318,8 +318,8 @@ export class ClaimsRepository {
             if (flipped.count === 0) return null;
 
             // claimedNo counts claims on this SKU — unique [skuId, claimedNo].
-            const priorClaims = await tx.productClaim.count({ where: { skuId: sku.id } });
-            const claim = await tx.productClaim.create({
+            const priorClaims = await tx.skuClaim.count({ where: { skuId: sku.id } });
+            const claim = await tx.skuClaim.create({
                 data: {
                     id: randomUUID(),
                     claimCode,
@@ -327,9 +327,9 @@ export class ClaimsRepository {
                     claimedAt: now,
                     userId,
                     skuId: sku.id,
-                    productId: sku.product.id,
-                    artistId: sku.product.collection?.artistId ?? null,
-                    collectionId: sku.product.collectionId ?? null,
+                    productId: sku.drop.id,
+                    artistId: sku.drop.collection?.artistId ?? null,
+                    collectionId: sku.drop.collectionId ?? null,
                 },
             });
 
@@ -344,7 +344,7 @@ export class ClaimsRepository {
             if (!last) {
                 const dateTime = sku.createdAt;
                 const mintHash = computeLedgerHash({
-                    productId: sku.product.groupCode,
+                    productId: sku.drop.groupCode,
                     tagId: sku.tagId,
                     ownerId: LEDGER_ORIGIN_OWNER,
                     dateTime: dateTime.toISOString(),
@@ -356,7 +356,7 @@ export class ClaimsRepository {
 
             // The new CLAIM record — owner is the claimer.
             const claimHash = computeLedgerHash({
-                productId: sku.product.groupCode,
+                productId: sku.drop.groupCode,
                 tagId: sku.tagId,
                 ownerId: ownerLabel,
                 dateTime: now.toISOString(),
@@ -375,7 +375,7 @@ export class ClaimsRepository {
                     sequenceNo: prevSeq + 1,
                     previousHash: prevHash,
                     currentHash: claimHash,
-                    sellerDigitalSignature: `sig_hitbox_${sku.product.groupCode}`,
+                    sellerDigitalSignature: `sig_hitbox_${sku.drop.groupCode}`,
                     buyerDigitalSignature: `sig_buyer_${claim.id}`,
                     receiverPublicKey: `pk_${userId}`,
                     payload: payload as unknown as Prisma.InputJsonValue,
@@ -386,11 +386,11 @@ export class ClaimsRepository {
 
             // Close any open ownership period, then open the new one. Exactly
             // one row per SKU carries isCurrent = true.
-            await tx.productHistory.updateMany({
+            await tx.skuHistory.updateMany({
                 where: { skuId: sku.id, isCurrent: true },
                 data: { isCurrent: false, endedAt: now },
             });
-            await tx.productHistory.create({
+            await tx.skuHistory.create({
                 data: {
                     id: randomUUID(),
                     skuId: sku.id,
@@ -443,7 +443,7 @@ function mintRow(input: {
         sequenceNo: 0,
         previousHash: null,
         currentHash: input.hash,
-        sellerDigitalSignature: `sig_hitbox_${input.sku.product.groupCode}`,
+        sellerDigitalSignature: `sig_hitbox_${input.sku.drop.groupCode}`,
         payload: payload as unknown as Prisma.InputJsonValue,
         createdAt: input.dateTime,
     };
