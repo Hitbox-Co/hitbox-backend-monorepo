@@ -133,20 +133,55 @@ enum QcStatus {
   FAILED
 }
 
-/// What kind of supplier this is.
+/// What kind of goods this supplier makes.
+///
+/// These are **product categories**, not manufacturing capabilities, and that
+/// is the point: an NFC chip arrives already embedded in the item, so nobody
+/// on this platform is "a tag manufacturer" from the supply chain's point of
+/// view — they are the factory that makes the action figure the chip is inside.
+///
+/// The values deliberately mirror `Drop.category`, so "who makes our jerseys"
+/// and "which drops are jerseys" answer with the same word.
+///
+/// Adding a value is a migration (Postgres appends cheaply); REMOVING one is a
+/// type recreation, because Postgres has no `ALTER TYPE ... DROP VALUE`. Prefer
+/// `OTHER` over inventing a value you are not sure of.
 enum VendorType {
-  NFC_TAG_MANUFACTURER
-  MERCHANDISE_MANUFACTURER
+  FIGURE
+  KEYCHAIN
+  JERSEY
+  APPAREL
+  TRADING_CARD
+  POSTER
+  PLUSH
+  /// Mixed or general merchandise that does not fall in one category above.
+  MERCHANDISE
   OTHER
 }
 
-/// What a supply batch contains. `COLLECTIBLE` is appended, never inserted —
-/// an enum value's position is part of the physical type in Postgres.
+/// What a supply batch contains — the same product categories as
+/// `VendorType` and `Drop.category`, so "who makes our jerseys", "which drops
+/// are jerseys" and "which cartons held jerseys" answer with the same word.
+///
+/// The chip arrives already embedded in the goods, so a carton is described by
+/// what the goods ARE. The former `NFC_TAG` (a consignment of loose reels this
+/// platform never receives) and `COLLECTIBLE` ("a finished serialized item",
+/// true of every category) are gone — see migration
+/// `20260928120000_supply_item_type_product_categories`.
+///
+/// Adding a value is a migration; REMOVING one recreates the type. Prefer
+/// `OTHER` over inventing a value you are not sure of.
 enum SupplyItemType {
-  NFC_TAG
+  FIGURE
+  KEYCHAIN
+  JERSEY
+  APPAREL
+  TRADING_CARD
+  POSTER
+  PLUSH
+  /// Mixed or general merchandise that does not fall in one category above.
   MERCHANDISE
-  /// A finished serialized item, chip already embedded.
-  COLLECTIBLE
+  OTHER
 }
 
 /// Where a vendor consignment is in its intake review. UPLOADED is the raw

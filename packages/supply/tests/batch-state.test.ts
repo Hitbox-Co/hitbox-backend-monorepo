@@ -141,7 +141,7 @@ describe('the vendor body — what a real form actually sends', () => {
     it('accepts a blank email on create too', () => {
         const result = createVendorSchema.safeParse({
             name: 'ChipWorks',
-            vendorType: 'NFC_TAG_MANUFACTURER',
+            vendorType: 'FIGURE',
             contactEmail: '',
             country: '',
         });
@@ -175,11 +175,51 @@ describe('the vendor body — what a real form actually sends', () => {
     });
 });
 
+describe('vendor types are product categories, not capabilities', () => {
+    /**
+     * Every chip on this platform arrives already embedded in the item, so a
+     * vendor is the factory that makes the action figure — not "a tag
+     * manufacturer". The values mirror `Drop.category` so that "who makes our
+     * jerseys" and "which drops are jerseys" answer with the same word.
+     */
+    const categories = [
+        'FIGURE', 'KEYCHAIN', 'JERSEY', 'APPAREL',
+        'TRADING_CARD', 'POSTER', 'PLUSH', 'MERCHANDISE', 'OTHER',
+    ];
+
+    it.each(categories)('accepts %s', (vendorType) => {
+        expect(
+            createVendorSchema.safeParse({ name: 'Acme', vendorType }).success,
+        ).toBe(true);
+    });
+
+    it('accepts a lower-case category from a form', () => {
+        const result = createVendorSchema.safeParse({
+            name: 'Acme',
+            vendorType: 'action_figure'.replace('action_', ''),
+        });
+        expect(result.success && result.data.vendorType).toBe('FIGURE');
+    });
+
+    it('refuses the retired capability-shaped values', () => {
+        // These were the old enum. A client still sending them should get a
+        // clear 422 rather than silently landing in OTHER.
+        expect(
+            createVendorSchema.safeParse({ name: 'Acme', vendorType: 'NFC_TAG_MANUFACTURER' })
+                .success,
+        ).toBe(false);
+        expect(
+            createVendorSchema.safeParse({ name: 'Acme', vendorType: 'MERCHANDISE_MANUFACTURER' })
+                .success,
+        ).toBe(false);
+    });
+});
+
 describe('the consignment body', () => {
     it('defaults batchDate from receivedAt only in the service, not the schema', () => {
         const result = createBatchSchema.safeParse({
             vendorId: '00000000-0000-4000-8000-000000000001',
-            itemType: 'nfc_tag',
+            itemType: 'figure',
             quantity: '500',
         });
         expect(result.success).toBe(true);
@@ -195,7 +235,7 @@ describe('the consignment body', () => {
         expect(
             createBatchSchema.safeParse({
                 vendorId: '00000000-0000-4000-8000-000000000001',
-                itemType: 'NFC_TAG',
+                itemType: 'FIGURE',
                 quantity: 0,
             }).success,
         ).toBe(false);

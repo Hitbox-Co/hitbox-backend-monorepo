@@ -46,6 +46,34 @@ import type {
     VendorRow,
 } from '../repository/supply.repository';
 
+/**
+ * Consignment types a chip manifest may be registered against.
+ *
+ * Chips arrive **already embedded in the goods** on this platform — nobody
+ * ships a reel of loose tags — so the type that carries them is whatever the
+ * finished goods were booked in as.
+ *
+ * Since `SupplyItemType` became a set of product categories every member is
+ * listed, which looks like a check that does nothing. It is kept as an
+ * explicit allowlist anyway, so that a category added later which carries no
+ * chips — packaging, say — has to opt in deliberately rather than inheriting
+ * permission by silence.
+ */
+const MANIFEST_ITEM_TYPES: ReadonlySet<SupplyItemType> = new Set([
+    SupplyItemType.FIGURE,
+    SupplyItemType.KEYCHAIN,
+    SupplyItemType.JERSEY,
+    SupplyItemType.APPAREL,
+    SupplyItemType.TRADING_CARD,
+    SupplyItemType.POSTER,
+    SupplyItemType.PLUSH,
+    // Mixed goods that still carry a chip each.
+    SupplyItemType.MERCHANDISE,
+    // Uncategorised, including every row the category migration could not
+    // place. They hold chips like anything else.
+    SupplyItemType.OTHER,
+]);
+
 /** The caller's view plus the correlation id every write is recorded under. */
 export interface SupplyMutationContext {
     access: SupplyAccess;
@@ -335,9 +363,10 @@ export class SupplyService {
 
         const batch = await this.loadBatch(context.access, batchId);
 
-        if (batch.itemType !== SupplyItemType.NFC_TAG) {
+        if (!MANIFEST_ITEM_TYPES.has(batch.itemType)) {
             throw AppError.conflict(
-                `Chips may only be registered into an NFC_TAG consignment; this one is ${batch.itemType}.`,
+                `A ${batch.itemType} consignment does not carry chips, so no manifest can be ` +
+                `registered against it.`,
                 SUPPLY_ERROR_CODES.BATCH_ITEM_TYPE_INVALID,
             );
         }

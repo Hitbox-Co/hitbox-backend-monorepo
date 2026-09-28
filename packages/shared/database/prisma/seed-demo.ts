@@ -260,14 +260,19 @@ async function main(): Promise<void> {
     // ── Vendors + supply ────────────────────────────────────────────────────
     await prisma.vendor.createMany({
         data: [
-            { id: id('vendor:tags'), name: 'NordicTag AB', vendorType: VendorType.NFC_TAG_MANUFACTURER, contactEmail: 'sales@nordictag.demo', isActive: true, archivedAt: null, createdAt: daysAgo(100) },
-            { id: id('vendor:merch'), name: 'Osaka Merch Co.', vendorType: VendorType.MERCHANDISE_MANUFACTURER, contactEmail: 'hello@osakamerch.demo', isActive: true, archivedAt: null, createdAt: daysAgo(98) },
+            // Vendors are categorised by the GOODS they make, not by whether
+            // they handle chips — every item ships with its chip already
+            // embedded, so "tag manufacturer" is not a supplier type here.
+            { id: id('vendor:tags'), name: 'NordicTag AB', vendorType: VendorType.FIGURE, contactEmail: 'sales@nordictag.demo', isActive: true, archivedAt: null, createdAt: daysAgo(100) },
+            { id: id('vendor:merch'), name: 'Osaka Merch Co.', vendorType: VendorType.JERSEY, contactEmail: 'hello@osakamerch.demo', isActive: true, archivedAt: null, createdAt: daysAgo(98) },
         ],
     });
     await prisma.supplyBatch.createMany({
         data: [
-            { id: id('batch:tags-1'), vendorId: id('vendor:tags'), itemType: SupplyItemType.NFC_TAG, quantity: 5000, batchRef: 'NT-2026-014', receivedAt: daysAgo(60), sourceFileRef: null, enteredById: id('user:admin'), notes: 'NTAG 424 DNA', createdAt: daysAgo(60) },
-            { id: id('batch:merch-1'), vendorId: id('vendor:merch'), itemType: SupplyItemType.MERCHANDISE, quantity: 1200, batchRef: 'OM-2026-003', receivedAt: daysAgo(45), sourceFileRef: null, enteredById: id('user:drops'), notes: null, createdAt: daysAgo(45) },
+            // A product category, not a chip consignment: what arrives is a
+            // finished item with the chip already inside it.
+            { id: id('batch:tags-1'), vendorId: id('vendor:tags'), itemType: SupplyItemType.FIGURE, quantity: 5000, batchRef: 'NT-2026-014', receivedAt: daysAgo(60), sourceFileRef: null, enteredById: id('user:admin'), notes: 'NTAG 424 DNA embedded at moulding', createdAt: daysAgo(60) },
+            { id: id('batch:merch-1'), vendorId: id('vendor:merch'), itemType: SupplyItemType.JERSEY, quantity: 1200, batchRef: 'OM-2026-003', receivedAt: daysAgo(45), sourceFileRef: null, enteredById: id('user:drops'), notes: null, createdAt: daysAgo(45) },
         ],
     });
 

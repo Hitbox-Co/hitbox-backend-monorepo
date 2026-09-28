@@ -36,7 +36,7 @@ modules draw between them:
 | Thing | Table | Module | What it is |
 |---|---|---|---|
 | A serialized item | `Sku` | `@hitbox/skus` | "#014 of 500" — a physical collectible |
-| The chip inside it | `NfcTag` | `@hitbox/supply` | The NFC chip embedded in that item |
+| The chip inside it | `NfcTag` | `@hitbox/supply` | The NFC chip **embedded in** that item at manufacture |
 | Where both came from | `SupplyBatch` | `@hitbox/supply` | A received carton |
 | Who made it | `Vendor` | `@hitbox/supply` | The manufacturer |
 
@@ -215,6 +215,39 @@ somebody has signed off.
 
 ## 5. Vendors
 
+### `vendorType` is a product category, not a capability
+
+Every item on this platform arrives with its **NFC chip already embedded** —
+nobody ships a reel of loose tags. So there is no such thing as a "tag
+manufacturer" in this supply chain: a vendor is the factory that makes the
+action figure, the keychain or the jersey, and the chip is inside it when the
+carton is opened.
+
+| Value | |
+|---|---|
+| `FIGURE` | Action figures, statues, busts |
+| `KEYCHAIN` | |
+| `JERSEY` | |
+| `APPAREL` | Clothing other than jerseys |
+| `TRADING_CARD` | |
+| `POSTER` | Prints and posters |
+| `PLUSH` | |
+| `MERCHANDISE` | Mixed or general goods that fit no single category |
+| `OTHER` | Anything else — including a supplier that provides no finished goods |
+
+The values deliberately **mirror `Drop.category`**, so "who makes our jerseys"
+and "which drops are jerseys" answer with the same word.
+
+> **Adding a category is cheap; removing one is not.** Postgres has no
+> `ALTER TYPE … DROP VALUE`, so taking a value out means recreating the type
+> and rewriting every row (see migration
+> `20260928100000_vendor_type_product_categories`). Prefer `OTHER` over
+> inventing a value you are not sure of.
+
+The previous values `NFC_TAG_MANUFACTURER` and `MERCHANDISE_MANUFACTURER` no
+longer exist. A client still sending them gets a `422`, deliberately, rather
+than silently landing in `OTHER`.
+
 ### `GET /api/v1/admin/supply/vendors`
 
 Requires `drop:read` at **GLOBAL** reach.
@@ -222,7 +255,7 @@ Requires `drop:read` at **GLOBAL** reach.
 | Query | Type | Notes |
 |---|---|---|
 | `search` | string | Matches name or legal name, case-insensitive |
-| `vendorType` | enum | `NFC_TAG_MANUFACTURER` \| `MERCHANDISE_MANUFACTURER` \| `OTHER`, case-insensitive |
+| `vendorType` | enum | Product category: `FIGURE` \| `KEYCHAIN` \| `JERSEY` \| `APPAREL` \| `TRADING_CARD` \| `POSTER` \| `PLUSH` \| `MERCHANDISE` \| `OTHER`, case-insensitive |
 | `country` | string(2) | ISO 3166-1 alpha-2 |
 | `isActive` | boolean | |
 | `includeArchived` | boolean | Default `false` |
@@ -236,7 +269,7 @@ Requires `drop:read` at **GLOBAL** reach.
       "name": "Shenzhen ChipWorks",
       "legalName": "Shenzhen ChipWorks Electronics Co., Ltd",
       "country": "CN",
-      "vendorType": "NFC_TAG_MANUFACTURER",
+      "vendorType": "FIGURE",
       "contactName": "Li Wei",
       "contactEmail": "liwei@chipworks.example",
       "contactPhone": "+86 755 0000 0000",
@@ -265,7 +298,7 @@ Requires `nfc-tag-claim:manage:global`. Returns `201`.
   "name": "Shenzhen ChipWorks",
   "legalName": "Shenzhen ChipWorks Electronics Co., Ltd",
   "country": "CN",
-  "vendorType": "NFC_TAG_MANUFACTURER",
+  "vendorType": "FIGURE",
   "contactEmail": "liwei@chipworks.example",
   "isActive": true
 }
@@ -303,7 +336,7 @@ consignments ordered for their own drops.
 |---|---|---|
 | `vendorId`, `dropId` | uuid | |
 | `status` | enum | `UPLOADED` \| `VALIDATED` \| `ACCEPTED` \| `REJECTED` |
-| `itemType` | enum | `NFC_TAG` \| `MERCHANDISE` \| `COLLECTIBLE` |
+| `itemType` | enum | `COLLECTIBLE` \| `MERCHANDISE` \| `NFC_TAG` (legacy) |
 | `search` | string | Matches `batchRef` or `vendorInvoiceRef` |
 | `receivedFrom`, `receivedTo` | ISO date | |
 | `page`, `limit` | int | |
@@ -314,10 +347,10 @@ consignments ordered for their own drops.
     {
       "id": "c7a1…",
       "vendorId": "b1f2…",
-      "vendor": { "id": "b1f2…", "name": "Shenzhen ChipWorks", "vendorType": "NFC_TAG_MANUFACTURER" },
+      "vendor": { "id": "b1f2…", "name": "Shenzhen ChipWorks", "vendorType": "FIGURE" },
       "dropId": "d901…",
       "drop": { "id": "d901…", "groupCode": "8417", "name": "Kaze — Ember Series" },
-      "itemType": "NFC_TAG",
+      "itemType": "COLLECTIBLE",
       "status": "VALIDATED",
       "quantity": 500,
       "batchRef": "CW-2026-0914",
@@ -368,7 +401,7 @@ Requires `nfc-tag-claim:manage:global`. Returns `201` with `status: "UPLOADED"`.
 {
   "vendorId": "b1f2…",
   "dropId": "d901…",
-  "itemType": "NFC_TAG",
+  "itemType": "COLLECTIBLE",
   "quantity": 500,
   "batchRef": "CW-2026-0914",
   "vendorInvoiceRef": "INV-88213",
@@ -440,7 +473,8 @@ guarantee would be worthless.
 
 #### Three refusals, in order
 
-1. **Wrong consignment** — chips only go into an `NFC_TAG` batch that still
+1. **Wrong consignment** — chips only go into a batch whose type carries them
+   (`COLLECTIBLE`, `MERCHANDISE`, or legacy `NFC_TAG`) and that still
    accepts rows, and the declared quantity is a ceiling
    (`409 SUPPLY_BATCH_ITEM_TYPE_INVALID` / `_STATE_INVALID` /
    `_QUANTITY_EXCEEDED`).
@@ -617,7 +651,7 @@ A full response, as `HITBOX_SYSTEM_ADMIN` sees it:
     "batches": {
       "total": 42,
       "byStatus": { "UPLOADED": 3, "VALIDATED": 2, "ACCEPTED": 36, "REJECTED": 1 },
-      "byItemType": { "NFC_TAG": 20, "MERCHANDISE": 15, "COLLECTIBLE": 7 },
+      "byItemType": { "COLLECTIBLE": 27, "MERCHANDISE": 15 },
       "quantityDeclared": 15000,
       "rowsReceived": 14950,
       "rowsAccepted": 14800,
@@ -628,12 +662,12 @@ A full response, as `HITBOX_SYSTEM_ADMIN` sees it:
 
     "vendors": {
       "active": 6,
-      "byType": { "NFC_TAG_MANUFACTURER": 3, "MERCHANDISE_MANUFACTURER": 2, "OTHER": 1 },
+      "byType": { "FIGURE": 3, "JERSEY": 2, "KEYCHAIN": 1 },
       "leaders": [
         {
           "vendorId": "b1f2…",
           "name": "Shenzhen ChipWorks",
-          "vendorType": "NFC_TAG_MANUFACTURER",
+          "vendorType": "FIGURE",
           "batches": 14,
           "quantityDeclared": 7000,
           "rowsAccepted": 6890,
@@ -766,7 +800,7 @@ Standard envelope:
 | `SUPPLY_NOT_FOUND` | 404 | Unknown `dropId` on consignment creation |
 | `SUPPLY_VENDOR_ARCHIVED` | 409 | An archived vendor cannot take new consignments |
 | `SUPPLY_BATCH_STATE_INVALID` | 409 | Illegal transition, or rows into a decided consignment |
-| `SUPPLY_BATCH_ITEM_TYPE_INVALID` | 409 | Chips into a non-`NFC_TAG` consignment |
+| `SUPPLY_BATCH_ITEM_TYPE_INVALID` | 409 | A manifest against a consignment type that carries no chips |
 | `SUPPLY_BATCH_QUANTITY_EXCEEDED` | 409 | Manifest would exceed the declared quantity |
 | `SUPPLY_TAG_UID_TAKEN` | 409 | A UID is already registered platform-wide |
 | `SUPPLY_TAG_UID_DUPLICATED` | 400 | The manifest repeats a UID within itself |
@@ -886,7 +920,7 @@ a running dev server must be restarted or the routes answer `404`.
 |---|---|
 | Spreadsheet upload | The manifest arrives as JSON. `sourceFileRef` stores a pointer to the vendor's file, but nothing parses XLSX/CSV server-side — that conversion is the console's job today |
 | Automatic chip→unit binding | Registering inventory and binding a chip to a `Sku` stay separate operations in separate modules, by design |
-| Merchandise item rows | A `MERCHANDISE` consignment records a quantity, not a row per garment. Only `NFC_TAG` consignments get per-item rows |
+| Merchandise rows without a chip | A consignment records a quantity; per-item rows exist only for the chips registered through the manifest. A garment with no chip in it gets no row |
 | Reopening a decided consignment | `ACCEPTED`/`REJECTED` are terminal. The correction is a second consignment |
 | Purchase orders / costs | No PO model and no cost per unit. `vendorInvoiceRef` is a free-text pointer; landed cost lives in `CogsReconciliation`, which nothing writes yet |
 | Vendor scorecard over time | `vendors.leaders` is a snapshot over the queried window; there is no trend series |

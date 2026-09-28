@@ -14,7 +14,7 @@ export const SUPPLY_ERROR_CODES = {
     BATCH_STATE_INVALID: 'SUPPLY_BATCH_STATE_INVALID',
     /** Refused: registering these rows would exceed the batch's declared quantity. */
     BATCH_QUANTITY_EXCEEDED: 'SUPPLY_BATCH_QUANTITY_EXCEEDED',
-    /** Refused: tags may only be registered into an NFC_TAG batch. */
+    /** Refused: this consignment's category carries no chips. */
     BATCH_ITEM_TYPE_INVALID: 'SUPPLY_BATCH_ITEM_TYPE_INVALID',
     /** Refused: the vendor is archived, so it cannot take new consignments. */
     VENDOR_ARCHIVED: 'SUPPLY_VENDOR_ARCHIVED',
