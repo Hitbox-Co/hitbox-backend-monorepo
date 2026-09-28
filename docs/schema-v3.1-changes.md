@@ -148,7 +148,7 @@ continues to edit the `Sku` columns.
 
 | Table | Module | What it is |
 |---|---|---|
-| `NfcTag` | skus | One row per physical chip — §2 |
+| `NfcTag` | supply (declared in `skus` when this landed; **moved to `supply`** once the chip-inventory API was built) | One row per physical chip — §2 |
 | `NfcVerification` | skus | One row per tap verification |
 | `CogsReconciliation` | finance | Monthly COGS variance review per drop |
 | `ExceptionCase` | platform | Ops Console exception queue |
@@ -368,12 +368,15 @@ everything this backfill wrote, so **run `db:backfill:v31` again afterwards**.
    `// TODO: make required after backfill (target: String)` marker. The existing
    consignments predate the per-drop model and have no drop to point at, so the
    backfill leaves them null rather than inventing an attribution.
-3. **Who flips the reads onto `NfcTag`, and when?** The dev branch now has both
-   representations and they agree, but **only the `Sku` columns are written** —
-   the inventory-edit endpoints in
+3. **Who flips the reads onto `NfcTag`, and when?** Partly answered. The
+   supply module ([admin/supply-inventory-api.md](admin/supply-inventory-api.md))
+   now **writes and reads `NfcTag` as the primary representation** for chip
+   intake, QC and stock, under a deployment key (`NFC_TAG_UID_KEY`) rather than
+   the dev constant. What has **not** moved: the inventory-edit endpoints in
    [admin/sku-inventory-management.md](admin/sku-inventory-management.md) still
-   write those exclusively, so the two will drift the moment somebody edits a
-   tag. Production also needs the real KMS key before any backfill there.
+   write the deprecated `Sku` tag columns exclusively, so the two
+   representations will drift the moment somebody edits a tag there. Binding a
+   chip to a unit is the remaining flip.
 
 ---
 

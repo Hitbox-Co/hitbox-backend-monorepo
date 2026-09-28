@@ -48,6 +48,13 @@ export interface ApiRouters {
     adminOrganizations: Router;
     adminArtists: Router;
     /**
+     * The physical supply chain: vendors, consignments, the NFC chip inventory
+     * and the supply/inventory metrics rollup. ONE namespace — a Drop Manager
+     * reading consignment headers and a System Admin registering a chip
+     * manifest call the same routes and are narrowed by their grants.
+     */
+    adminSupply: Router;
+    /**
      * Buyer-facing money routes: POST /checkout and POST /refunds. Owned by
      * the payments module, because a purchase starts with a payment and the
      * dependency between payments and orders runs one way.
@@ -124,6 +131,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/skus', routers.adminSkus);
     api.use('/admin/organizations', routers.adminOrganizations);
     api.use('/admin/artists', routers.adminArtists);
+    api.use('/admin/supply', routers.adminSupply);
 
     return api;
 }

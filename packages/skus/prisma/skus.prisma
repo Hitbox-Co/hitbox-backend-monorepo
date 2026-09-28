@@ -100,42 +100,13 @@ model Sku {
   @@unique([productId, serialNumber])
 }
 
-/// NFC tag master — one row per physical chip, created from the vendor's Excel
-/// upload. A chip has a life of its own: vendor QC before binding, can be
-/// replaced while the old chip keeps its history, UID unique for ever, keys and
-/// tap counter belong to the chip.
-model NfcTag {
-  id              String            @id @default(uuid(7)) @db.Uuid
-  nfcTagCode      String            @unique @db.VarChar(10) // NT
-  supplyBatchId   String            @db.Uuid
-  supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
-  /// The item this chip is (or was) embedded in.
-  skuId           String?           @db.Uuid
-  sku             Sku?              @relation("SkuTagHistory", fields: [skuId], references: [id])
-  currentFor      Sku?              @relation("SkuCurrentTag")
-  /// Chip UID stored only hashed + encrypted.
-  tagUidHash      String            @unique @db.Char(64) // HMAC-SHA256 lookup key
-  tagUidEncrypted String            // AES-256-GCM, key in KMS
-  qcStatus        QcStatus          @default(PENDING)
-  qcReportedAt    DateTime?
-  qcNotes         String?
-  lifecycleState  TagLifecycleState @default(UNPROVISIONED)
-  keyReference    String?           // KMS pointer — never a key
-  lastTapCounter  Int               @default(0)
-  tamperStatus    String?
-  personalizedAt  DateTime?
-  boundAt         DateTime?
-  activatedAt     DateTime?
-  retiredAt       DateTime?
-  createdAt       DateTime          @default(now())
-  updatedAt       DateTime          @updatedAt
-
-  verifications   NfcVerification[]
-  ledgerEntries   BlockchainLedger[]
-  supportCases    SupportCase[]
-
-  @@index([skuId])
-}
+// NOTE: `model NfcTag` and `enum QcStatus` used to be declared here. They now
+// live in packages/supply/prisma/supply.prisma, because the module that
+// creates chip rows, records their QC and holds them as stock is the supply
+// module — this one only binds an existing chip to a unit. The move is a
+// partial-ownership change only: the merged schema and the database are
+// unchanged, since merge-schema.mjs concatenates partials and Prisma does not
+// care which file a model was declared in.
 
 /// Append-only log of every tap verification. The single-use claim token stays on Sku.claimToken.
 model NfcVerification {
@@ -174,13 +145,6 @@ enum TagLifecycleState {
   LOST
   REVOKED
   DISPUTED
-}
-
-/// Vendor quality control on a chip, recorded before it is bound to anything.
-enum QcStatus {
-  PENDING
-  PASSED
-  FAILED
 }
 
 /// Outcome of one tap verification.

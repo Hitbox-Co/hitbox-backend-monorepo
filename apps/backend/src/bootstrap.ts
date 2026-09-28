@@ -22,6 +22,7 @@ import { createOrganizationsModule } from '@hitbox/organizations';
 import { createOrdersModule } from '@hitbox/orders';
 import { createReleasesModule } from '@hitbox/releases';
 import { createSkusModule } from '@hitbox/skus';
+import { createSupplyModule } from '@hitbox/supply';
 import {
     buildBuyerTaxAccess,
     buildTaxAccess,
@@ -30,6 +31,7 @@ import {
     supplierProfilesFromEnv,
 } from '@hitbox/tax';
 import { createLeadsModule } from '@hitbox/leads';
+import { createTagCipher } from './adapters/tag-cipher';
 import { buildRoutes } from './routes';
 
 export interface Bootstrapped {
@@ -381,6 +383,55 @@ export function bootstrap(): Bootstrapped {
         guard: accessControlModule.guard,
     });
 
+    /**
+     * The physical supply chain — vendors, consignments and the chip
+     * inventory. Upstream of skus: a `Sku` is a serialized item, an `NfcTag`
+     * is the chip in it, and a `SupplyBatch` is where both came from.
+     *
+     * The cipher is built here rather than inside the module because the key
+     * belongs to the deployment. Undefined on a deploy with no key configured,
+     * and chip registration then answers 503 instead of writing rows under an
+     * improvised key that no real tap would ever match.
+     */
+    const supplyModule = createSupplyModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
+        tagCipher: createTagCipher(env),
+        // Same adapter arrangement as skus and releases: the lambda closes over
+        // the recorder and only runs per request, so construction order here
+        // does not matter.
+        audit: {
+            record: (input: {
+                eventType: string;
+                actorId: string;
+                organizationId: string | null;
+                resourceType: 'Vendor' | 'SupplyBatch' | 'NfcTag';
+                resourceId: string | null;
+                result: 'SUCCESS' | 'DENIED';
+                correlationId: string;
+                before?: Record<string, unknown> | undefined;
+                after?: Record<string, unknown> | undefined;
+                metadata?: Record<string, unknown> | undefined;
+            }) =>
+                auditModule.recorder.record({
+                    eventType: input.eventType,
+                    actor: { type: 'HITBOX_ADMIN', id: input.actorId },
+                    result: input.result,
+                    organizationId: input.organizationId,
+                    resource: { type: input.resourceType, id: input.resourceId },
+                    // Cast at the boundary: the port speaks plain records so
+                    // supply never imports Prisma's JSON types, and everything
+                    // it puts in them is JSON-serialisable by construction.
+                    ...(input.before ? { beforeState: input.before as Prisma.InputJsonValue } : {}),
+                    ...(input.after ? { afterState: input.after as Prisma.InputJsonValue } : {}),
+                    correlationId: input.correlationId,
+                    metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
+                }),
+        },
+    });
+
     const collectionsModule = createCollectionsModule({
         prisma,
         artistStats: artistModule.collectionStats,
@@ -548,6 +599,7 @@ export function bootstrap(): Bootstrapped {
         adminProductSkus: skusModule.createProductRouter(authModule.requireAuth),
         adminSkus: skusModule.createRouter(authModule.requireAuth),
         adminOrganizations: organizationsModule.createRouter(authModule.requireAuth),
+        adminSupply: supplyModule.createRouter(authModule.requireAuth),
         adminArtists: artistModule.createAdminRouter(authModule.requireAuth),
         payments: paymentsModule.createBuyerRouter(authModule.requireAuth),
         adminPayments: paymentsModule.createAdminRouter(authModule.requireAuth),

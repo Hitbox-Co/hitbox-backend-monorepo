@@ -50,6 +50,28 @@ const envSchema = z.object({
     // value gets a startup warning and a dev-only fallback, not a hard exit.
     IP_HASH_SALT: z.string().min(1).optional(),
 
+    // ── NFC chip UID key (optional) ─────────────────────────────────────────
+    /**
+     * 32 bytes, hex or base64, used to derive the HMAC lookup key and the
+     * AES-256-GCM encryption key for `NfcTag.tagUidHash` / `tagUidEncrypted`.
+     *
+     * Unlike `IP_HASH_SALT` this IS security-critical and has **no fallback**:
+     * a chip UID is the platform's anti-counterfeiting secret, and deriving a
+     * key from a constant would put that key in the repository. Absent, the
+     * supply module's chip-registration route answers 503 and every read still
+     * works — see @hitbox/supply.
+     *
+     * Rotating it changes `NfcTag.keyReference`, so rows written under the old
+     * key stay identifiable as such. Existing rows are NOT re-encrypted by a
+     * rotation; that is a migration, not a config change.
+     */
+    NFC_TAG_UID_KEY: z.string().min(32).optional(),
+    /**
+     * Names the key that is in force, stored on each row as
+     * `NfcTag.keyReference` — a pointer, never a key. Defaults to `env:v1`.
+     */
+    NFC_TAG_KEY_REFERENCE: z.string().min(1).optional(),
+
     // ── Media storage (optional) ────────────────────────────────────────────
     // Absent on a deploy that does not serve uploads; the media routes are
     // then not mounted at all rather than mounted and failing at runtime.

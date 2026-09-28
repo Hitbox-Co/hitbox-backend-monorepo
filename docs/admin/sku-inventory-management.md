@@ -568,6 +568,7 @@ the projection now live next to each other so they cannot drift.
 | Transfer ownership administratively | `ownerId` stays read-only; ownership moves through the claims module so the provenance chain is written with it |
 | Undo a batch | Each batch records the units it touched, so an inverse batch can be composed from the audit row — but nothing does it for you |
 | A filter-as-selector batch | `targets` names units explicitly. Sending a *filter* as the selector would mean the set changes between preview and commit |
-| Link `provisioningBatchId` to `SupplyBatch` | Still a free-text reference; the `supply` module owns the table and nothing joins the two |
+| Link `provisioningBatchId` to `SupplyBatch` | Still a free-text reference. `Sku.supplyBatchId` is the real relation, and the `supply` module now has a full intake API ([supply-inventory-api.md](supply-inventory-api.md)) — but nothing sets `supplyBatchId` when minting, so the join stays unpopulated |
+| Bind a chip from the `NfcTag` inventory | These endpoints still write the deprecated `Sku` tag columns. Chips registered through `/admin/supply/batches/:id/tags` exist as `NfcTag` rows that nothing here selects from — picking a free chip out of stock is the remaining flip (see [schema-v3.1-changes.md 9](../schema-v3.1-changes.md)) |
 | Scheduled activation | `isActive` flips now. A release calendar lives in the releases module |
 | Bulk tag rebinding | Batch edits lifecycle state, not `tagId`. Rebinding stays on the manifest endpoint, which has the clone-prevention rules |

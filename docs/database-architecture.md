@@ -55,7 +55,7 @@ Every model has exactly one owning module. The merge script enforces this — a 
 | **Products** | `@hitbox/products` | `Drop`, `DropVariant`, `DropImage`, `DropPrice` | The catalog — what is for sale, in which options, at what price. Tables are still `Product*`; see [v3.1](schema-v3.1-changes.md). |
 | **Markets** | `@hitbox/markets` | `Market`, `MarketCountry` | Pricing/currency regions and country→market resolution. |
 | **Releases** | `@hitbox/releases` | `ReleaseApproval` | The review workflow that gates `Drop.status`. |
-| **SKUs** | `@hitbox/skus` | `Sku`, `NfcTag`, `NfcVerification` | The serialized-item registry: one row per physical collectible, one per physical chip, one per tap. |
+| **SKUs** | `@hitbox/skus` | `Sku`, `NfcVerification` | The serialized-item registry: one row per physical collectible, one per tap. `NfcTag` now belongs to `supply` (see below). |
 | **Claims** | `@hitbox/claims` | `SkuClaim`, `SkuHistory`, `BlockchainLedger` | Provenance — claiming, the ownership timeline, the hash chain. |
 | **Collections** | `@hitbox/collections` | `BuyerCollection` | The buyer's shelf and its share/visibility rules. |
 | **Media** | `@hitbox/media` | `MediaAsset` | The single upload registry for the whole platform. |
@@ -71,7 +71,7 @@ Every model has exactly one owning module. The merge script enforces this — a 
 | **Search** | `@hitbox/search` | `SearchIndexJob` | The transactional outbox feeding the search index. |
 | **Audit** | `@hitbox/audit` | `AuditEventType`, `AuditEvent`, `AuditRetentionPolicy` | The compliance trail and its retention policy. |
 | **Support** | `@hitbox/support` | `SupportCase` | Lost / damaged / stolen / cloned / disputed items. |
-| **Supply** | `@hitbox/supply` | `Vendor`, `SupplyBatch` | The physical upstream: who made the tags, what arrived. |
+| **Supply** | `@hitbox/supply` | `Vendor`, `SupplyBatch`, `NfcTag` | The physical upstream: who made the chips, what arrived, and which chips exist. `NfcTag` was **moved here from `skus`** — the module that creates chip rows from a manifest and holds them as stock is this one; `skus` only binds an existing chip to a unit. Metadata-only move: no SQL changed. See [supply-inventory-api.md](admin/supply-inventory-api.md). |
 | **Platform** | `@hitbox/platform` | `PlatformConfig` | Runtime config and feature flags. |
 
 Two existing packages own **no** tables and are absent from this table by design: `@hitbox/discover`

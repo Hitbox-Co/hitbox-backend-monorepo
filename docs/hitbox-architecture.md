@@ -364,7 +364,8 @@ packages/auth/prisma/auth.prisma               ← AuthWebhookEvent
 packages/users/prisma/users.prisma             ← User
 packages/products/prisma/products.prisma       ← Drop, DropVariant, DropImage, DropPrice
 packages/artist/prisma/artist.prisma           ← Artist, ArtistCollection (has maximumLimit)
-packages/skus/prisma/skus.prisma               ← Sku (owns the NFC tag + claim state)
+packages/skus/prisma/skus.prisma               ← Sku, NfcVerification (claim state + taps)
+packages/supply/prisma/supply.prisma           ← Vendor, SupplyBatch, NfcTag (the chip itself)
 packages/claims/prisma/claims.prisma           ← SkuClaim, BlockchainLedger, SkuHistory
 packages/collections/prisma/collections.prisma ← BuyerCollection
 packages/media/prisma/media.prisma             ← MediaAsset (the upload registry)
@@ -533,6 +534,38 @@ The full surface, with the per-role matrix: [admin/sku-api.md](admin/sku-api.md)
 Minting writes no provenance. The seq-0 `MINT` row of a unit's hash chain is
 created lazily by `@hitbox/claims` on first use, so the ledger stays
 append-only under one owner.
+
+### The `supply` module — upstream of `skus`
+
+`@hitbox/supply` owns `Vendor`, `SupplyBatch` and `NfcTag`: who manufactures
+chips and merchandise, which cartons arrived, and which chips exist as stock.
+It went from a schema-only partial to a full module when the chip-inventory and
+metrics APIs were built.
+
+The boundary against `skus` is drawn at a physical event: **supply registers a
+chip into inventory, `skus` embeds it in a unit.** `NfcTag` was moved from the
+`skus` partial to the `supply` partial to match — a metadata-only move, since
+`merge-schema.mjs` concatenates partials and the merged schema was byte-for-byte
+equivalent apart from ordering.
+
+Three rules it demonstrates:
+
+- **One resource per secret, not one flag per module.** Consignment headers are
+  gated on `drop:read`, the chip inventory on `nfc-tag-claim:read`, intake
+  writes on `nfc-tag-claim:manage`, and the rollup on
+  `reports-dashboards:read`. A Drop Manager consequently sees every carton and
+  not one chip.
+- **The same `PUBLIC`-scope refusal as `skus`.** `domain/supply-access.ts`
+  discards `PUBLIC` and `OWN` grants before anything else runs, because
+  `BUYER_COLLECTOR` holds `drop:read:public` and `PUBLIC` has *ALL* breadth.
+- **A port for anything the deployment owns.** `ITagCipher` is declared here
+  and implemented in `apps/backend/src/adapters/tag-cipher.ts`, because the
+  chip-UID key belongs to the deployment. A module deriving its own key would
+  have that key in the repository; absent one, chip registration answers 503
+  rather than writing rows no real tap could match.
+
+The full surface, with the per-role matrix:
+[admin/supply-inventory-api.md](admin/supply-inventory-api.md).
 
 ---
 

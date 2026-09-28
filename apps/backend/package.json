@@ -34,6 +34,7 @@
     "@hitbox/releases": "workspace:*",
     "@hitbox/shared": "workspace:*",
     "@hitbox/skus": "workspace:*",
+    "@hitbox/supply": "workspace:*",
     "@hitbox/tax": "workspace:*",
     "@hitbox/users": "workspace:*",
     "cors": "^2.8.6",

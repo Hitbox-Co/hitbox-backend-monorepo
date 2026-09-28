@@ -27,6 +27,9 @@
 > Editing units afterwards — trust flags, tag lifecycle, archival, batch edits
 > and the full inventory filter set:
 > [sku-inventory-management.md](sku-inventory-management.md).
+> The physical supply chain upstream of all of it — vendors, consignment
+> intake, the NFC chip inventory and the supply/inventory metrics rollup:
+> [supply-inventory-api.md](supply-inventory-api.md).
 > Session handling and the Clerk flow are in
 > [authentication.md](authentication.md).
 >
@@ -700,6 +703,14 @@ masked buyers, and the Order Manager, Content Manager and Finance Admin are
 refused outright. The full matrix, with the reasoning and the two catalog gaps
 it exposes, is in [sku-api.md 6](sku-api.md).
 
+**The supply chain is gated separately again**, and differs from both columns
+above: a Drop Manager sees every consignment and not one chip, Support and the
+Order Manager see the chip inventory and no consignments, a brand sees
+consignments ordered for their own drops but never the vendor directory, and
+the Finance Admin — holding reporting but neither `drop` nor `nfc-tag-claim` —
+receives a metrics envelope with every block gated away. The full matrix is in
+[supply-inventory-api.md 3](supply-inventory-api.md).
+
 > `HITBOX_DB_ADMIN` does not exist in this system. Database administration is a
 > cloud/IAM concern, outside application authorization.
 
@@ -753,6 +764,11 @@ Worth knowing before you build against them:
    dashboard is BUSINESS-domain — mixing them in one payload would break the
    domain boundary. They belong to a separate ops console.
 5. **`supply` is gated on `drop:read`**, not on `OPS_DASHBOARD_INFRA` as the
-   original matrix proposed, for the same domain reason.
+   original matrix proposed, for the same domain reason. The dashboard's
+   `supply` section remains a paginated consignment **list**; the vendor,
+   consignment-intake, chip-inventory and metrics **APIs** are a separate
+   surface under `/admin/supply` — see
+   [supply-inventory-api.md](supply-inventory-api.md). Registering a chip
+   manifest needs `NFC_TAG_UID_KEY` configured, or that one route answers 503.
 6. **No CSV/export endpoints yet.** `reports-dashboards:export:global` exists in
    the catalog but nothing consumes it.

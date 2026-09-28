@@ -2,11 +2,18 @@
 // SUPPLY MODULE SCHEMA  (packages/supply/prisma/supply.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: Vendor, SupplyBatch
+// Owns: Vendor, SupplyBatch, NfcTag
 //
-// The physical side: who manufactures tags and merchandise, and what arrived.
-// This is the upstream of the skus module — a Sku's `vendorId` and
-// `provisioningBatchId` trace an item back to the shipment it came from.
+// The physical side: who manufactures tags and merchandise, what arrived, and
+// which chips exist. This is the upstream of the skus module — a Sku's
+// `vendorId` and `provisioningBatchId` trace an item back to the shipment it
+// came from.
+//
+// NfcTag moved here from packages/skus (it was declared there when it was
+// split off Sku in v3.1). The module that creates chip rows from a vendor
+// manifest, records their QC and holds them as stock is this one; skus only
+// binds an existing chip to a unit. The move changed no SQL — merge-schema.mjs
+// concatenates partials, so which file a model is declared in is metadata.
 // ============================================================================
 
 /// A manufacturer or supplier.
@@ -78,6 +85,52 @@ model SupplyBatch {
   // ── Own- and cross-module back-relations ──────────────────────────────────
   skus    Sku[]
   nfcTags NfcTag[]
+}
+
+/// NFC tag master — one row per physical chip, created from the vendor's
+/// manifest upload. A chip has a life of its own: vendor QC before binding, can
+/// be replaced while the old chip keeps its history, UID unique for ever, keys
+/// and tap counter belong to the chip.
+model NfcTag {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  nfcTagCode      String            @unique @db.VarChar(10) // NT
+  supplyBatchId   String            @db.Uuid
+  supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
+  /// The item this chip is (or was) embedded in.
+  skuId           String?           @db.Uuid
+  sku             Sku?              @relation("SkuTagHistory", fields: [skuId], references: [id])
+  currentFor      Sku?              @relation("SkuCurrentTag")
+  /// Chip UID stored only hashed + encrypted.
+  tagUidHash      String            @unique @db.Char(64) // HMAC-SHA256 lookup key
+  tagUidEncrypted String            // AES-256-GCM, key in KMS
+  qcStatus        QcStatus          @default(PENDING)
+  qcReportedAt    DateTime?
+  qcNotes         String?
+  lifecycleState  TagLifecycleState @default(UNPROVISIONED)
+  keyReference    String?           // KMS pointer — never a key
+  lastTapCounter  Int               @default(0)
+  tamperStatus    String?
+  personalizedAt  DateTime?
+  boundAt         DateTime?
+  activatedAt     DateTime?
+  retiredAt       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  verifications   NfcVerification[]
+  ledgerEntries   BlockchainLedger[]
+  supportCases    SupportCase[]
+
+  @@index([skuId])
+}
+
+/// Vendor quality control on a chip, recorded before it is bound to anything.
+/// `TagLifecycleState` stays in packages/skus: the deprecated `Sku` tag columns
+/// still use it, so it is shared rather than owned here.
+enum QcStatus {
+  PENDING
+  PASSED
+  FAILED
 }
 
 /// What kind of supplier this is.
