@@ -2,9 +2,11 @@ import { SupplyBatchStatus } from '@hitbox/database';
 import { acceptsRows, canTransition, isTerminal } from '../src/domain/batch-state';
 import {
     createBatchSchema,
+    createVendorSchema,
     decideBatchSchema,
     manifestRowSchema,
     registerTagsSchema,
+    updateVendorSchema,
 } from '../src/dto/supply.dto';
 import { formatTagCode, nextTagOrdinal } from '../src/repository/supply.repository';
 import { percent } from '../src/service/supply.service';
@@ -106,6 +108,70 @@ describe('the manifest row', () => {
 
     it('refuses an empty manifest', () => {
         expect(registerTagsSchema.safeParse({ tags: [] }).success).toBe(false);
+    });
+});
+
+describe('the vendor body — what a real form actually sends', () => {
+    /**
+     * The regression this locks down: an admin edit form posts every control it
+     * renders, and the ones the user left blank arrive as `''`. Before this,
+     * `contactEmail: ""` and `country: ""` were a 422 complaining the value was
+     * not an email / not two characters — true, and useless, because the caller
+     * was saying "there is no email".
+     */
+    it('accepts a full edit form with blank optional controls', () => {
+        const result = updateVendorSchema.safeParse({
+            name: 'Shenzhen ChipWorks',
+            legalName: '',
+            country: '',
+            contactName: '',
+            contactEmail: '',
+            contactPhone: '',
+            notes: '',
+        });
+        expect(result.success).toBe(true);
+        if (result.success) {
+            expect(result.data.contactEmail).toBeUndefined();
+            expect(result.data.country).toBeUndefined();
+            expect(result.data.legalName).toBeUndefined();
+            expect(result.data.name).toBe('Shenzhen ChipWorks');
+        }
+    });
+
+    it('accepts a blank email on create too', () => {
+        const result = createVendorSchema.safeParse({
+            name: 'ChipWorks',
+            vendorType: 'NFC_TAG_MANUFACTURER',
+            contactEmail: '',
+            country: '',
+        });
+        expect(result.success).toBe(true);
+        if (result.success) expect(result.data.contactEmail).toBeUndefined();
+    });
+
+    it('still refuses an email that was typed and is wrong', () => {
+        // The blank-string escape must not become a way past validation.
+        expect(
+            updateVendorSchema.safeParse({ contactEmail: 'not-an-email' }).success,
+        ).toBe(false);
+    });
+
+    it('still refuses a country that is not two characters', () => {
+        expect(updateVendorSchema.safeParse({ country: 'India' }).success).toBe(false);
+    });
+
+    it('upper-cases a lower-case country code', () => {
+        const result = updateVendorSchema.safeParse({ country: 'cn' });
+        expect(result.success && result.data.country).toBe('CN');
+    });
+
+    it('refuses a body with no fields at all', () => {
+        expect(updateVendorSchema.safeParse({}).success).toBe(false);
+    });
+
+    it('takes the archive switch', () => {
+        const result = updateVendorSchema.safeParse({ archived: true });
+        expect(result.success && result.data.archived).toBe(true);
     });
 });
 

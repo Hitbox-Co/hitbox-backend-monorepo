@@ -413,7 +413,7 @@ An illegal transition is `409 SUPPLY_BATCH_STATE_INVALID`.
 ### `POST /api/v1/admin/supply/batches/:batchId/tags`
 
 Requires `nfc-tag-claim:manage:global`, **and** the chip-UID key must be
-configured on the deployment (see [§13](#13-deployment)).
+configured on the deployment (see [13](#13-deployment)).
 
 ```json
 {
@@ -552,7 +552,7 @@ Requires `nfc-tag-claim:read`.
 }
 ```
 
-**There is no `uid` field, and no capability adds one.** See [§10](#10-tag-uid-handling).
+**There is no `uid` field, and no capability adds one.** See [10](#10-tag-uid-handling).
 
 ### `GET /api/v1/admin/supply/tags/:tagId`
 
@@ -711,7 +711,7 @@ not low on *supply*; it is sold out, which is a different screen.
 `Sku.tagId` mirrors the same fact and is deliberately not counted, or a
 backfilled row would count twice.
 
-**Blocks are omitted, not zeroed** — see [§3](#3-who-can-do-what). Check for the
+**Blocks are omitted, not zeroed** — see [3](#3-who-can-do-what). Check for the
 *presence* of the key, never for a zero value.
 
 ### Relationship to `GET /admin/dashboard/supply`
@@ -795,6 +795,22 @@ Each carries the request's `correlationId` (falling back to a fresh UUID if the
 correlation middleware is not mounted — a row with a fresh id is still a row,
 whereas one that threw is a lost intake record).
 
+All six must exist as `AuditEventType` rows before any write route works — see
+[13](#13-deployment).
+
+### ⚠️ The write commits before the audit row is written
+
+The mutation runs in its own transaction and the audit row is appended after it
+commits. So an audit failure produces **"the data changed, and the caller was
+told it failed"** — a `500` over a write that actually succeeded.
+
+This is not specific to supply: `@hitbox/skus` and `@hitbox/releases` have the
+identical shape. `AuditEventRepository.append()` accepts a
+`Prisma.TransactionClient`, so the fix is to pass the mutation's transaction
+into the recorder and make the two atomic. Until that lands, treat a `500`
+carrying `AUDIT_WRITE_FAILED` as **"check whether the write went through"**
+rather than as "nothing happened".
+
 ---
 
 ## 13. Deployment
@@ -827,6 +843,30 @@ the operator does not have to know which the cipher wanted. **Never commit it.**
 Rotating the key changes `NfcTag.keyReference`, so rows written under the old
 one stay identifiable. Existing rows are **not** re-encrypted by a rotation;
 that is a migration, not a config change.
+
+### `pnpm db:seed:audit` — required, once per environment
+
+```bash
+pnpm db:seed:audit
+```
+
+**Every write route 500s until this is run.** The six `supply.*` event types
+are registered in `AUDIT_EVENT_CATALOG` in code, but
+`AuditEvent.eventType` is a **foreign key** to the `AuditEventType` table — so
+the code catalog gets a record past the registration check and then Postgres
+rejects the insert on `AuditEvent_eventType_fkey`. Supply's audit port is the
+awaited-and-throws kind, so that failure fails the request.
+
+The seed is idempotent and additive: it upserts the catalog and never retires a
+row it does not recognise. Run it after any deploy that adds an event type.
+
+The symptom, if it was missed:
+
+```
+Foreign key constraint violated on the constraint: `AuditEvent_eventType_fkey`
+AppError: Could not record the audit event for supply.vendor.update.
+          The operation was not completed.
+```
 
 ### No schema migration
 

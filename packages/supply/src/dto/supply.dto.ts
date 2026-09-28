@@ -38,6 +38,24 @@ const optionalText = (max: number) =>
         .transform((value) => (value.length === 0 ? undefined : value))
         .optional();
 
+/**
+ * An optional field that a cleared form control may send as `''`.
+ *
+ * Without this, `contactEmail: ""` from a form whose email box was emptied is a
+ * 422 complaining the value is not an email — which is true and useless, since
+ * the caller was saying "there is no email". The empty string becomes
+ * `undefined` *before* the inner check runs, so the check only ever sees a
+ * value somebody actually typed.
+ */
+const optionalWhenBlank = <T extends z.ZodTypeAny>(inner: T) =>
+    z
+        .union([z.string(), inner])
+        .optional()
+        .transform((value) =>
+            typeof value === 'string' && value.trim().length === 0 ? undefined : value,
+        )
+        .pipe(inner.optional());
+
 const pagination = {
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce
@@ -71,10 +89,10 @@ export const createVendorSchema = z.object({
     name: z.string().trim().min(1).max(200),
     legalName: optionalText(200),
     /** ISO 3166-1 alpha-2 — a consignment crossing a border is a customs question. */
-    country: z.string().trim().length(2).toUpperCase().optional(),
+    country: optionalWhenBlank(z.string().trim().length(2).toUpperCase()),
     vendorType: upperEnum(VendorType),
     contactName: optionalText(200),
-    contactEmail: z.string().trim().email().max(320).optional(),
+    contactEmail: optionalWhenBlank(z.string().trim().email().max(320)),
     contactPhone: optionalText(50),
     notes: optionalText(2000),
     isActive: z.coerce.boolean().default(true),
