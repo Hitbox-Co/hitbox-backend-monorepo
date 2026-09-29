@@ -181,6 +181,20 @@ const envSchema = z.object({
      * abandoned basket does not keep a one-of-500 unit off sale for an hour.
      */
     INVENTORY_HOLD_SECONDS: z.coerce.number().int().positive().default(900),
+
+    // ── Claim integrity (US-P018) ─────────────────────────────────────────
+    /**
+     * Require the one-shot claim token on POST /claims/:tagId/confirm.
+     *
+     * Off by default, and that default is the rollout: app builds shipped
+     * before the token exists send no `claimToken`, and turning this on
+     * before they are gone would break every one of them. A token that IS
+     * sent is always checked in full regardless of this flag.
+     */
+    CLAIM_TOKEN_REQUIRED: z
+        .enum(['true', 'false'])
+        .default('false')
+        .transform((value) => value === 'true'),
 });
 
 export type Env = z.infer<typeof envSchema>;

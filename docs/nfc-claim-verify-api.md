@@ -112,7 +112,140 @@ message reads *"You already own …"*.)
    `productId`.
 
 **Errors:** `401 UNAUTHENTICATED` (no session), `404 CLAIMS_TAG_NOT_FOUND` (tag
-matches no SKU), `422 VALIDATION_ERROR` (bad body).
+matches no SKU), `422 VALIDATION_ERROR` (bad body), plus the claim-token
+errors in the next section.
+
+---
+
+## Claim integrity: the one-shot token (US-P018)
+
+The two-step flow is `POST /claims/:tagId` (validate) then
+`POST /claims/:tagId/confirm` (claim). Validate now mints a **single-use claim
+token**; confirm spends it.
+
+### Why
+
+Without it, a confirm request is replayable. Capture one, and it does nothing
+while the item stays claimed — but `revokeClaim()` puts a refunded unit back to
+`UNCLAIMED`, and at that moment the captured request works and the refunded
+buyer owns the item again. The token closes that: it is burned inside the claim
+transaction, before the item is touched, and it never returns to a usable
+state.
+
+It also gives the loser of a simultaneous tap something specific to say. Two
+people tapping at once used to get the same `ALREADY_CLAIMED` as someone
+tapping an item claimed weeks ago.
+
+### Validate — two new response fields
+
+```json
+{
+  "data": {
+    "screen": "CLAIMABLE",
+    "claimToken": "3Yk9r0Xh2tQ7bN4vL8pW1zA6sD5fG3jK0mC2xV9qR8E",
+    "claimTokenExpiresAt": "2026-09-29T14:02:00.000Z"
+  }
+}
+```
+
+| Field | Notes |
+|-------|-------|
+| `claimToken` | Raw token, returned **once**. Only the SHA-256 is stored. `null` on the `ALREADY_CLAIMED` and `ALREADY_CLAIMED_BY_YOU` screens — there is nothing to authorise. |
+| `claimTokenExpiresAt` | ISO 8601, 120 seconds out. After this, re-validate. |
+
+Re-validating the same item as the same user **supersedes** the previous token.
+Another user's live token for the same item is untouched — that is the whole
+reason this is a table (`ClaimToken`) and not the old `Sku.claimToken` column,
+which could only hold one.
+
+### Confirm — one new body field
+
+```json
+{ "visibility": "PUBLIC", "claimToken": "3Yk9r0Xh2tQ7bN4vL8pW1zA6sD5fG3jK0mC2xV9qR8E" }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|:--------:|-------|
+| `claimToken` | `string` | See the flag below | The value from validate. Body is still `.strict()` — unknown fields are a `422`. |
+
+### New outcome — `CLAIMED_BY_OTHER_JUST_NOW` (`200`)
+
+```json
+{
+  "data": {
+    "outcome": "CLAIMED_BY_OTHER_JUST_NOW",
+    "claimedByYou": false,
+    "message": "This item was just claimed by someone else.",
+    "owner": { "id": "clx9user0007", "handle": "jameela", "displayName": "jameela" },
+    "claim": null
+  }
+}
+```
+
+Returned only when the item was `UNCLAIMED` at the start of the request and
+`CLAIMED` by the time the transaction ran — a genuine simultaneous tap. An item
+that was already someone else's before the caller tapped still returns
+`ALREADY_CLAIMED`, unchanged.
+
+The losing tap's token is burned to `LOST_TIEBREAK`. A lost tap still spends its
+token: leaving a reusable one behind would reopen the replay hole the moment the
+item was ever revoked.
+
+### Token errors
+
+| Situation | HTTP | Code |
+|-----------|:----:|------|
+| Already used — consumed, lost a tiebreak, or superseded | `409` | `CLAIMS_TOKEN_REUSED` |
+| Past its 120-second TTL | `410` | `CLAIMS_TOKEN_EXPIRED` |
+| Missing (flag on), malformed, wrong user, or wrong item | `400` | `CLAIMS_TOKEN_INVALID` |
+
+All three mean the same thing to a client: **call validate again** and confirm
+with the new token. The sub-reason (wrong user vs. wrong item vs. never issued)
+is logged, never returned — telling a caller which would let them probe whether
+a token exists and who holds it.
+
+### Rollout flag — `CLAIM_TOKEN_REQUIRED`
+
+Env var, `false` by default.
+
+| Flag | Confirm with no `claimToken` | Confirm with a `claimToken` |
+|------|------------------------------|------------------------------|
+| `false` (default) | Old behaviour, plus a log line with `metric: claims.token.missing` | Checked in full |
+| `true` | `400 CLAIMS_TOKEN_INVALID` | Checked in full |
+
+There is no mode in which a token that *was* sent is ignored. `CLAIMED_BY_OTHER_JUST_NOW`
+applies either way — the race fix is not gated on the rollout.
+
+Turn it on once app builds that predate the token are out of circulation.
+
+### What the token adds to the claim transaction
+
+Ahead of everything in the list above, and inside the same transaction:
+
+0. **Burn the token** — a conditional update matching `tokenHash` + `skuId` +
+   `userId` + `status = ISSUED` + not consumed + not expired. Zero rows matched
+   throws, which rolls the whole transaction back, so a replayed request
+   changes nothing on its way to being refused. Ordering matters: if the SKU
+   flip ran first, a replay would claim the item and only then be rejected.
+
+…and at the end, `ClaimToken.claimId` is set to the new claim, so a `CONSUMED`
+token without a claim never commits.
+
+A `claimCode` collision still retries. The rollback un-consumes the token too,
+so the retry re-enters the transaction with it back at `ISSUED`.
+
+### Analytics
+
+| Event | Payload | Why |
+|-------|---------|-----|
+| `claims.token.rejected` | `{ skuId, userId, reason, tokenId, at }` | A trickle is clients retrying; a spike on one item or one actor is someone replaying captured requests. Only visible in aggregate. |
+| `claims.tiebreak.lost` | `{ skuId, loserUserId, winnerUserId, tokenId, at }` | The only way to know how often two people genuinely tap at once. |
+
+Both also write a structured log line carrying a `metric` field, so a log query
+does not have to match on message text.
+
+The `ClaimToken` table is the audit record — status, `replayCount`,
+`lastReplayAt`, `requestId`. The raw token is never logged.
 
 ---
 
@@ -211,29 +344,48 @@ skus module to call when it binds a tag, once that module grows a service.
 
 | Code | HTTP | Raised when |
 |------|:----:|-------------|
-| `CLAIMS_TAG_NOT_FOUND` | 404 | No SKU is registered to the tag |
-| `CLAIMS_CODE_TAKEN`    | 409 | Couldn't allocate a unique claim code (retries exhausted) |
-| `UNAUTHENTICATED`      | 401 | Missing/invalid session on `POST /claim` |
-| `VALIDATION_ERROR`     | 422 | Path param or body failed schema validation |
+| `CLAIMS_TAG_NOT_FOUND`  | 404 | No SKU is registered to the tag |
+| `CLAIMS_CODE_TAKEN`     | 409 | Couldn't allocate a unique claim code (retries exhausted) |
+| `CLAIMS_TOKEN_REUSED`   | 409 | The claim token was already spent — consumed, lost a tiebreak, or superseded |
+| `CLAIMS_TOKEN_EXPIRED`  | 410 | The claim token passed its 120-second TTL |
+| `CLAIMS_TOKEN_INVALID`  | 400 | Missing (with `CLAIM_TOKEN_REQUIRED=true`), malformed, or issued to another user or item |
+| `UNAUTHENTICATED`       | 401 | Missing/invalid session on `POST /claims` |
+| `VALIDATION_ERROR`      | 422 | Path param or body failed schema validation |
 
 Note: "already claimed" is **not** an error — it's a normal `200` with
-`outcome: "ALREADY_CLAIMED"`.
+`outcome: "ALREADY_CLAIMED"`. Neither is losing a simultaneous tap: that is a
+`200` with `outcome: "CLAIMED_BY_OTHER_JUST_NOW"`.
+
+The three token errors all mean the same thing to a client: **call validate
+again** and confirm with the new token. Retrying the same request can only fail
+the same way.
 
 ---
 
 ## Quick curl walkthrough
 
 ```bash
-# Tap 1 — claim it (authenticated)
-curl -X POST http://localhost:4000/api/v1/claim/E2ETAG0000001 \
+# Step 1 — validate. Returns the screen to show AND a one-shot claim token.
+CLAIM_TOKEN=$(curl -sX POST http://localhost:4000/api/v1/claims/E2ETAG0000001 \
+  -H "Authorization: Bearer $TOKEN" | jq -r .data.claimToken)
+# → screen: "CLAIMABLE", claimToken: "3Yk9…", claimTokenExpiresAt: 120s out
+
+# Step 2 — confirm, spending the token.
+curl -X POST http://localhost:4000/api/v1/claims/E2ETAG0000001/confirm \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"visibility":"PUBLIC"}'
+  -d "{\"visibility\":\"PUBLIC\",\"claimToken\":\"$CLAIM_TOKEN\"}"
 # → outcome: "CLAIMED", you are the owner
 
-# Tap 2 — someone else taps the same tag
-curl -X POST http://localhost:4000/api/v1/claim/E2ETAG0000001 \
+# Replay that exact confirm — the attack the token stops.
+curl -X POST http://localhost:4000/api/v1/claims/E2ETAG0000001/confirm \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"visibility\":\"PUBLIC\",\"claimToken\":\"$CLAIM_TOKEN\"}"
+# → 409 CLAIMS_TOKEN_REUSED, and no second claim row
+
+# Someone else taps the same tag — validate issues no token, nothing to claim.
+curl -X POST http://localhost:4000/api/v1/claims/E2ETAG0000001 \
   -H "Authorization: Bearer $OTHER_TOKEN"
-# → outcome: "ALREADY_CLAIMED", message: "… already claimed by <name>."
+# → screen: "ALREADY_CLAIMED", claimToken: null
 
 # Read-only status / provenance (no auth)
 curl http://localhost:4000/api/v1/verify/E2ETAG0000001

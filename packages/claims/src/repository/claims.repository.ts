@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@hitbox/database';
 import type { PrismaClient, SkuClaim, User } from '@hitbox/database';
 import { LEDGER_ORIGIN_OWNER } from '../constants/claims.constant';
+import { ClaimTokenRejectedError } from '../domain/claim-token';
 import { computeLedgerHash } from '../domain/ledger-hash';
 
 /**
@@ -106,13 +107,45 @@ export interface ClaimTxParams {
     claimCode: string;
     visibility: 'PUBLIC' | 'PRIVATE';
     now: Date;
+    /**
+     * SHA-256 of the token presented on confirm, or null when the caller sent
+     * none and CLAIM_TOKEN_REQUIRED is off. Null skips the token step
+     * entirely; it never means "accept any token".
+     */
+    tokenHash?: string | null;
 }
 
-export interface ClaimTxResult {
-    claim: SkuClaim;
-    ledger: LedgerRowFull;
-    ownerId: string;
-}
+/**
+ * What one claim attempt did.
+ *
+ * A discriminated union rather than the old `ClaimTxResult | null`, because
+ * "lost the race" now has something to say: the token it burned. The caller
+ * needs that id to report the tiebreak, and `null` could not carry it.
+ */
+export type ClaimTxOutcome =
+    | {
+        lost: false;
+        claim: SkuClaim;
+        ledger: LedgerRowFull;
+        ownerId: string;
+        /** The token this claim consumed, when one was presented. */
+        tokenId: string | null;
+    }
+    | {
+        lost: true;
+        /** Burned to LOST_TIEBREAK before the transaction committed. */
+        tokenId: string | null;
+    };
+
+/** Fields needed to explain why a presented token was refused. */
+const tokenRejectionSelect = {
+    id: true,
+    skuId: true,
+    userId: true,
+    status: true,
+    consumedAt: true,
+    expiresAt: true,
+} satisfies Prisma.ClaimTokenSelect;
 
 /** The base price of a SKU's product in the default market, or null. */
 export function basePriceOf(
@@ -296,16 +329,130 @@ export class ClaimsRepository {
     }
 
     /**
-     * First-time claim, atomic. Returns null if the SKU was claimed by a
-     * concurrent request (the conditional update matched zero rows). May throw
-     * Prisma P2002 on a claimCode collision — the service retries with a new code.
+     * Issues a one-shot claim token for one user and one item.
+     *
+     * Supersedes that user's live tokens for the same item first, so
+     * re-validating cannot leave two usable authorisations behind — otherwise
+     * a client that taps twice ends up holding a spare token that outlives the
+     * screen it was minted for.
+     *
+     * Scoped to `(userId, skuId)`: another person's live token for the same
+     * item is left alone, which is the whole reason this is a table and not
+     * `Sku.claimToken`. Two people tapping at once each keep their own.
      */
-    async claimByTag(params: ClaimTxParams): Promise<ClaimTxResult | null> {
+    async issueClaimToken(params: {
+        skuId: string;
+        userId: string;
+        tokenHash: string;
+        now: Date;
+        expiresAt: Date;
+        requestId?: string | null;
+    }): Promise<{ id: string; expiresAt: Date }> {
+        const { skuId, userId, tokenHash, now, expiresAt } = params;
+
+        return this.prisma.$transaction(async (tx) => {
+            await tx.claimToken.updateMany({
+                where: { skuId, userId, status: 'ISSUED' },
+                data: { status: 'SUPERSEDED' },
+            });
+
+            const token = await tx.claimToken.create({
+                data: {
+                    skuId,
+                    userId,
+                    tokenHash,
+                    status: 'ISSUED',
+                    issuedAt: now,
+                    expiresAt,
+                    requestId: params.requestId ?? null,
+                },
+                select: { id: true, expiresAt: true },
+            });
+            return token;
+        });
+    }
+
+    /**
+     * Records that a dead token was presented again.
+     *
+     * Best-effort and outside the claim transaction, necessarily: the
+     * transaction that rejected the token rolled back, so anything written
+     * inside it is gone. Callers must not let a failure here turn into a
+     * failed request — the rejection already happened and is already correct.
+     */
+    async markTokenReplay(params: {
+        tokenId: string;
+        now: Date;
+        expired: boolean;
+    }): Promise<void> {
+        await this.prisma.claimToken.update({
+            where: { id: params.tokenId },
+            data: {
+                replayCount: { increment: 1 },
+                lastReplayAt: params.now,
+                // Only a token still nominally live gets moved to EXPIRED. A
+                // CONSUMED token that expired afterwards is still CONSUMED —
+                // overwriting that would erase the fact that it bought a claim.
+                ...(params.expired ? { status: 'EXPIRED' as const } : {}),
+            },
+        });
+    }
+
+    /**
+     * First-time claim, atomic.
+     *
+     * Returns `{ lost: true }` when a concurrent request claimed the item
+     * first (the conditional update matched zero rows), and throws
+     * `ClaimTokenRejectedError` when the presented token was not usable —
+     * which rolls the whole transaction back, so a replayed request changes
+     * nothing on its way to being refused. May throw Prisma P2002 on a
+     * claimCode collision; the service retries with a new code, and because
+     * the retry re-enters this transaction the token is still ISSUED when it
+     * does.
+     */
+    async claimByTag(params: ClaimTxParams): Promise<ClaimTxOutcome> {
         const { sku, userId, ownerLabel, claimCode, visibility, now } = params;
+        const tokenHash = params.tokenHash ?? null;
         const price = basePriceOf(sku);
 
         return this.prisma.$transaction(async (tx) => {
-            // Race guard: only proceed while the SKU is still UNCLAIMED.
+            // ── 1. Burn the token, before anything else ──────────────────
+            // Order is load-bearing. If the SKU flip ran first, a replayed
+            // request would claim the item and only then discover its token
+            // was spent — and the rollback would be doing real work rather
+            // than nothing.
+            let tokenId: string | null = null;
+            if (tokenHash) {
+                const consumed = await tx.claimToken.updateMany({
+                    where: {
+                        tokenHash,
+                        skuId: sku.id,
+                        userId,
+                        status: 'ISSUED',
+                        consumedAt: null,
+                        expiresAt: { gt: now },
+                    },
+                    data: { status: 'CONSUMED', consumedAt: now },
+                });
+
+                if (consumed.count === 0) {
+                    const row = await tx.claimToken.findUnique({
+                        where: { tokenHash },
+                        select: tokenRejectionSelect,
+                    });
+                    throw rejectionFor(row, { skuId: sku.id, userId, now });
+                }
+
+                tokenId =
+                    (
+                        await tx.claimToken.findUnique({
+                            where: { tokenHash },
+                            select: { id: true },
+                        })
+                    )?.id ?? null;
+            }
+
+            // ── 2. Race guard: only proceed while the SKU is still UNCLAIMED.
             const flipped = await tx.sku.updateMany({
                 where: { id: sku.id, claimedStatus: 'UNCLAIMED' },
                 data: {
@@ -315,7 +462,19 @@ export class ClaimsRepository {
                     updatedAt: now,
                 },
             });
-            if (flipped.count === 0) return null;
+            if (flipped.count === 0) {
+                // Lost by milliseconds. Commit rather than throw: the token
+                // must stay burned. A losing tap that left a reusable token
+                // behind would let the loser replay it the moment the item
+                // was ever revoked, which is the hole this whole story closes.
+                if (tokenId) {
+                    await tx.claimToken.update({
+                        where: { id: tokenId },
+                        data: { status: 'LOST_TIEBREAK' },
+                    });
+                }
+                return { lost: true, tokenId };
+            }
 
             // claimedNo counts claims on this SKU — unique [skuId, claimedNo].
             const priorClaims = await tx.skuClaim.count({ where: { skuId: sku.id } });
@@ -420,13 +579,66 @@ export class ClaimsRepository {
                 update: { archivedAt: null },
             });
 
-            return { claim, ledger, ownerId: userId };
+            // Link the token to what it bought. Inside the transaction, so a
+            // CONSUMED token without a claimId is never a state that commits.
+            if (tokenId) {
+                await tx.claimToken.update({
+                    where: { id: tokenId },
+                    data: { claimId: claim.id },
+                });
+            }
+
+            return { lost: false, claim, ledger, ownerId: userId, tokenId };
         }, {
             // Remote (Neon) round-trips add up; the default 5s is too tight.
             maxWait: 10_000,
             timeout: 20_000,
         });
     }
+}
+
+/**
+ * Turns a failed compare-and-swap into the reason it failed.
+ *
+ * Runs only on the rejection path, so the happy path pays nothing for it. The
+ * order of the checks is the order of what the caller most needs to know, and
+ * it is deliberate: a token that is both spent and expired reads as REUSED,
+ * because "you already used this" is the true and more useful answer.
+ */
+function rejectionFor(
+    row: Prisma.ClaimTokenGetPayload<{ select: typeof tokenRejectionSelect }> | null,
+    context: { skuId: string; userId: string; now: Date },
+): ClaimTokenRejectedError {
+    if (!row) {
+        return new ClaimTokenRejectedError('INVALID', null, 'no token row for that hash');
+    }
+
+    // Wrong item or wrong person. Reported as INVALID rather than as its own
+    // code: distinguishing them would let a caller probe which tokens exist
+    // and who holds them.
+    if (row.skuId !== context.skuId) {
+        return new ClaimTokenRejectedError('INVALID', row.id, 'token belongs to another sku');
+    }
+    if (row.userId !== context.userId) {
+        return new ClaimTokenRejectedError('INVALID', row.id, 'token belongs to another user');
+    }
+
+    if (row.consumedAt !== null || row.status === 'CONSUMED') {
+        return new ClaimTokenRejectedError('REUSED', row.id, 'token already consumed');
+    }
+    if (row.status === 'LOST_TIEBREAK') {
+        return new ClaimTokenRejectedError('REUSED', row.id, 'token lost a tiebreak');
+    }
+    if (row.status === 'SUPERSEDED') {
+        return new ClaimTokenRejectedError('REUSED', row.id, 'token superseded by a later validate');
+    }
+    if (row.status === 'EXPIRED' || row.expiresAt <= context.now) {
+        return new ClaimTokenRejectedError('EXPIRED', row.id, 'token past its ttl');
+    }
+
+    // ISSUED, unexpired, right owner, right item — and the swap still matched
+    // nothing. Another transaction consumed it in between, so it is spent.
+    return new ClaimTokenRejectedError('REUSED', row.id, 'consumed by a concurrent request');
 }
 
 /** The seq-0 MINT row for a SKU. Shared by the eager and lazy origin paths. */

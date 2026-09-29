@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { RequestHandler } from 'express';
 import type { PrismaClient } from '@hitbox/database';
-import { createModuleLogger } from '@hitbox/shared';
+import { createModuleLogger, env } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import { CLAIMS_MODULE } from './constants/claims.constant';
 import { ClaimsController } from './controller/claims.controller';
@@ -17,6 +17,11 @@ export interface ClaimsModuleDeps {
      * it and the validate screen's `imageUrl` is null rather than failing.
      */
     mediaUrls?: IMediaUrlResolver | undefined;
+    /**
+     * Overrides CLAIM_TOKEN_REQUIRED. For tests, which need both sides of the
+     * flag without touching process.env; bootstrap leaves it unset.
+     */
+    claimTokenRequired?: boolean;
 }
 
 /** The routers this module owns, mounted at distinct API prefixes. */
@@ -50,6 +55,7 @@ export function createClaimsModule(deps: ClaimsModuleDeps): ClaimsModule {
         eventBus: deps.eventBus,
         logger,
         mediaUrls: deps.mediaUrls,
+        claimTokenRequired: deps.claimTokenRequired ?? env.CLAIM_TOKEN_REQUIRED,
     });
 
     // No product-created subscription any more. It wrote the "First Time"

@@ -63,11 +63,18 @@ model Sku {
   supplyBatch   SupplyBatch? @relation(fields: [supplyBatchId], references: [id])
 
   // ── One-shot claim token ──────────────────────────────────────────────────
-  /// Single-use token minted on tap and burned on claim. Unique so a token can
-  /// never be replayed against a second SKU. Stays on the item, not the chip:
-  /// it authorises a claim of *this unit*, and survives a chip replacement.
+  // Superseded by ClaimToken (packages/claims), which is a row per issuance.
+  // One column can only hold one live token, so two people tapping the same
+  // item at once overwrite each other's — the loser of that race could not be
+  // told why it lost, and the winner's token was whichever wrote last.
+  //
+  // Kept, not dropped: `claimTokenUsedAt` is still stamped by the claim
+  // transaction and reads as "this unit has been claimed at least once".
+  /// @deprecated — use ClaimToken (packages/claims/prisma/claims.prisma)
   claimToken         String?   @unique
+  /// @deprecated — use ClaimToken.issuedAt
   claimTokenIssuedAt DateTime?
+  /// @deprecated — use ClaimToken.consumedAt; still written by the claim tx
   claimTokenUsedAt   DateTime?
 
   // ── Trust / anti-fraud state ──────────────────────────────────────────────
@@ -87,6 +94,7 @@ model Sku {
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   skuClaims             SkuClaim[]
+  claimTokens           ClaimToken[]
   blockchainLedgers     BlockchainLedger[]
   buyerCollections      BuyerCollection[]
   skuHistories          SkuHistory[]

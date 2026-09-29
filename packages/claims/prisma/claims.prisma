@@ -2,7 +2,7 @@
 // CLAIMS MODULE SCHEMA  (packages/claims/prisma/claims.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: SkuClaim, BlockchainLedger, SkuHistory
+// Owns: SkuClaim, BlockchainLedger, SkuHistory, ClaimToken
 //
 // Provenance. Three append-only views of the same truth:
 //   SkuClaim         — the act of claiming (who tapped, when, which drop)
@@ -106,6 +106,73 @@ model SkuHistory {
   startedAt   DateTime
   endedAt     DateTime?
   isCurrent   Boolean
+}
+
+/// One-shot authorisation to claim one SKU, issued by the validate step and
+/// burned by confirm. This is what makes a replayed confirm request detectable:
+/// without it, "claim this tag" is a request anyone who captured it can send
+/// again, and after a revocation puts the unit back to UNCLAIMED it would
+/// succeed.
+///
+/// A row per issuance rather than a column on `Sku` (`Sku.claimToken`, now
+/// deprecated) because two people tapping the same item at once each need
+/// their own live token. One column holds one token, so the second tap would
+/// overwrite the first and the loser could not even be told *why* it lost.
+///
+/// Only the SHA-256 of the token is stored. The raw value exists in the
+/// validate response and in the confirm request and nowhere else — a database
+/// dump must not be a list of working claim authorisations.
+model ClaimToken {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  /// SHA-256 hex of the raw token. Unique so one token can never be replayed
+  /// against a second item, and so the compare-and-swap in confirm has an
+  /// index to land on.
+  tokenHash String           @unique @db.Char(64)
+  skuId     String           @db.Uuid
+  sku       Sku              @relation(fields: [skuId], references: [id])
+  userId    String           @db.Uuid
+  user      User             @relation(fields: [userId], references: [id])
+  status    ClaimTokenStatus @default(ISSUED)
+
+  issuedAt   DateTime  @default(now())
+  expiresAt  DateTime
+  consumedAt DateTime?
+  /// The SkuClaim this token produced. A plain id, not a foreign key: the
+  /// token table is an audit record and must survive whatever happens to the
+  /// claim, same rule as the rest of the provenance side.
+  claimId    String?   @db.Uuid
+
+  /// How many times this token was presented after it stopped being valid.
+  /// A non-zero value on a CONSUMED token is a retry or a replay; on a
+  /// LOST_TIEBREAK token it is usually a client that did not re-validate.
+  replayCount  Int       @default(0)
+  lastReplayAt DateTime?
+  /// Correlates the issuing request with the confirm that used it.
+  requestId    String?
+
+  /// "Every token ever issued for this item", newest first — the audit read.
+  @@index([skuId, issuedAt])
+  /// Supersede this user's live tokens for this item when they re-validate.
+  @@index([userId, skuId, status])
+  /// Sweep stale ISSUED tokens, and count rejections by status over a window.
+  @@index([status, issuedAt])
+}
+
+/// Lifecycle of a claim token. Everything except ISSUED is terminal, which is
+/// what makes "already used" answerable: a token never returns to a usable
+/// state, so a replay is a status check rather than a guess.
+enum ClaimTokenStatus {
+  /// Live and usable until `expiresAt`.
+  ISSUED
+  /// Spent on a successful claim. `claimId` points at what it bought.
+  CONSUMED
+  /// Spent, but the simultaneous tap it raced lost. The token is burned
+  /// anyway — a lost tap must not leave a reusable authorisation behind.
+  LOST_TIEBREAK
+  /// Replaced because the same user validated the same item again.
+  SUPERSEDED
+  /// Presented after `expiresAt`, or swept by a later cleanup.
+  EXPIRED
 }
 
 /// Kind of ownership event on the provenance chain. Each SKU's ledger runs

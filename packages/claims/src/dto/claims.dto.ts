@@ -13,13 +13,25 @@ export type TagIdParam = z.infer<typeof tagIdParamSchema>;
 // ── Mutations ───────────────────────────────────────────────────────────
 
 /**
- * Claim carries no required body — the tag is in the path and the owner is the
- * authenticated caller. An optional visibility lets the buyer immediately
- * make the new collection entry public.
+ * Confirm body. The tag is in the path and the owner is the authenticated
+ * caller, so the only things here are the one-shot token from validate and an
+ * optional visibility that lets the buyer make the new collection entry public
+ * immediately.
+ *
+ * `claimToken` is optional in the schema, not in the flow: whether a missing
+ * token is accepted is the CLAIM_TOKEN_REQUIRED rollout decision, and the
+ * service makes it. Validating it as required here would turn the flag off
+ * into a 422 before the service ever saw the request.
+ *
+ * Still `.strict()` — an unknown field in a claim body is a client bug or a
+ * probe, and either is worth a 422.
  */
 export const claimBodySchema = z
     .object({
         visibility: z.enum(['PUBLIC', 'PRIVATE']).default('PRIVATE'),
+        /** base64url, 32 raw bytes → 43 chars. Bounded so a junk body is
+         *  rejected before it reaches a hash and an indexed lookup. */
+        claimToken: z.string().trim().min(16).max(256).optional(),
     })
     .strict();
 
@@ -92,16 +104,36 @@ export interface ValidateResult {
     };
     owner: OwnerView | null;
     claimedAt: string | null;
+    /**
+     * One-shot authorisation to claim this item, to be sent back on confirm.
+     * Non-null only on the `CLAIMABLE` screen — there is nothing to authorise
+     * on the other two, and minting a token for an item the caller cannot
+     * claim would hand out a credential for a claim that can never happen.
+     *
+     * This is the only place the raw token ever appears in a response.
+     */
+    claimToken: string | null;
+    /** ISO 8601. After this the token is refused and the app re-validates. */
+    claimTokenExpiresAt: string | null;
 }
 
 /**
  * POST /claims/:tagId/confirm — the single NFC claim result.
- * `outcome` is `CLAIMED` when this call claimed the product, or
- * `ALREADY_CLAIMED` when someone had already claimed it (then `owner` names
- * who). `claimedByYou` is true when the caller is the owner in either case.
+ *
+ * `outcome`:
+ *   - `CLAIMED` — this call claimed the item; `claim` carries the record.
+ *   - `CLAIMED_BY_OTHER_JUST_NOW` — this call lost a simultaneous race by
+ *     milliseconds. `owner` is whoever won, `claim` is null.
+ *   - `ALREADY_CLAIMED` — it belonged to someone before this request started.
+ *
+ * The last two differ only in *when*, and that is worth a distinct value: the
+ * app can say "someone just beat you to it" for a race, which is a different
+ * thing to tell a user than "this belongs to someone else".
+ *
+ * `claimedByYou` is true when the caller is the owner in any of the cases.
  */
 export interface ClaimFlowResult {
-    outcome: 'CLAIMED' | 'ALREADY_CLAIMED';
+    outcome: 'CLAIMED' | 'ALREADY_CLAIMED' | 'CLAIMED_BY_OTHER_JUST_NOW';
     claimedByYou: boolean;
     message: string;
     owner: OwnerView;

@@ -2,6 +2,62 @@
 
 Spans both repos: **`hitbox-backend-monorepo`** (API + DB) and **`hitbox-static`** (Expo app).
 
+## 2026-09-29 — US-P018 Claim Integrity Controls
+
+Closed the two acceptance criteria that were still open: a replayed confirm is
+now rejected, and the loser of a simultaneous tap is told it *just* lost.
+
+### The replay hole this closes
+A captured `confirm` request was replayable. Harmless while the item stayed
+claimed — but `revokeClaim()` returns a refunded unit to `UNCLAIMED`, and at
+that moment the captured request worked again and the refunded buyer re-owned
+the item.
+
+### Backend — `packages/claims`
+- **New `ClaimToken` table** (`prisma/claims.prisma`): one row per issuance,
+  `tokenHash` (SHA-256, unique) / `skuId` / `userId` / `status` /
+  `issuedAt` / `expiresAt` / `consumedAt` / `claimId` / `replayCount` /
+  `lastReplayAt` / `requestId`, plus enum
+  `ClaimTokenStatus { ISSUED, CONSUMED, LOST_TIEBREAK, SUPERSEDED, EXPIRED }`.
+  A table rather than `Sku.claimToken` because one column holds one token, so
+  two simultaneous taps overwrote each other's.
+- `Sku.claimToken*` marked `@deprecated`; columns kept, and
+  `claimTokenUsedAt` is still stamped by the claim transaction.
+- **New `domain/claim-token.ts`** — `generateClaimToken()` (32 random bytes,
+  base64url), `hashClaimToken()`, `ClaimTokenRejectedError`,
+  `CLAIM_TOKEN_TTL_SECONDS = 120`.
+- **Validate** (`POST /claims/:tagId`) now issues a token on the `CLAIMABLE`
+  screen and returns `claimToken` + `claimTokenExpiresAt`; both `null` on the
+  other two screens. Re-validating supersedes that user's previous token and
+  leaves anyone else's alone.
+- **Confirm** (`POST /claims/:tagId/confirm`) accepts `claimToken` in the body
+  (still `.strict()`). Inside the one existing transaction, in order: burn the
+  token with a compare-and-swap → SKU tiebreak → the existing writes → set
+  `ClaimToken.claimId`. Token first, so a replay changes nothing before it is
+  refused. The early `if (CLAIMED) return` in `claim()` is gone — it was what
+  let a replay skip the token check entirely.
+- **New outcome `CLAIMED_BY_OTHER_JUST_NOW`** (`200`) for the losing half of a
+  simultaneous tap, with the winner as `owner` and `claim: null`. An item
+  claimed earlier still returns `ALREADY_CLAIMED`; the discriminator is the
+  item's status as read at the start of the request.
+- **New error codes**: `CLAIMS_TOKEN_REUSED` (409), `CLAIMS_TOKEN_EXPIRED`
+  (410), `CLAIMS_TOKEN_INVALID` (400). The sub-reason is logged, never
+  returned.
+- **New events**: `claims.token.rejected`, `claims.tiebreak.lost`, each with a
+  structured log line carrying a `metric` field.
+- **Rollout flag `CLAIM_TOKEN_REQUIRED`** (env, default `false`). Off, a
+  missing token is the old behaviour plus `metric: claims.token.missing`; on,
+  it is a 400. A token that *is* sent is always checked in full, and the race
+  outcome applies either way.
+- **Tests**: `packages/claims` gains a jest setup and 26 tests, including a
+  20-run simultaneous-tap race. They run against an in-memory Prisma double
+  with real rollback semantics — see `tests/fake-prisma.ts` for what that
+  proves and what still needs a real Postgres.
+
+### Prisma
+- Migration `20260929140000_claim_tokens` — purely additive (one enum, one
+  table, four indexes, two FKs).
+
 ## 2026-07-24 — NFC tap-to-claim, end to end
 
 ### Backend — new `claims` module (`packages/claims`)
