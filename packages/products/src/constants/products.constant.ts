@@ -22,6 +22,14 @@ export const PRODUCTS_ERROR_CODES = {
     /** Refused: removing the last price would leave the drop unsellable. */
     PRICE_REQUIRED: 'PRODUCTS_PRICE_REQUIRED',
     PRICE_NOT_FOUND: 'PRODUCTS_PRICE_NOT_FOUND',
+    /** Publishing a drop whose owner has not approved it. */
+    NOT_APPROVED: 'PRODUCTS_NOT_APPROVED',
+    /** Publishing a drop that is already live, or one that is archived. */
+    NOT_PUBLISHABLE: 'PRODUCTS_NOT_PUBLISHABLE',
+    /** Publishing a drop whose compliance evidence is incomplete. */
+    PUBLISH_BLOCKED: 'PRODUCTS_PUBLISH_BLOCKED',
+    /** The release gate is not wired in, so approval cannot be verified. */
+    RELEASE_GATE_UNAVAILABLE: 'PRODUCTS_RELEASE_GATE_UNAVAILABLE',
 } as const;
 
 /**
@@ -42,6 +50,13 @@ export const PRODUCT_EVENTS = {
     PRODUCT_CREATED: 'products.product.created',
     PRODUCT_UPDATED: 'products.product.updated',
     PRODUCT_ARCHIVED: 'products.product.archived',
+    /** A drop went live. Payload carries the target status and the review it cleared. */
+    PRODUCT_PUBLISHED: 'products.product.published',
+} as const;
+
+/** Audit event key for publication. Registered in the audit catalog. */
+export const PRODUCT_AUDIT_EVENTS = {
+    PUBLISH: 'product.publish',
 } as const;
 
 /**

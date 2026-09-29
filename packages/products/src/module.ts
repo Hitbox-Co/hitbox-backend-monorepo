@@ -18,6 +18,8 @@ import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.i
 import type { IMediaAssets } from './domain/interfaces/media-assets.interface';
 import type { IMarketLookup } from './domain/interfaces/market-lookup.interface';
 import type { ISkuMinting } from './domain/interfaces/sku-minting.interface';
+import type { IProductAudit } from './domain/interfaces/product-audit.interface';
+import type { IReleaseGate } from './domain/interfaces/release-gate.interface';
 import { ProductRepository } from './repository/product.repository';
 import { ProductService } from './service/product.service';
 
@@ -58,6 +60,20 @@ export interface ProductsModuleDeps {
      */
     markets?: IMarketLookup | undefined;
     /**
+     * Answers "has this drop cleared review?" before it is published.
+     * Provided by @hitbox/releases, which owns `ReleaseApproval`.
+     *
+     * Optional: omit it and publishing is REFUSED rather than allowed. A
+     * deployment that cannot verify an approval must not take drops live on
+     * the assumption that one exists.
+     */
+    releaseGate?: IReleaseGate | undefined;
+    /**
+     * The compliance trail for publication. Optional so tests need not wire
+     * the audit module; a server must pass the real recorder.
+     */
+    audit?: IProductAudit | undefined;
+    /**
      * Required only to build the admin router. The public catalog router is
      * read-only and needs no authorization.
      */
@@ -97,6 +113,8 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
         skuMinting: deps.skuMinting,
         mediaAssets: deps.mediaAssets,
         markets: deps.markets,
+        releaseGate: deps.releaseGate,
+        audit: deps.audit,
     });
 
     return {
@@ -157,6 +175,21 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
                 '/:id',
                 guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
                 controller.archive,
+            );
+
+            /**
+             * Taking a drop live.
+             *
+             * Its own route because publishing is a transition with
+             * preconditions — the owner's approval above all — and `PATCH`
+             * carries none. `status` was removed from the update schema in the
+             * same change: a gate is worthless while an ungated door sits next
+             * to it.
+             */
+            router.post(
+                '/:id/publish',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.publish,
             );
 
             // Market pricing. Reading takes the same capability as the detail

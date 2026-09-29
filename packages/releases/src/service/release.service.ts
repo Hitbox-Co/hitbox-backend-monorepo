@@ -3,6 +3,7 @@ import { AppError } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import type { Logger } from 'pino';
 import {
+    AUTO_APPROVAL_COMMENT,
     LEGAL_COMPLIANCE_STATEMENT,
     LEGAL_COMPLIANCE_VERSION,
     RELEASE_EVENTS,
@@ -168,6 +169,26 @@ export class ReleaseService {
         }
         const authority = resolveAuthority(ownership);
 
+        // ── No owner to ask: pass the review rather than queue it ────────────
+        //
+        // A review captures the OWNER's consent. A drop naming neither an
+        // artist nor an organization has no owner outside HitBox, so there is
+        // nothing to capture and nobody the queue is waiting on — leaving it
+        // PENDING would park it in a list no one is expected to action.
+        //
+        // It is still a full review row, decided at version N with an audit
+        // entry, because "why is this drop live" must stay answerable. What it
+        // is not is a *signed* one: `legalComplianceAccepted` stays false.
+        if (authority.authority === ApprovalAuthority.NONE) {
+            return this.autoPass({
+                productId: dto.productId,
+                version,
+                actorId,
+                correlationId,
+                hasOrganization: ownership.organizationId !== null,
+            });
+        }
+
         const approval = await this.deps.releases.submit({
             productId: dto.productId,
             approverId: actorId,
@@ -205,6 +226,91 @@ export class ReleaseService {
             ...authority,
         });
         this.deps.logger.info({ approvalId: approval.id, productId: dto.productId, version }, 'release submitted for review');
+        return toListItem(approval);
+    }
+
+    /**
+     * Opens and decides a review for a drop nobody owns, in one step.
+     *
+     * Files the drop under the HitBox organization while doing it, because an
+     * approved drop with no owner at all is a row no downstream screen —
+     * royalties, reporting, the storefront's "by" line — can render.
+     *
+     * A missing HitBox organization is logged and tolerated rather than thrown.
+     * Refusing to review a drop because a reference row was never seeded would
+     * be a confusing way to learn the database is unseeded, and the review
+     * itself is still correct without it.
+     */
+    private async autoPass(input: {
+        productId: string;
+        version: number;
+        actorId: string;
+        correlationId: string;
+        hasOrganization: boolean;
+    }): Promise<ReleaseApprovalListItem> {
+        let assignOrganizationId: string | null = null;
+        if (!input.hasOrganization) {
+            assignOrganizationId = await this.deps.releases.findHitboxOrganizationId();
+            if (!assignOrganizationId) {
+                this.deps.logger.warn(
+                    { productId: input.productId },
+                    'no HITBOX organization exists — auto-approved drop is left unfiled',
+                );
+            }
+        }
+
+        const approval = await this.deps.releases.autoApprove({
+            productId: input.productId,
+            approverId: input.actorId,
+            version: input.version,
+            comment: AUTO_APPROVAL_COMMENT,
+            assignOrganizationId,
+        });
+
+        await this.deps.audit.record({
+            eventType: 'release.approve',
+            actorId: input.actorId,
+            // SYSTEM, not the submitter: recording the person who pressed
+            // submit as the approver would put a sign-off in the trail that
+            // they never gave. The platform passed this, not them.
+            actorType: 'SYSTEM',
+            organizationId: assignOrganizationId,
+            approvalId: approval.id,
+            productId: input.productId,
+            result: 'SUCCESS',
+            correlationId: input.correlationId,
+            after: {
+                version: input.version,
+                status: ApprovalStatus.APPROVED,
+                authority: ApprovalAuthority.NONE,
+                legalComplianceAccepted: false,
+            },
+            metadata: {
+                reason: 'no artist or organization owns this drop',
+                submittedBy: input.actorId,
+                ...(assignOrganizationId ? { filedUnderOrganizationId: assignOrganizationId } : {}),
+            },
+        });
+
+        await this.deps.eventBus.publish(RELEASE_EVENTS.DECIDED, {
+            approvalId: approval.id,
+            productId: input.productId,
+            status: ApprovalStatus.APPROVED,
+            complianceStatus: ComplianceStatus.CLEARED,
+            actorId: input.actorId,
+            authority: ApprovalAuthority.NONE,
+            autoApproved: true,
+        });
+        this.deps.logger.info(
+            {
+                approvalId: approval.id,
+                productId: input.productId,
+                version: input.version,
+                filedUnderOrganizationId: assignOrganizationId,
+            },
+            'release auto-approved — no owner to ask',
+        );
+
         return toListItem(approval);
     }
 

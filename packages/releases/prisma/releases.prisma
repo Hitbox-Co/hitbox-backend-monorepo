@@ -82,6 +82,14 @@ enum ApprovalAuthority {
   ARTIST
   ORGANIZATION
   PLATFORM
+  /// No owner to ask: the drop names neither an artist nor an organization, so
+  /// it is HitBox's own and there is nobody outside HitBox whose consent the
+  /// review exists to capture. These reviews are opened and decided in the same
+  /// transaction — see docs/admin/drop-approval-lifecycle.md.
+  ///
+  /// Appended, never inserted: an enum value's position is part of the physical
+  /// type in Postgres.
+  NONE
 }
 
 /// Outcome of a release review.

@@ -10,7 +10,15 @@ import { ApprovalAuthority, OrganizationType } from '@hitbox/database';
  * |---|---|
  * | `ARTIST_INDIVIDUAL`     | the artist named on the drop |
  * | `BRAND`                 | someone acting for that brand |
- * | `HITBOX`, or none       | HitBox staff |
+ * | `HITBOX`                | HitBox staff |
+ * | none, **and no artist** | nobody — the review auto-passes |
+ *
+ * That last row is the exception that proves the rule. A review exists to
+ * capture the **owner's** consent; a drop naming neither an artist nor an
+ * organization has no owner outside HitBox, so there is no consent to capture
+ * and nothing to wait for. It is filed under the HitBox organization and
+ * decided in the same transaction it is opened in — see `ApprovalAuthority.NONE`
+ * and docs/admin/drop-approval-lifecycle.md.
  *
  * `Organization.type` is the discriminator rather than "does the drop have an
  * artistId", because most drops have both. A Lumen drop carries
@@ -48,6 +56,17 @@ export interface ResolvedAuthority {
 }
 
 export function resolveAuthority(facts: OwnershipFacts): ResolvedAuthority {
+    // Nobody to ask. Checked FIRST, because it is the only case defined by the
+    // absence of both owners rather than by the presence of one — checking it
+    // later would mean every other branch had to re-state "and an owner exists".
+    if (!facts.organizationId && !facts.artistId) {
+        return {
+            authority: ApprovalAuthority.NONE,
+            requiredArtistId: null,
+            requiredOrganizationId: null,
+        };
+    }
+
     if (facts.organizationType === OrganizationType.ARTIST_INDIVIDUAL && facts.artistId) {
         return {
             authority: ApprovalAuthority.ARTIST,
@@ -165,6 +184,13 @@ export function canApprove(
         case ApprovalAuthority.PLATFORM:
             // HitBox's own drops. Any holder of the capability qualifies —
             // there is no separate owner to defer to.
+            return { allowed: true, reason: null };
+
+        case ApprovalAuthority.NONE:
+            // Auto-passed at submit, so in practice this review is already
+            // decided and the caller never reaches here. Allowed rather than
+            // refused for the case where one somehow has not been: there is no
+            // owner being spoken for, so approving it invents nobody's consent.
             return { allowed: true, reason: null };
     }
 }

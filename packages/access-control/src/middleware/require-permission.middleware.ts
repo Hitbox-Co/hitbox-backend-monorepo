@@ -179,6 +179,74 @@ export function createRequirePermission(deps: PermissionGuardDeps) {
     }
 
     /**
+     * Passes when the caller holds **any** of these capabilities.
+     *
+     * For a route that one action reaches through genuinely different powers.
+     * The motivating case: recording a release decision is `approve` for the
+     * owner, `reject` for a platform administrator pulling a drop, and
+     * `manage` for whoever administers the queue — three capabilities, one
+     * endpoint, and no single one of them that everybody entitled to call it
+     * holds.
+     *
+     * This is NOT a way to loosen a gate. Each capability listed must be one
+     * that genuinely entitles the caller to the route; which of them they hold
+     * still decides what they may *do* once inside, and that second question is
+     * answered in the service against the loaded record.
+     *
+     * `req.authz` records the capability that actually matched, so a service
+     * can tell which door the caller came through.
+     */
+    function requireAnyPermission(
+        capabilities: readonly string[],
+        options: RequirePermissionOptions = {},
+    ): RequestHandler {
+        if (capabilities.length === 0) {
+            throw new Error('requireAnyPermission() needs at least one capability.');
+        }
+        // Parsed at router-build time, same as the single-capability guard: a
+        // typo crashes at boot rather than denying every request for ever.
+        const parsedAll = capabilities.map((capability) => {
+            const parsed = parseCapability(capability);
+            if (!parsed) {
+                throw new Error(
+                    `requireAnyPermission("${capability}") is not a valid capability. ` +
+                    `Expected "resource:action" using the ResourceType / PermissionAction enums.`,
+                );
+            }
+            return { capability, parsed };
+        });
+
+        return async (req, _res, next) => {
+            try {
+                const principal = await loadPrincipal(req);
+                const context = options.context ? await options.context(req) : {};
+
+                for (const { capability, parsed } of parsedAll) {
+                    const decision = decide(principal, { ...parsed, context });
+                    if (!decision.allowed) continue;
+
+                    const { allowed: _allowed, reason: _reason, ...detail } = decision;
+                    // A globalOnly route keeps looking rather than failing on
+                    // the first org-scoped match: another listed capability may
+                    // still be held globally.
+                    if (options.globalOnly && detail.scope !== PermissionScope.GLOBAL) continue;
+
+                    req.authz = { userId: principal.userId, capability, ...detail };
+                    next();
+                    return;
+                }
+
+                throw AppError.forbidden(
+                    'You do not have permission to perform this action',
+                    ACCESS_CONTROL_ERROR_CODES.FORBIDDEN,
+                );
+            } catch (error) {
+                next(error);
+            }
+        };
+    }
+
+    /**
      * Same decision, callable from a service once the record is loaded and
      * its real organizationId / ownerId are known. Use this for the
      * "check-after-load" half of a scoped update — the middleware guards the
@@ -230,7 +298,7 @@ export function createRequirePermission(deps: PermissionGuardDeps) {
         };
     }
 
-    return { requirePermission, authorize, describePrincipal, principalId };
+    return { requirePermission, requireAnyPermission, authorize, describePrincipal, principalId };
 }
 
 export type PermissionGuard = ReturnType<typeof createRequirePermission>;

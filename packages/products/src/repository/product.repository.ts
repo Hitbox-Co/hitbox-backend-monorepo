@@ -793,6 +793,58 @@ export class ProductRepository {
      * delete from the kill switch, and leaving `isActive` true on an archived
      * row would make it visible to any query that checks only one of them.
      */
+    /**
+     * Price points actually in force on a drop — the "is there anything to
+     * sell?" check behind publication.
+     *
+     * Uses the same `currentPrice()` window every other price read uses, rather
+     * than a second notion of "in force". A superseded row is still a row since
+     * prices became versioned, so counting by status alone would let a drop go
+     * live on a price that expired last week.
+     */
+    countActivePrices(productId: string): Promise<number> {
+        return this.prisma.dropPrice.count({
+            where: {
+                dropId: productId,
+                status: DropPriceStatus.ACTIVE,
+                ...ProductRepository.currentPrice(),
+            },
+        });
+    }
+
+    /**
+     * Serialized units minted against a drop.
+     *
+     * A dedicated count rather than a call into the performance aggregate,
+     * which computes a dozen figures for a screen; publication needs one
+     * number and asks one question. Reading `Sku` from here follows the
+     * precedent already set by the detail and performance reads above —
+     * @hitbox/skus owns writing that table, not reading it.
+     */
+    countSkus(productId: string): Promise<number> {
+        return this.prisma.sku.count({ where: { productId } });
+    }
+
+    /**
+     * Takes a drop live.
+     *
+     * Separate from `update()` because it writes a column `update()` must not:
+     * `publishedAt` records when the drop actually went out, and is set once.
+     * Routing it through the generic updater would put it back within reach of
+     * a field patch, which is the thing this endpoint exists to prevent.
+     */
+    async publish(
+        id: string,
+        options: { status: DropStatus; setPublishedAt: boolean },
+    ): Promise<ProductWithRelations> {
+        const now = new Date();
+        return this.update(id, {
+            status: options.status,
+            ...(options.setPublishedAt ? { publishedAt: now } : {}),
+            updatedAt: now,
+        });
+    }
+
     async archive(id: string): Promise<ProductWithRelations> {
         const now = new Date();
         const product = await this.prisma.drop.update({

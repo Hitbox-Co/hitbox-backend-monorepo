@@ -30,6 +30,9 @@
 > The physical supply chain upstream of all of it — vendors, consignment
 > intake, the NFC chip inventory and the supply/inventory metrics rollup:
 > [supply-inventory-api.md](supply-inventory-api.md).
+> **How a drop gets approved — who signs it off, the legal compliance
+> tickmark, rejection notes, reopening, and the drops that skip review
+> entirely: [drop-approval-lifecycle.md](drop-approval-lifecycle.md).**
 > Session handling and the Clerk flow are in
 > [authentication.md](authentication.md).
 >

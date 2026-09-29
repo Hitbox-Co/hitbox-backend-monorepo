@@ -1013,6 +1013,9 @@ importers:
         specifier: ^3.24.1
         version: 3.25.76
     devDependencies:
+      '@hitbox/access-control':
+        specifier: workspace:*
+        version: link:../access-control
       '@jest/globals':
         specifier: ^29.7.0
         version: 29.7.0

@@ -232,6 +232,43 @@ export function bootstrap(): Bootstrapped {
         // it live, and what currency does it settle in?" before the catalog
         // writes a price against it.
         markets: marketsModule.markets,
+        /**
+         * Releases owns ReleaseApproval, so releases answers "has this drop
+         * cleared review?" before the catalog takes it live. Without this,
+         * publishing is refused rather than allowed — see the port's own note.
+         *
+         * Wrapped in a lambda because `releasesModule` is constructed further
+         * down: the closure only runs per request, so declaration order here
+         * does not matter. Same arrangement as the audit adapters below.
+         */
+        releaseGate: {
+            describeLatest: (productId: string) =>
+                releasesModule.releaseGate.describeLatest(productId),
+        },
+        audit: {
+            record: (input: {
+                eventType: string;
+                actorId: string;
+                organizationId: string | null;
+                productId: string;
+                result: 'SUCCESS' | 'DENIED';
+                correlationId: string;
+                before?: Record<string, unknown> | undefined;
+                after?: Record<string, unknown> | undefined;
+                metadata?: Record<string, unknown> | undefined;
+            }) =>
+                auditModule.recorder.record({
+                    eventType: input.eventType,
+                    actor: { type: 'HITBOX_ADMIN', id: input.actorId },
+                    result: input.result,
+                    organizationId: input.organizationId,
+                    resource: { type: 'Drop', id: input.productId },
+                    ...(input.before ? { beforeState: input.before as Prisma.InputJsonValue } : {}),
+                    ...(input.after ? { afterState: input.after as Prisma.InputJsonValue } : {}),
+                    correlationId: input.correlationId,
+                    metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
+                }),
+        },
     });
 
     /**

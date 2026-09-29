@@ -2,8 +2,9 @@ import { randomInt, randomUUID } from 'node:crypto';
 import type { Logger } from 'pino';
 import { AppError } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
-import { ComplianceStatus, Prisma } from '@hitbox/database';
+import { ComplianceStatus, DropStatus, Prisma } from '@hitbox/database';
 import {
+    PRODUCT_AUDIT_EVENTS,
     PRODUCT_CODE_MAX_ATTEMPTS,
     PRODUCT_CODE_UNIQUE_LENGTH,
     PRODUCT_EVENTS,
@@ -17,6 +18,11 @@ import type {
 } from '../domain/interfaces/sku-minting.interface';
 import type { IMediaAssets } from '../domain/interfaces/media-assets.interface';
 import type { IMarketLookup } from '../domain/interfaces/market-lookup.interface';
+import type { IProductAudit } from '../domain/interfaces/product-audit.interface';
+import type {
+    IReleaseGate,
+    ReleaseGateVerdict,
+} from '../domain/interfaces/release-gate.interface';
 import type {
     AttachProductImagesDto,
     CreateProductDto,
@@ -25,6 +31,8 @@ import type {
     ProductImageResponse,
     ProductPriceInput,
     ProductPriceResponse,
+    ClearedReview,
+    PublishProductDto,
     ReplaceProductImagesDto,
     SetProductPricesDto,
     UpdateProductDto,
@@ -42,6 +50,13 @@ import type {
     ProductWithRelations,
     SkuUnitRow,
 } from '../repository/product.repository';
+
+/** What `POST /admin/products/:id/publish` returns. */
+export interface PublishProductResult {
+    product: ProductResponse;
+    /** The review this publication cleared. */
+    clearedReview: ClearedReview;
+}
 
 interface ProductServiceDeps {
     products: ProductRepository;
@@ -67,6 +82,22 @@ interface ProductServiceDeps {
      * pointing at markets nobody validated.
      */
     markets?: IMarketLookup | undefined;
+    /**
+     * Answers "has this drop cleared review?". Provided by @hitbox/releases,
+     * which owns `ReleaseApproval`.
+     *
+     * Optional so a test harness can build the service without it — but
+     * publishing is **refused** when it is absent rather than allowed. A
+     * deployment that cannot verify an approval must not take drops live on
+     * the assumption that one exists.
+     */
+    releaseGate?: IReleaseGate | undefined;
+    /**
+     * The compliance trail for publication. Optional so tests need not wire
+     * the audit module; a server must pass the real recorder, or a drop goes
+     * live with nothing recording who did it.
+     */
+    audit?: IProductAudit | undefined;
 }
 
 /**
@@ -376,6 +407,188 @@ export class ProductService {
         await this.requireById(id);
         await this.deps.products.archive(id);
         await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_ARCHIVED, { productId: id });
+    }
+
+    /**
+     * Takes a drop live.
+     *
+     * The last gate before a drop becomes purchasable, and the reason it is a
+     * route of its own rather than `PATCH { status }`: every check below is a
+     * question about the drop's **whole state**, not about one field, and a
+     * generic field-patcher has nowhere to put them.
+     *
+     * The checks run in a deliberate order — cheapest and most fundamental
+     * first, so the reason a caller gets back is the most useful one rather
+     * than whichever check happened to be written first.
+     */
+    async publish(input: {
+        id: string;
+        dto: PublishProductDto;
+        actorId: string;
+        correlationId: string;
+    }): Promise<PublishProductResult> {
+        const product = await this.requireById(input.id);
+
+        // 1. Is it a drop that can be live at all?
+        if (product.archivedAt !== null) {
+            throw AppError.conflict(
+                'This drop is archived. Restore it before publishing.',
+                PRODUCTS_ERROR_CODES.NOT_PUBLISHABLE,
+            );
+        }
+        if (product.status === input.dto.target) {
+            throw AppError.conflict(
+                `This drop is already ${input.dto.target}.`,
+                PRODUCTS_ERROR_CODES.NOT_PUBLISHABLE,
+            );
+        }
+        if (
+            product.status === DropStatus.ENDED ||
+            product.status === DropStatus.ARCHIVED
+        ) {
+            throw AppError.conflict(
+                `A drop that is ${product.status} cannot be published again.`,
+                PRODUCTS_ERROR_CODES.NOT_PUBLISHABLE,
+            );
+        }
+
+        // 2. Has its owner approved it?
+        //
+        // Refused rather than skipped when the gate is not wired in. A
+        // deployment that cannot verify an approval must not take drops live
+        // on the assumption one exists — that is precisely the hole this
+        // endpoint was built to close.
+        if (!this.deps.releaseGate) {
+            throw AppError.badRequest(
+                'Publication is unavailable on this deployment: approvals cannot be verified.',
+                PRODUCTS_ERROR_CODES.RELEASE_GATE_UNAVAILABLE,
+            );
+        }
+        const review = await this.deps.releaseGate.describeLatest(input.id);
+        if (!review.publishable) {
+            await this.recordPublishAttempt(input, product, review, 'DENIED');
+            throw AppError.conflict(
+                review.reason ?? 'This drop has not been approved for release.',
+                PRODUCTS_ERROR_CODES.NOT_APPROVED,
+                {
+                    approvalId: review.approvalId,
+                    version: review.version,
+                    status: review.status,
+                },
+            );
+        }
+
+        // 3. Is its compliance evidence complete?
+        //
+        // Checked again here rather than trusted from the approval: the
+        // approval was recorded against the drop as it stood then, and these
+        // fields are editable afterwards. An age flag added after sign-off
+        // would otherwise go live unchecked.
+        if (product.isAgeSpecific && product.minimumAge === null) {
+            throw AppError.badRequest(
+                'This drop is age-restricted but carries no minimum age. Set one before publishing.',
+                PRODUCTS_ERROR_CODES.PUBLISH_BLOCKED,
+                { field: 'minimumAge' },
+            );
+        }
+
+        // 4. Is there anything to sell?
+        const priceCount = await this.deps.products.countActivePrices(input.id);
+        if (priceCount === 0) {
+            throw AppError.badRequest(
+                'This drop has no active price. Add one before publishing.',
+                PRODUCTS_ERROR_CODES.PUBLISH_BLOCKED,
+                { field: 'prices' },
+            );
+        }
+
+        // A drop declaring supply but holding no serialized units would be
+        // purchasable with nothing to deliver.
+        if (product.totalSupply > 0) {
+            const minted = await this.deps.products.countSkus(input.id);
+            if (minted === 0) {
+                throw AppError.badRequest(
+                    `This drop declares ${product.totalSupply} units but none have been minted. ` +
+                    'Mint the edition before publishing.',
+                    PRODUCTS_ERROR_CODES.PUBLISH_BLOCKED,
+                    { field: 'skus', totalSupply: product.totalSupply, minted: 0 },
+                );
+            }
+        }
+
+        // ── Go live ─────────────────────────────────────────────────────────
+        const published = await this.deps.products.publish(input.id, {
+            status: input.dto.target,
+            // First publication only. A drop staged to PUBLISHED and later
+            // moved to ACTIVE keeps the moment it first went out, which is what
+            // `publishedAt` means — `publishAt` is the scheduled intent and is
+            // a different column.
+            setPublishedAt: product.publishedAt === null,
+        });
+
+        await this.recordPublishAttempt(input, product, review, 'SUCCESS');
+
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_PUBLISHED, {
+            productId: input.id,
+            status: input.dto.target,
+            approvalId: review.approvalId,
+            authority: review.authority,
+            actorId: input.actorId,
+        });
+        this.deps.logger.info(
+            {
+                productId: input.id,
+                from: product.status,
+                to: input.dto.target,
+                approvalId: review.approvalId,
+                authority: review.authority,
+            },
+            'drop published',
+        );
+
+        return {
+            product: this.toResponse(published),
+            clearedReview: {
+                approvalId: review.approvalId,
+                version: review.version,
+                status: review.status,
+                authority: review.authority,
+            },
+        };
+    }
+
+    /**
+     * Records the attempt, allowed or refused.
+     *
+     * A refused publication is worth recording: someone trying to take an
+     * unapproved drop live is exactly what the approval rule exists to stop,
+     * and the refusal leaves no other trace.
+     */
+    private async recordPublishAttempt(
+        input: { id: string; dto: PublishProductDto; actorId: string; correlationId: string },
+        product: ProductWithRelations,
+        review: ReleaseGateVerdict,
+        result: 'SUCCESS' | 'DENIED',
+    ): Promise<void> {
+        if (!this.deps.audit) return;
+        await this.deps.audit.record({
+            eventType: PRODUCT_AUDIT_EVENTS.PUBLISH,
+            actorId: input.actorId,
+            organizationId: product.organizationId,
+            productId: input.id,
+            result,
+            correlationId: input.correlationId,
+            before: { status: product.status, publishedAt: product.publishedAt },
+            ...(result === 'SUCCESS' ? { after: { status: input.dto.target } } : {}),
+            metadata: {
+                approvalId: review.approvalId,
+                approvalVersion: review.version,
+                approvalStatus: review.status,
+                authority: review.authority,
+                ...(result === 'DENIED' ? { reason: review.reason } : {}),
+                ...(input.dto.note ? { note: input.dto.note } : {}),
+            },
+        });
     }
 
     // ── Prices ──────────────────────────────────────────────────────────

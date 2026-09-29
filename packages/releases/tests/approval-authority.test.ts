@@ -90,6 +90,50 @@ describe('resolveAuthority — the owner decides', () => {
             }).authority,
         ).toBe(ApprovalAuthority.ARTIST);
     });
+
+    it('asks NOBODY when the drop names neither an artist nor an organization', () => {
+        // A review captures the owner's consent. With no owner outside HitBox
+        // there is nothing to capture, so the drop auto-passes rather than
+        // parking in a queue no one is expected to action.
+        expect(
+            resolveAuthority({
+                organizationId: null,
+                organizationType: null,
+                artistId: null,
+                artistUserId: null,
+            }),
+        ).toEqual({
+            authority: ApprovalAuthority.NONE,
+            requiredArtistId: null,
+            requiredOrganizationId: null,
+        });
+    });
+
+    it('does NOT auto-pass a drop that has an organization but no artist', () => {
+        // Only the total absence of both owners auto-passes. A brand drop with
+        // no artist named is still the brand's to approve.
+        expect(
+            resolveAuthority({
+                organizationId: BRAND_ID,
+                organizationType: OrganizationType.BRAND,
+                artistId: null,
+                artistUserId: null,
+            }).authority,
+        ).toBe(ApprovalAuthority.ORGANIZATION);
+    });
+
+    it('does NOT auto-pass a HitBox-owned drop', () => {
+        // HitBox's own organization still has staff who sign off. "No owner"
+        // means no organization row at all, not "owned by HitBox".
+        expect(
+            resolveAuthority({
+                organizationId: 'org-hitbox',
+                organizationType: OrganizationType.HITBOX,
+                artistId: null,
+                artistUserId: null,
+            }).authority,
+        ).toBe(ApprovalAuthority.PLATFORM);
+    });
 });
 
 describe('canApprove — nobody approves on the owner\'s behalf', () => {

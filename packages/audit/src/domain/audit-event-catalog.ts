@@ -382,6 +382,23 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         sourceStories: ['docs/admin/sku-inventory-management.md 4'],
     },
 
+    // ── Publication ─────────────────────────────────────────────────────────
+    {
+        eventType: 'product.publish',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'A drop was taken live, or an attempt to take it live was refused. Carries ' +
+            'the review it cleared (id, version, authority) so "who authorised this" is ' +
+            'answerable from the trail alone. DENIED rows record an attempt to publish ' +
+            'a drop whose owner had not approved it.',
+        // CRITICAL because this is the moment a drop becomes purchasable by the
+        // public, and because a DENIED row here is an attempt to bypass the
+        // owner's approval — the single thing the release authority rule exists
+        // to prevent.
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/admin/drop-approval-lifecycle.md §10'],
+    },
+
     // ── Supply intake ───────────────────────────────────────────────────────
     // Chain of custody. Taking delivery of 5,000 chips is the moment the
     // platform becomes accountable for them, so the whole intake path is

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { RequestHandler } from 'express';
 import { asyncHandler } from '@hitbox/shared';
 import {
@@ -5,6 +6,7 @@ import {
     createProductSchema,
     listProductsQuerySchema,
     productDetailQuerySchema,
+    publishProductSchema,
     replaceProductImagesSchema,
     setProductPricesSchema,
     updateProductImageSchema,
@@ -75,6 +77,36 @@ export class ProductController {
     archive: RequestHandler = asyncHandler(async (req, res) => {
         await this.service.archive(req.params.id as string);
         res.status(204).send();
+    });
+
+    /**
+     * POST /admin/products/:id/publish — take the drop live.
+     *
+     * A route of its own rather than `PATCH { status }`, because publishing
+     * asks whether the drop is *allowed* to go live — its owner's approval,
+     * its compliance evidence, its price, its minted units — and those are
+     * questions about the whole record, not about one field.
+     *
+     * `userId` is read off `req.authz`, which the permission guard sets. A
+     * plain property read, not an import: this module never depends on the
+     * authorization package.
+     */
+    publish: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = publishProductSchema.parse(req.body ?? {});
+        const correlated = req as typeof req & {
+            correlationId?: string;
+            authz?: { userId?: string };
+        };
+        res.json({
+            data: await this.service.publish({
+                id: req.params.id as string,
+                dto,
+                actorId: correlated.authz?.userId ?? 'unknown',
+                // A fresh id still joins the audit row to itself; one that threw
+                // because the middleware was not mounted is a lost record.
+                correlationId: correlated.correlationId ?? randomUUID(),
+            }),
+        });
     });
 
     // ── Prices ──────────────────────────────────────────────────────────

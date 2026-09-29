@@ -456,12 +456,65 @@ export type CreateProductDto = z.infer<typeof createProductSchema>;
  *   - **prices** — repricing needs each market resolved and validated.
  *     `PUT /admin/products/:id/prices` owns it.
  */
+/**
+ * Editing a drop's catalog fields.
+ *
+ * **`status` is deliberately not editable here.** A drop's status is the
+ * outcome of a workflow, not a field: it moves through submit and decide
+ * (@hitbox/releases), publish (`POST /admin/products/:id/publish`) and archive
+ * (`DELETE /admin/products/:id`) — three routes that each check preconditions
+ * the owner's approval depends on.
+ *
+ * It *was* editable, and that made the whole approval lifecycle advisory:
+ * `PATCH { "status": "ACTIVE" }` took a drop from DRAFT to live without the
+ * artist ever being asked, wrote no approval row, set no `publishedAt`, and
+ * left no audit trail. A dedicated publish route with the checks on it is
+ * worthless while a generic field-patcher sits next to it with none.
+ *
+ * `.strict()` means a client still sending `status` now gets a 422 naming the
+ * field, rather than having it silently ignored — a silent drop would look like
+ * the publish succeeded.
+ */
 export const updateProductSchema = createProductSchema
-    .omit({ groupCode: true, skus: true, images: true, prices: true })
+    .omit({ groupCode: true, skus: true, images: true, prices: true, status: true })
     .partial()
     .strict();
 
 export type UpdateProductDto = z.infer<typeof updateProductSchema>;
+
+/**
+ * Taking a drop live.
+ *
+ * `target` distinguishes the two live states the catalog already draws:
+ * `ACTIVE` is what the public storefront lists (`PUBLIC_PRODUCT_WHERE`), while
+ * `PUBLISHED` is staged — orders accept it, the storefront does not show it.
+ * Defaults to `ACTIVE`, because "publish this drop" means "make it live" for
+ * every screen that calls this.
+ */
+export const publishProductSchema = z.object({
+    target: z
+        .string()
+        .trim()
+        .transform((value) => value.toUpperCase())
+        .pipe(z.enum([DropStatus.ACTIVE, DropStatus.PUBLISHED]))
+        .default(DropStatus.ACTIVE),
+    /** Optional note, recorded on the audit entry rather than on the drop. */
+    note: z.string().trim().max(500).optional(),
+});
+export type PublishProductDto = z.infer<typeof publishProductSchema>;
+
+/**
+ * The review a publication cleared, echoed back so a console can show *which*
+ * approval authorised the drop going live.
+ *
+ * `PublishProductResult` itself lives in the service, beside `ProductResponse`.
+ */
+export interface ClearedReview {
+    approvalId: string | null;
+    version: number | null;
+    status: string | null;
+    authority: string | null;
+}
 
 // ── Response envelope ───────────────────────────────────────────────────
 
