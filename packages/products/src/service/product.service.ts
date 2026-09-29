@@ -277,6 +277,36 @@ export class ProductService {
                 PRODUCTS_ERROR_CODES.MINTING_UNAVAILABLE,
             );
         }
+
+        /**
+         * Units may not be minted for a drop that will need its owner's
+         * approval — the approval has to come first.
+         *
+         * A drop is born in DRAFT, so an owned drop is never approved at the
+         * moment it is created and a `skus` block here could never be
+         * legitimate. Minting it anyway would create serialized inventory for
+         * a drop the artist may yet reject, which somebody then has to
+         * reconcile against nothing.
+         *
+         * A drop naming neither an artist nor an organization has no owner to
+         * ask, so it stays mintable at creation exactly as before. That is
+         * asked through the gate rather than re-derived here, so the authority
+         * rule lives in one place — see domain/interfaces/release-gate.interface.ts.
+         */
+        if (skus && this.deps.releaseGate) {
+            const needsApproval = this.deps.releaseGate.requiresApproval({
+                artistId: dto.artistId ?? null,
+                organizationId: dto.organizationId ?? null,
+            });
+            if (needsApproval) {
+                throw AppError.badRequest(
+                    'This drop belongs to an artist or organization, so its units cannot be ' +
+                    'minted until its owner has approved it. Create the drop, submit it for ' +
+                    'review, then mint through POST /admin/products/:productId/skus.',
+                    PRODUCTS_ERROR_CODES.NOT_APPROVED,
+                );
+            }
+        }
         // Checked before the insert as well as inside the mint, because the
         // message differs: here it is "your request contradicts itself", there
         // it is "someone else minted while you were deciding".
@@ -465,7 +495,7 @@ export class ProductService {
             );
         }
         const review = await this.deps.releaseGate.describeLatest(input.id);
-        if (!review.publishable) {
+        if (!review.cleared) {
             await this.recordPublishAttempt(input, product, review, 'DENIED');
             throw AppError.conflict(
                 review.reason ?? 'This drop has not been approved for release.',

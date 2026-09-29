@@ -18,6 +18,7 @@ import {
 } from '../domain/sku-update';
 import type { SkuUpdatePlan, SkuUpdateTarget } from '../domain/sku-update';
 import type { ISkuAudit } from '../domain/interfaces/sku-audit.interface';
+import type { ISkuReleaseGate } from '../domain/interfaces/release-gate.interface';
 import type {
     BatchUpdateItem,
     BatchUpdateResult,
@@ -59,6 +60,16 @@ interface SkuServiceDeps {
     eventBus: IEventBus;
     audit: ISkuAudit;
     logger: Logger;
+    /**
+     * Answers "has this drop cleared release?" before an edition is minted.
+     * Provided by @hitbox/releases, which owns `ReleaseApproval`.
+     *
+     * Optional so a test harness can build the service without it — but when
+     * it is absent minting proceeds, because the gate is an added constraint
+     * rather than the authority on who may mint. A deployment without it is
+     * one where the approval workflow is not wired at all.
+     */
+    releaseGate?: ISkuReleaseGate | undefined;
 }
 
 /**
@@ -104,6 +115,15 @@ export class SkuService {
         dto: MintSkusDto,
     ): Promise<MintResult> {
         const product = await this.requireProduct(access, productId);
+
+        // ── The drop's owner has to have approved it first ──────────────────
+        //
+        // A serialized unit is a claim about a physical object. Creating one
+        // for a drop the artist may yet reject produces inventory referring to
+        // something nobody will ship, which someone then reconciles away by
+        // hand. A drop with no artist and no organization has no owner to ask
+        // and is mintable immediately — see the port's own note.
+        await this.assertReleaseCleared(productId);
 
         // Binding a physical tag is a different capability from minting the
         // unit it goes on. A Drop Manager can mint any edition on the platform
@@ -772,6 +792,32 @@ export class SkuService {
      * organization; this repeats the containment check against the row that
      * was actually loaded, which is the half the middleware cannot do.
      */
+    /**
+     * Refuses to mint an edition for a drop whose owner has not approved it.
+     *
+     * Silent when no gate is wired in: this is an added constraint on a
+     * deployment that runs the approval workflow, not the authority on who may
+     * mint — that is the capability check on the route.
+     */
+    private async assertReleaseCleared(productId: string): Promise<void> {
+        if (!this.deps.releaseGate) return;
+
+        const verdict = await this.deps.releaseGate.describeLatest(productId);
+        if (verdict.cleared) return;
+
+        throw AppError.conflict(
+            verdict.reason ??
+            'This drop has not been approved for release, so its units cannot be minted yet.',
+            SKUS_ERROR_CODES.NOT_APPROVED,
+            {
+                approvalId: verdict.approvalId,
+                version: verdict.version,
+                status: verdict.status,
+                authority: verdict.authority,
+            },
+        );
+    }
+
     private async requireProduct(
         access: SkuAccess,
         productId: string,

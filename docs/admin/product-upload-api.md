@@ -9,6 +9,13 @@
 
 ---
 
+> ⚠️ **The `skus` block is now refused for a drop that names an artist or an
+> organization** (`400 PRODUCTS_NOT_APPROVED`). Units may only be minted once
+> the drop's owner has approved it — create the drop, submit it for review,
+> then mint through `POST /admin/products/:productId/skus`. A drop with neither
+> owner is HitBox's own and still mints at creation. See
+> [drop-approval-lifecycle.md §10](drop-approval-lifecycle.md#10-minting-waits-for-approval).
+
 ## 1. If you are getting `422` on create — read this first
 
 **It is not your account.** A `422 VALIDATION_ERROR` is returned *after*

@@ -13,6 +13,7 @@ import { SkuController } from './controller/sku.controller';
 import type { SkuPrincipalResolver } from './controller/sku.controller';
 import { NOOP_SKU_AUDIT } from './domain/interfaces/sku-audit.interface';
 import type { ISkuAudit } from './domain/interfaces/sku-audit.interface';
+import type { ISkuReleaseGate } from './domain/interfaces/release-gate.interface';
 import { SkuRepository } from './repository/sku.repository';
 import { SkuService } from './service/sku.service';
 
@@ -38,6 +39,14 @@ export interface SkusModuleDeps {
      * a tag revocation happens with nothing to show for it.
      */
     audit?: ISkuAudit;
+    /**
+     * Answers "has this drop cleared release?" before an edition is minted.
+     * Provided by @hitbox/releases, which owns `ReleaseApproval`.
+     *
+     * Optional: without it minting is unconstrained by approval, which is the
+     * right behaviour for a deployment that does not run the review workflow.
+     */
+    releaseGate?: ISkuReleaseGate | undefined;
 }
 
 export interface SkusModule {
@@ -60,6 +69,7 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
         eventBus: deps.eventBus,
         audit: deps.audit ?? NOOP_SKU_AUDIT,
         logger,
+        releaseGate: deps.releaseGate,
     });
     const controller = new SkuController(service, deps.resolvePrincipal);
 

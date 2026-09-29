@@ -17,8 +17,16 @@
  */
 
 export interface ReleaseGateVerdict {
-    /** True when the latest review permits publication. */
-    publishable: boolean;
+    /**
+     * True when the drop's owner has approved it — or when it has no owner to
+     * ask. The single condition that gates both publication and minting.
+     */
+    cleared: boolean;
+    /**
+     * False for a drop naming neither an artist nor an organization: nobody's
+     * consent is being waited on, so it is cleared from the moment it exists.
+     */
+    approvalRequired: boolean;
     /** Why not, phrased for the person reading it on screen. Null when allowed. */
     reason: string | null;
     /** The review this verdict was read from, for the audit trail. */
@@ -32,11 +40,23 @@ export interface ReleaseGateVerdict {
 
 export interface IReleaseGate {
     /**
-     * The publication verdict for a drop, from its most recent review.
+     * The release verdict for a drop, from its most recent review.
      *
      * Reads the **latest version only**. An older APPROVED version does not
-     * license publication when a newer one was rejected or is still open —
-     * the current answer is the one that counts.
+     * clear a drop when a newer one was rejected or is still open — the
+     * current answer is the one that counts.
      */
     describeLatest(productId: string): Promise<ReleaseGateVerdict>;
+    /**
+     * Does a drop with this ownership need an approval at all?
+     *
+     * Pure and synchronous. Asked during **creation**, when there is no drop
+     * row yet to look up — so the catalog can refuse a `skus` block on a drop
+     * that will need its owner's approval first, without keeping a second copy
+     * of the authority rule.
+     */
+    requiresApproval(ownership: {
+        artistId: string | null;
+        organizationId: string | null;
+    }): boolean;
 }

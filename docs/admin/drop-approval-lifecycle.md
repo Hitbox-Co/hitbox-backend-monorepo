@@ -25,12 +25,13 @@ Owns: `ReleaseApproval`
 7. [Rejection requires a reason](#7-rejection-requires-a-reason)
 8. [Reopening a decided review](#8-reopening-a-decided-review)
 9. [Who can call what](#9-who-can-call-what)
-10. [Publishing — the last gate](#10-publishing--the-last-gate)
-11. [API reference](#11-api-reference)
-12. [The transaction record](#12-the-transaction-record)
-13. [Errors](#13-errors)
-14. [Worked examples](#14-worked-examples)
-15. [Not built](#15-not-built)
+10. [Minting waits for approval](#10-minting-waits-for-approval)
+11. [Publishing — the last gate](#11-publishing--the-last-gate)
+12. [API reference](#12-api-reference)
+13. [The transaction record](#13-the-transaction-record)
+14. [Errors](#14-errors)
+15. [Worked examples](#15-worked-examples)
+16. [Not built](#16-not-built)
 
 ---
 
@@ -390,7 +391,89 @@ holder still cannot approve a brand's drop.
 
 ---
 
-## 10. Publishing — the last gate
+## 10. Minting waits for approval
+
+**An edition may not be minted until the drop's owner has approved it.**
+
+A serialized unit is a claim about a physical object: it gets a code, a serial
+within an edition, eventually a chip and an owner. Creating those for a drop
+the artist may yet reject produces inventory referring to something nobody will
+ever ship — and which somebody then has to reconcile away by hand.
+
+So minting waits for the **same clearance publication waits for**:
+
+> The owner has approved it, **or** there is no owner to ask.
+
+### What changed
+
+Minting used to happen at drop creation, via the `skus` block on
+`POST /admin/products`. A drop is born in `DRAFT`, so an owned drop was never
+approved at the moment its units were created — the block ran before anyone had
+been asked.
+
+| Case | Before | Now |
+|---|---|---|
+| Drop with an artist or organization | Minted at creation | **Refused** until approved, then `POST /admin/products/:productId/skus` |
+| Drop with neither (HitBox's own) | Minted at creation | **Unchanged** — still mintable at creation |
+
+### The unowned drop is mintable immediately
+
+A drop naming neither an artist nor an organization has no owner whose consent
+is being waited on, so it is cleared **from the moment it exists** — with no
+review row at all. An administrator does not have to walk HitBox's own drop
+through a review that would auto-pass anyway.
+
+That is why the gate answers from *ownership* when no review exists, rather
+than simply refusing. The distinction, restated:
+
+```
+no artist AND no organization  → cleared immediately, no review needed
+anything else, no review yet   → refused: "never been submitted"
+anything else, review PENDING  → refused: awaiting its owner
+anything else, review REJECTED → refused, quoting the rejection note
+anything else, review APPROVED → cleared
+```
+
+### Where it is enforced
+
+Both minting entry points, and the refusal names the review:
+
+| Route | Behaviour |
+|---|---|
+| `POST /admin/products` with a `skus` block | `400 PRODUCTS_NOT_APPROVED` when the drop names an artist or organization |
+| `POST /admin/products/:productId/skus` | `409 SKUS_NOT_APPROVED`, with `details` carrying `approvalId`, `version`, `status`, `authority` |
+
+The second carries the review details so a console can link straight to the
+approval that is blocking it.
+
+### How it asks
+
+The same port and the same adapter that gates publication, wired into a second
+consumer:
+
+```
+@hitbox/products  declares IReleaseGate      ┐
+                                             ├─▶ @hitbox/releases (ReleaseGateAdapter)
+@hitbox/skus      declares ISkuReleaseGate   ┘
+```
+
+Each consumer declares the shape it needs; neither reads `ReleaseApproval`, and
+releases imports neither of them.
+
+`IReleaseGate` additionally exposes a **pure, synchronous** `requiresApproval()`
+for the creation path, which has no drop row to look up yet — so the catalog can
+refuse a `skus` block without keeping a second copy of the authority rule.
+`resolveAuthority` stays the single source of truth.
+
+> **When no gate is wired in, minting proceeds.** The gate is an added
+> constraint on a deployment that runs the review workflow, not the authority
+> on who may mint — that is the capability check on the route. Publication is
+> the opposite: it *refuses* without a gate, because taking a drop live on the
+> assumption an approval exists is the hole that endpoint was built to close.
+
+---
+
+## 11. Publishing — the last gate
 
 `APPROVED` is not live. Publication is a separate transition with its own
 route, and it is the **last point at which the owner's approval is checked**.
@@ -525,7 +608,7 @@ authorised the drop going live, without a second request.
 
 ---
 
-## 11. API reference
+## 12. API reference
 
 ### `GET /api/v1/admin/releases`
 
@@ -620,7 +703,7 @@ The reviewer's working notes on an **undecided** review — `comment`,
 
 ---
 
-## 12. The transaction record
+## 13. The transaction record
 
 Every step is recorded through `IReleaseAudit.record()` — **awaited, and allowed
 to throw**. An approval nobody can account for is not an approval.
@@ -662,7 +745,7 @@ platform administrator on another.
 
 ---
 
-## 13. Errors
+## 14. Errors
 
 | Code | Status | Meaning |
 |---|---|---|
@@ -684,14 +767,22 @@ platform administrator on another.
 | `PRODUCTS_PUBLISH_BLOCKED` | 400 | Missing `minimumAge`, no active price, or no minted units. `details.field` names which |
 | `PRODUCTS_RELEASE_GATE_UNAVAILABLE` | 400 | The release gate is not wired in, so approval cannot be verified — publication is refused rather than assumed |
 
+### Minting (§10)
+
+| Code | Status | Meaning |
+|---|---|---|
+| `SKUS_NOT_APPROVED` | 409 | The drop's owner has not approved it. `details` carries `approvalId`, `version`, `status`, `authority` |
+| `PRODUCTS_NOT_APPROVED` | 400 | A `skus` block on `POST /admin/products` for a drop that names an artist or organization — create it, get it approved, then mint |
+
 ---
 
-## 14. Worked examples
+## 15. Worked examples
 
 ### An artist-owned drop, rejected then approved
 
 ```
 1. Drop Manager creates the drop for artist Kaze (ARTIST_INDIVIDUAL org).
+   A `skus` block here would be REFUSED — Kaze has not approved it yet.
 2. Drop Manager  POST /admin/releases                    → v1 PENDING, authority=ARTIST
 3. System Admin  POST /admin/releases/{v1}/decision      → 403 NOT_THE_APPROVER
                  { status: APPROVED, acceptLegalCompliance: true }
@@ -704,13 +795,16 @@ platform administrator on another.
 7. Kaze          POST /admin/releases/{v2}/decision      → v2 APPROVED
                  { status: APPROVED, acceptLegalCompliance: true }
                  Drop → APPROVED. legalComplianceVersion = "2026-09-v1".
-8. Drop Manager  POST /admin/products/{id}/publish       → Drop ACTIVE
+8. Admin         POST /admin/products/{id}/skus          → 500 units minted
+                 { count: 500 }
+                 Now permitted: the gate reads v2 = APPROVED.
+9. Drop Manager  POST /admin/products/{id}/publish       → Drop ACTIVE
                  { target: "ACTIVE" }
                  publishedAt set. Gate re-read v2 = APPROVED before allowing it.
 ```
 
-Note step 8: the publish route asks the gate again rather than trusting that
-step 7 happened. Had an administrator rejected v2 in between, publication would
+Note steps 8 and 9: both ask the gate again rather than trusting that step 7
+happened. Had an administrator rejected v2 in between, publication would
 have been refused with `PRODUCTS_NOT_APPROVED` naming version 2.
 
 Every step above survives in `history[]` and in the audit trail, including the
@@ -735,11 +829,15 @@ Drop: artistId = null, organizationId = null
       approval v1 APPROVED, legalComplianceAccepted = false
       Drop.status        = APPROVED
       Drop.organizationId = <the HITBOX organization>
+
+  → and units are mintable WITHOUT even that call: the gate clears an
+    unowned drop from the moment it exists, so a `skus` block on
+    POST /admin/products works exactly as it always did.
 ```
 
 ---
 
-## 15. Not built
+## 16. Not built
 
 | Gap | Note |
 |---|---|

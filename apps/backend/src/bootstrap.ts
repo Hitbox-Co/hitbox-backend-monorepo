@@ -175,6 +175,19 @@ export function bootstrap(): Bootstrapped {
         eventBus,
         guard: accessControlModule.guard,
         resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
+        /**
+         * An edition may not be minted until the drop's owner has approved it
+         * — a unit created for a drop the artist may yet reject is inventory
+         * referring to something nobody will ship.
+         *
+         * Same adapter the catalog uses to gate publication, and the same
+         * deferred-lambda arrangement: `releasesModule` is constructed further
+         * down, and this closure only runs per request.
+         */
+        releaseGate: {
+            describeLatest: (productId: string) =>
+                releasesModule.releaseGate.describeLatest(productId),
+        },
         // Adapted onto the real recorder, which is constructed further down —
         // the lambda closes over it and only runs per request, so the order of
         // the two `const`s here does not matter. Same arrangement as releases.
@@ -244,6 +257,13 @@ export function bootstrap(): Bootstrapped {
         releaseGate: {
             describeLatest: (productId: string) =>
                 releasesModule.releaseGate.describeLatest(productId),
+            // Pure and synchronous — asked mid-create, when there is no drop
+            // row to look up yet, to refuse a `skus` block on a drop that will
+            // need its owner's approval first.
+            requiresApproval: (ownership: {
+                artistId: string | null;
+                organizationId: string | null;
+            }) => releasesModule.releaseGate.requiresApproval(ownership),
         },
         audit: {
             record: (input: {

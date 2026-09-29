@@ -19,6 +19,13 @@
 
 ---
 
+> ⚠️ **Minting now waits for approval.** An edition cannot be minted until the
+> drop's owner has approved it — `409 SKUS_NOT_APPROVED` otherwise. A drop
+> naming neither an artist nor an organization needs no approval and is
+> mintable immediately, including through the `skus` block on
+> `POST /admin/products`. Full rule:
+> [drop-approval-lifecycle.md 10](drop-approval-lifecycle.md#10-minting-waits-for-approval).
+
 ## 1. The two things being created
 
 These are two different records and conflating them is the most common

@@ -32,6 +32,11 @@ export const SKUS_ERROR_CODES = {
     BATCH_REJECTED: 'SKUS_BATCH_REJECTED',
     /** Refused: a batch named no unit the caller can reach. */
     BATCH_EMPTY: 'SKUS_BATCH_EMPTY',
+    /**
+     * Refused: the drop's owner has not approved it, so there is nothing to
+     * mint units against yet. See docs/admin/drop-approval-lifecycle.md.
+     */
+    NOT_APPROVED: 'SKUS_NOT_APPROVED',
 } as const;
 
 /**
