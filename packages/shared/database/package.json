@@ -24,6 +24,7 @@
     "db:backfill:v31": "dotenv -e ../../../.env -- tsx prisma/backfill-v31.ts",
     "db:seed:demo": "dotenv -e ../../../.env -- tsx prisma/seed-demo.ts",
     "db:seed:finance": "dotenv -e ../../../.env -- tsx prisma/seed-finance.ts",
+    "db:repair:artist-orgs": "dotenv -e ../../../.env -- tsx prisma/repair-artist-organizations.ts",
     "db:link-admin": "dotenv -e ../../../.env -- tsx prisma/link-admin.ts"
   },
   "dependencies": {

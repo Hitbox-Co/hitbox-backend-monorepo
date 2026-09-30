@@ -353,6 +353,26 @@ org-scoped role without an `organizationId` is a 400.
 See §6a below — the profile exists as soon as the invitation is sent, so the
 artist can be picked on the drop form before they have signed up.
 
+### An artist invitation is always organization-scoped
+
+`scopeType` and `organizationId` are **corrected, not honoured**, for any role in the
+`brand_artist` group: the scope becomes `ORGANIZATION`, and when the caller named no
+organization one is created for them (`OrganizationType.ARTIST_INDIVIDUAL`, keyed on the
+invited address so re-inviting lands on the same one).
+
+This is not tidiness. The ARTIST role's working capabilities are all organization-scoped —
+`drop:manage:organization`, `release-approval:read:organization`,
+`release-approval:approve:organization` — and the engine rejects an organization-scoped grant
+whose assignment names no organization, whatever the request says. An artist invited at `OWN`
+scope therefore got an account that **could never see their own drops or the approvals waiting
+on them**, and nothing failed until they opened an empty dashboard days later.
+
+A self-releasing artist is an organization of one; that is what `ARTIST_INDIVIDUAL` is for,
+and it is already the shape the seeded solo artist has. Artists provisioned before this was
+enforced are repaired by `pnpm db:repair:artist-orgs` (dry run by default, `--apply` to write),
+which creates the organization, re-scopes the assignment and adopts the artist's org-less
+drops into it.
+
 ### `GET /invitations` — list them
 
 **Capability:** `employee-role-mgmt:read`.

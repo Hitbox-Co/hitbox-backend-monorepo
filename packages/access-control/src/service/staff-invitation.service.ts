@@ -9,6 +9,7 @@ import {
 } from '../constants/access-control.constant';
 import { assertCanGrantRole } from '../domain/grantable-roles';
 import type { IIdentityInvitations } from '../domain/interfaces/identity-invitations.interface';
+import type { ISoloOrganizations } from '../domain/interfaces/solo-organizations.interface';
 import type { InviteStaffDto, ListInvitationsQuery } from '../dto/access-control.dto';
 import type { StaffInvitationRepository, InvitationWithRole } from '../repository/staff-invitation.repository';
 import type { RoleRepository } from '../repository/role.repository';
@@ -26,6 +27,12 @@ export interface StaffInvitationServiceDeps {
     assignments: RoleAssignmentService;
     identity: IIdentityInvitations;
     users: IUserDirectory;
+    /**
+     * Where a self-releasing artist is filed. Optional so a unit test can omit
+     * it; when it is absent an artist invited without an organization is
+     * refused rather than provisioned into a state nobody can authorize.
+     */
+    soloOrganizations?: ISoloOrganizations;
     eventBus: IEventBus;
     logger: Logger;
     /** How long an invitation stays claimable. */
@@ -124,10 +131,46 @@ export class StaffInvitationService {
             rolePermissions: role.rolePermissions.map((rp) => rp.permission.key),
         });
 
-        const scopeType = input.dto.scopeType ?? defaultScopeFor(role.entityGroup);
-        const scopeId =
+        let scopeType = input.dto.scopeType ?? defaultScopeFor(role.entityGroup);
+        let scopeId =
             scopeType === RoleScopeType.ORGANIZATION ? (input.dto.organizationId ?? null) : null;
-        if (scopeType === RoleScopeType.ORGANIZATION && !scopeId) {
+
+        // ── A brand_artist role must arrive with an organization ────────────
+        //
+        // Its working capabilities are all organization-scoped, and the engine
+        // rejects an organization-scoped grant whose assignment names no
+        // organization — so an artist invited at OWN scope, or at ORGANIZATION
+        // scope with no organization, is provisioned into an account that can
+        // never see its own drops or the approvals waiting on it. That failure
+        // is silent and arrives days later as an empty dashboard, which is
+        // precisely why it has to be caught at invite time.
+        //
+        // A self-releasing artist is an organization of one, so the fix is to
+        // create it rather than to refuse the invitation: OrganizationType
+        // .ARTIST_INDIVIDUAL exists for exactly this. `scopeType` is corrected
+        // rather than trusted — an explicit OWN from the caller is an override
+        // of a default that was already right, and honouring it produces a
+        // broken artist.
+        if (isArtistRole(role.entityGroup)) {
+            if (!scopeId) {
+                if (!this.deps.soloOrganizations) {
+                    throw AppError.badRequest(
+                        `${role.name} is organization-scoped; an organizationId is required`,
+                        ACCESS_CONTROL_ERROR_CODES.MISSING_ORG_SCOPE,
+                    );
+                }
+                const solo = await this.deps.soloOrganizations.ensureForArtist({
+                    name: input.dto.artistName ?? null,
+                    email,
+                });
+                scopeId = solo.id;
+                this.deps.logger.info(
+                    { email, organizationId: solo.id, organizationName: solo.name },
+                    'artist invited without an organization — filed under a solo organization',
+                );
+            }
+            scopeType = RoleScopeType.ORGANIZATION;
+        } else if (scopeType === RoleScopeType.ORGANIZATION && !scopeId) {
             throw AppError.badRequest(
                 `${role.name} is organization-scoped; an organizationId is required`,
                 ACCESS_CONTROL_ERROR_CODES.MISSING_ORG_SCOPE,
@@ -430,6 +473,15 @@ export class StaffInvitationService {
         }
         return count;
     }
+}
+
+/**
+ * Roles that belong to a brand or an artist. Their capabilities are
+ * organization-scoped, so an assignment must always name one — see
+ * `ISoloOrganizations` for what happens when the inviter did not.
+ */
+function isArtistRole(entityGroup: string): boolean {
+    return entityGroup === 'brand_artist';
 }
 
 /** Mirrors `defaultScopeFor` in the assignment service — same rule, one place. */

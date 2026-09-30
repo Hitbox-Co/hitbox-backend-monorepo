@@ -84,7 +84,15 @@ export interface ProductsModuleDeps {
 export interface ProductsPermissionGuard {
     requirePermission(
         capability: string,
-        options?: { context?: (req: Request) => unknown; globalOnly?: boolean },
+        options?: {
+            /** May be async: finding the drop's owner is a query. */
+            context?: (
+                req: Request,
+            ) =>
+                | { organizationId?: string | null; ownerId?: string | null }
+                | Promise<{ organizationId?: string | null; ownerId?: string | null }>;
+            globalOnly?: boolean;
+        },
     ): RequestHandler;
 }
 
@@ -150,10 +158,29 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
             }
             const { guard } = deps;
 
+            // ── Reads name the drop whose organization decides ────────────
+            //
+            // `drop:read` is held by an artist and a Brand Admin only through
+            // `drop:manage:organization` — MANAGE is the one sanctioned
+            // implication, and the catalog has no `drop:read:organization` at
+            // all. An organization-scoped grant is rejected outright when the
+            // request names no organization, so guarding these with the bare
+            // capability made the drop detail screen platform-staff-only: an
+            // artist could be asked to approve a drop and then get a 403
+            // opening it.
+            //
+            // The writes below stay `globalOnly` — catalog administration is
+            // platform-wide by design, and that is unchanged.
+            const dropOrganization = async (req: Request) => ({
+                organizationId: req.params.id
+                    ? await products.organizationIdOf(req.params.id)
+                    : null,
+            });
+
             // The detail screen: catalog record + performance + SKU units.
             router.get(
                 '/:id',
-                guard.requirePermission(PRODUCT_READ_CAPABILITY),
+                guard.requirePermission(PRODUCT_READ_CAPABILITY, { context: dropOrganization }),
                 controller.getDetail,
             );
 
@@ -196,7 +223,7 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
             // screen; writing is catalog administration like any other edit.
             router.get(
                 '/:id/prices',
-                guard.requirePermission(PRODUCT_READ_CAPABILITY),
+                guard.requirePermission(PRODUCT_READ_CAPABILITY, { context: dropOrganization }),
                 controller.listPrices,
             );
             router.put(
@@ -219,7 +246,7 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
             // writing is catalog administration like any other product edit.
             router.get(
                 '/:id/images',
-                guard.requirePermission(PRODUCT_READ_CAPABILITY),
+                guard.requirePermission(PRODUCT_READ_CAPABILITY, { context: dropOrganization }),
                 controller.listImages,
             );
             router.post(

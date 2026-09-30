@@ -269,6 +269,53 @@ await guard.authorize(req, 'order:refund', {
 
 The principal is loaded once per request, so the second check costs nothing.
 
+### ⚠️ A route with no context admits only platform-wide grants
+
+This is the trap, and it has bitten this codebase twice. `requirePermission('x:y')` with no
+`context` passes `{}` to the engine, and `reaches()` then **rejects every non-global grant**:
+
+| Permission scope | Without a context | Reason returned |
+| --- | --- | --- |
+| `:global` | passes | breadth ALL needs no context |
+| `:organization` | **denied** | `organization-scoped grant requires an organization context` |
+| `:own` | **denied** | `own-scoped grant requires an owner context` |
+
+So an unscoped route silently becomes staff-only. It does not fail at boot, it does not fail
+in a test that authenticates as an administrator, and it does not look like an authorization
+bug from the outside — it looks like an artist's dashboard that is simply empty.
+
+Both cases found so far were exactly this:
+
+- **finance** mounted every read as `requirePermission('payment-royalty:read')`. The ARTIST
+  role holds that capability only at `:own`, so every artist got a 403 on their own earnings
+  and the entire `FinanceScope.OWN` branch in `RoyaltyPayoutService` was unreachable code.
+- **releases** mounted its whole router with no context. ARTIST and BRAND_ADMIN hold
+  `release-approval:*` at `:organization`, so no artist could open the review queue, submit
+  their own drop, or approve the drop they own — while the service's authority rules, written
+  precisely to decide which party signs off, never ran for those parties.
+
+**The rule:** if a capability exists at `:own` or `:organization` in the catalog, every route
+guarding it must supply a context. Which one depends on what the route names:
+
+```ts
+// Names a record → that record's owner/organization, loaded in the resolver.
+requirePermission('release-approval:read', {
+    context: async (req) => ({
+        organizationId: (await releases.findById(req.params.approvalId))?.drop.organizationId ?? null,
+    }),
+});
+
+// Names no record (a list, or "my own slice") → the caller. The service still
+// narrows afterwards; this only answers "which record", not "how much of it".
+requirePermission('payment-royalty:read', {
+    context: async (req) => ({ ownerId: (await resolveAccess(req)).userId }),
+});
+```
+
+Supplying the caller as the owner is safe **only** where the route genuinely returns the
+caller's own slice. Never default it globally: a route like `GET /users/:id` guarded by
+`self-profile:read` would then pass for any id.
+
 ---
 
 ## 7. Grant caching

@@ -19,11 +19,20 @@ import type { ReleaseCallerResolver } from './controller/release.controller';
 import { ReleaseRepository } from './repository/release.repository';
 import { ReleaseService } from './service/release.service';
 
+/** What a route tells the guard about the record being reached. */
+type ReleaseAccessContext =
+    | { organizationId?: string | null; ownerId?: string | null }
+    | Promise<{ organizationId?: string | null; ownerId?: string | null }>;
+
 /** Structural guard — the shape of `requirePermission`, not an import. */
 export interface ReleasesPermissionGuard {
     requirePermission(
         capability: string,
-        options?: { context?: (req: Request) => unknown; globalOnly?: boolean },
+        options?: {
+            /** May be async: finding the record's owner can need a query. */
+            context?: (req: Request) => ReleaseAccessContext;
+            globalOnly?: boolean;
+        },
     ): RequestHandler;
     /**
      * Passes when the caller holds any one of these. Needed because the
@@ -32,7 +41,10 @@ export interface ReleasesPermissionGuard {
      */
     requireAnyPermission(
         capabilities: readonly string[],
-        options?: { context?: (req: Request) => unknown; globalOnly?: boolean },
+        options?: {
+            context?: (req: Request) => ReleaseAccessContext;
+            globalOnly?: boolean;
+        },
     ): RequestHandler;
 }
 
@@ -78,14 +90,62 @@ export function createReleasesModule(deps: ReleasesModuleDeps): ReleasesModule {
             const router = Router();
             router.use(requireAuth);
 
+            // ── Why every route below states a context ──────────────────
+            //
+            // The ARTIST and BRAND_ADMIN capabilities here are
+            // organization-scoped, and the engine rejects an
+            // organization-scoped grant outright when the request supplies no
+            // organization — "organization-scoped grant requires an
+            // organization context" — because it cannot tell whose record is
+            // being reached. Mounting these routes with no context therefore
+            // let *only* platform-wide staff through: an artist could not open
+            // the review queue, could not submit their own drop, and could not
+            // approve the drop they own. The authority rules in the service
+            // that decide which party may sign off were unreachable for the
+            // parties they were written for.
+            //
+            // The service still does the real narrowing — `organizationIds`
+            // for reads and the authority rule for decisions. These resolvers
+            // only answer the guard's prior question: which record is this.
+
+            /**
+             * For routes that name no record. The caller's own organization is
+             * the only honest answer, and the service narrows to *all* of them
+             * afterwards — so a caller in several organizations passes the
+             * guard on one and still reads across every one they hold. A
+             * global caller has `organizationIds === null`, and a
+             * platform-wide grant needs no context at all.
+             */
+            const callerOrganization = async (req: Request) => ({
+                organizationId: (await deps.resolveCaller(req)).organizationIds?.[0] ?? null,
+            });
+
+            /** For routes that name an approval: the drop's own organization. */
+            const approvalOrganization = async (req: Request) => {
+                const approvalId = req.params.approvalId;
+                const approval = approvalId ? await releases.findById(approvalId) : null;
+                return { organizationId: approval?.drop.organizationId ?? null };
+            };
+
+            /** For submission: the organization of the drop being submitted. */
+            const submittedDropOrganization = async (req: Request) => {
+                const productId = (req.body as { productId?: string } | undefined)?.productId;
+                const owner = productId ? await releases.findOwnership(productId) : null;
+                return { organizationId: owner?.organizationId ?? null };
+            };
+
             router.get(
                 '/',
-                deps.guard.requirePermission(RELEASE_READ_CAPABILITY),
+                deps.guard.requirePermission(RELEASE_READ_CAPABILITY, {
+                    context: callerOrganization,
+                }),
                 controller.list,
             );
             router.get(
                 '/:approvalId',
-                deps.guard.requirePermission(RELEASE_READ_CAPABILITY),
+                deps.guard.requirePermission(RELEASE_READ_CAPABILITY, {
+                    context: approvalOrganization,
+                }),
                 controller.getById,
             );
 
@@ -94,14 +154,18 @@ export function createReleasesModule(deps: ReleasesModuleDeps): ReleasesModule {
             // globalOnly, because an org-scoped Brand Admin submits their own.
             router.post(
                 '/',
-                deps.guard.requirePermission(RELEASE_SUBMIT_CAPABILITY),
+                deps.guard.requirePermission(RELEASE_SUBMIT_CAPABILITY, {
+                    context: submittedDropOrganization,
+                }),
                 controller.submit,
             );
             // Amending a reviewer's working notes on an open review. Queue
             // administration, hence `manage` rather than the decision set.
             router.patch(
                 '/:approvalId',
-                deps.guard.requirePermission(RELEASE_DECIDE_CAPABILITY),
+                deps.guard.requirePermission(RELEASE_DECIDE_CAPABILITY, {
+                    context: approvalOrganization,
+                }),
                 controller.update,
             );
             // The compliance sign-off.
@@ -118,7 +182,9 @@ export function createReleasesModule(deps: ReleasesModuleDeps): ReleasesModule {
             // service, and a `manage` holder still cannot approve a brand's.
             router.post(
                 '/:approvalId/decision',
-                deps.guard.requireAnyPermission(RELEASE_DECISION_CAPABILITIES),
+                deps.guard.requireAnyPermission(RELEASE_DECISION_CAPABILITIES, {
+                    context: approvalOrganization,
+                }),
                 controller.decide,
             );
 
@@ -127,7 +193,9 @@ export function createReleasesModule(deps: ReleasesModuleDeps): ReleasesModule {
             // not a party signing one off.
             router.post(
                 '/:approvalId/reopen',
-                deps.guard.requirePermission(RELEASE_OVERRIDE_CAPABILITY),
+                deps.guard.requirePermission(RELEASE_OVERRIDE_CAPABILITY, {
+                    context: approvalOrganization,
+                }),
                 controller.reopen,
             );
 

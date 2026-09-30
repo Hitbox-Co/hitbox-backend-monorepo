@@ -310,3 +310,119 @@ describe('revoking', () => {
         expect(deps.logger.warn).toHaveBeenCalled();
     });
 });
+
+/**
+ * An artist must never be provisioned without an organization.
+ *
+ * The ARTIST role's working capabilities are organization-scoped
+ * (`drop:manage:organization`, `release-approval:read:organization`,
+ * `release-approval:approve:organization`), and the engine rejects an
+ * organization-scoped grant whose assignment names no organization. So an
+ * artist invited at OWN scope gets an account that can never see their own
+ * drops or the approvals waiting on them — and nothing fails until they open
+ * an empty dashboard days later.
+ *
+ * These pin the invite-time correction, because the failure it prevents is
+ * silent and arrives somewhere else.
+ */
+describe('inviting an artist', () => {
+    const ARTIST_ROLE = {
+        id: 'role-artist',
+        name: 'ARTIST',
+        displayName: 'Artist',
+        entityGroup: 'brand_artist',
+        domain: 'BUSINESS',
+        isActive: true,
+        rolePermissions: [
+            { permission: { key: 'drop:manage:organization' } },
+            { permission: { key: 'release-approval:approve:organization' } },
+        ],
+    };
+    const ARTIST_GRANTER = [
+        'drop:manage:global',
+        'release-approval:manage:global',
+        'employee-role-mgmt:assign:global',
+    ];
+
+    function buildArtist(soloOrganizations?: unknown) {
+        return build({
+            roles: { findById: jest.fn(async () => ARTIST_ROLE) },
+            ...(soloOrganizations === undefined ? {} : { soloOrganizations }),
+        });
+    }
+
+    const solo = () => ({
+        ensureForArtist: jest.fn(async () => ({ id: 'org-solo-1', name: 'Nova' })),
+    });
+
+    it('files an artist invited with no organization under a solo organization', async () => {
+        const soloOrganizations = solo();
+        const { service, deps } = buildArtist(soloOrganizations);
+
+        await service.invite({
+            dto: { email: 'nova@example.com', roleId: 'role-artist', artistName: 'Nova' },
+            invitedById: 'admin-1',
+            inviterPermissions: ARTIST_GRANTER,
+        });
+
+        expect(soloOrganizations.ensureForArtist).toHaveBeenCalledWith({
+            name: 'Nova',
+            email: 'nova@example.com',
+        });
+        expect(deps.invitations.createPending).toHaveBeenCalledWith(
+            expect.objectContaining({ scopeType: 'ORGANIZATION', scopeId: 'org-solo-1' }),
+        );
+    });
+
+    it('overrides an explicit OWN scope rather than honouring it', async () => {
+        // The caller can pass scopeType, and OWN is what the admin UI sent.
+        // Honouring it is what produced an artist nobody could authorize.
+        const soloOrganizations = solo();
+        const { service, deps } = buildArtist(soloOrganizations);
+
+        await service.invite({
+            dto: { email: 'nova@example.com', roleId: 'role-artist', scopeType: 'OWN' },
+            invitedById: 'admin-1',
+            inviterPermissions: ARTIST_GRANTER,
+        });
+
+        expect(deps.invitations.createPending).toHaveBeenCalledWith(
+            expect.objectContaining({ scopeType: 'ORGANIZATION', scopeId: 'org-solo-1' }),
+        );
+    });
+
+    it('leaves a named organization alone', async () => {
+        const soloOrganizations = solo();
+        const { service, deps } = buildArtist(soloOrganizations);
+
+        await service.invite({
+            dto: {
+                email: 'signed@example.com',
+                roleId: 'role-artist',
+                scopeType: 'ORGANIZATION',
+                organizationId: 'org-label-9',
+            },
+            invitedById: 'admin-1',
+            inviterPermissions: ARTIST_GRANTER,
+        });
+
+        expect(soloOrganizations.ensureForArtist).not.toHaveBeenCalled();
+        expect(deps.invitations.createPending).toHaveBeenCalledWith(
+            expect.objectContaining({ scopeType: 'ORGANIZATION', scopeId: 'org-label-9' }),
+        );
+    });
+
+    it('refuses rather than provisioning an artist nobody can authorize', async () => {
+        // No solo-organization port wired: better a clear 400 at invite time
+        // than an account that silently cannot see its own work.
+        const { service } = buildArtist();
+
+        await expect(
+            service.invite({
+                dto: { email: 'nova@example.com', roleId: 'role-artist' },
+                invitedById: 'admin-1',
+                inviterPermissions: ARTIST_GRANTER,
+            }),
+        ).rejects.toThrow(/organizationId is required/);
+    });
+});

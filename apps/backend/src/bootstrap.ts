@@ -1,6 +1,7 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { Request } from 'express';
-import { prisma } from '@hitbox/database';
+import { prisma, OrganizationType } from '@hitbox/database';
 import type { Prisma } from '@hitbox/database';
 import { eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
@@ -93,6 +94,11 @@ export function bootstrap(): Bootstrapped {
         // writes the adapter — see docs/authorization/admin-provisioning.md.
         identityInvitations: authModule.invitations,
         invitationTtlHours: env.ADMIN_INVITATION_TTL_HOURS,
+        // An artist invited without a brand still needs an organization: the
+        // ARTIST role's capabilities are organization-scoped, and an assignment
+        // with no organization satisfies none of them. A self-releasing artist
+        // is an organization of one, which is what ARTIST_INDIVIDUAL is for.
+        soloOrganizations: { ensureForArtist: (input) => ensureSoloOrganization(prisma, input) },
     });
 
     // The dashboard reads the caller's grants through the guard's own
@@ -720,4 +726,48 @@ function mediaUnavailableRouter(): Router {
         });
     });
     return router;
+}
+
+/**
+ * The `ARTIST_INDIVIDUAL` organization a self-releasing artist is filed under.
+ *
+ * Implements `ISoloOrganizations` for @hitbox/access-control, which declares
+ * the port but owns no organization table. The reason it exists at all is in
+ * that interface: the ARTIST role's capabilities are organization-scoped, so an
+ * artist assigned without an organization can never see their own drops or the
+ * approvals waiting on them — and nothing fails until they open an empty
+ * dashboard days later.
+ *
+ * Idempotent on the invited address. The slug carries a hash of the email
+ * rather than the name, because two artists called "Nova" would otherwise
+ * collide on a UNIQUE column and the second invitation would fail; the name is
+ * still what everyone reads.
+ */
+async function ensureSoloOrganization(
+    db: typeof prisma,
+    input: { name: string | null; email: string },
+): Promise<{ id: string; name: string }> {
+    const email = input.email.trim().toLowerCase();
+    const name = input.name?.trim() || email.split('@')[0] || 'Artist';
+    const slug = `solo-${createHash('sha1').update(email).digest('hex').slice(0, 12)}`;
+
+    const existing = await db.organization.findUnique({
+        where: { slug },
+        select: { id: true, name: true },
+    });
+    if (existing) return existing;
+
+    const now = new Date();
+    return db.organization.create({
+        data: {
+            id: randomUUID(),
+            name,
+            slug,
+            type: OrganizationType.ARTIST_INDIVIDUAL,
+            isActive: true,
+            createdAt: now,
+            updatedAt: now,
+        },
+        select: { id: true, name: true },
+    });
 }

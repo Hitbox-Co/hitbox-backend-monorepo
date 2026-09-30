@@ -304,6 +304,25 @@ export class ProductRepository {
     }
 
     /**
+     * Which organization owns this drop — nothing else.
+     *
+     * For the route guards, which have to tell the authorization engine whose
+     * record is being reached before the service loads it. Deliberately not
+     * `findById`: that pulls every relation the detail screen needs, and a
+     * permission check should not cost a join it will not read. Returns null
+     * for a drop that does not exist, so a caller with no grant and a caller
+     * asking about a missing id are refused identically rather than the 403
+     * becoming an existence oracle.
+     */
+    async organizationIdOf(id: string): Promise<string | null> {
+        const drop = await this.prisma.drop.findUnique({
+            where: { id },
+            select: { organizationId: true },
+        });
+        return drop?.organizationId ?? null;
+    }
+
+    /**
      * Lookup by the product's public code.
      *
      * `Product.productCode` became `Product.groupCode` in the restructure —

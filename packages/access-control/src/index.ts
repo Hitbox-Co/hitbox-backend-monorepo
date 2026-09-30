@@ -149,4 +149,5 @@ export type {
     SentInvitation,
 } from './domain/interfaces/identity-invitations.interface';
 export { UNAVAILABLE_IDENTITY_INVITATIONS } from './domain/interfaces/identity-invitations.interface';
+export type { ISoloOrganizations } from './domain/interfaces/solo-organizations.interface';
 export { assertCanGrantRole, uncoveredPermissions } from './domain/grantable-roles';
