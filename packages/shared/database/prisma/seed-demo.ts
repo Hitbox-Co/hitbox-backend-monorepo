@@ -23,18 +23,19 @@
  */
 import { createHash, randomUUID } from 'node:crypto';
 import {
-    AcquisitionMethod, ApprovalStatus, ArtistBrandLinkType, AssetType,
+    AcquisitionMethod, ApprovalAuthority, ApprovalStatus, ArtistBrandLinkType, AssetType,
     AuditActionResult, AuditActorType, AuditSeverity, ClaimedStatus,
     ComplianceStatus, ConfigStatus, ContentAccessType, Currency, DropStatus,
-    EvolutionThresholdType, FinanceDirection, GatewayConfigScope, IndexJobStatus,
-    IndexOperation, LedgerEntryType, LedgerTxType, NotificationChannel,
+    EvolutionThresholdType, GatewayConfigScope, IndexJobStatus,
+    IndexOperation, LedgerTxType, NotificationChannel,
     NotificationStatus, OrderStatus, OrganizationType, PaymentGateway,
-    PaymentTransactionStatus, Prisma, DropPriceStatus, RefundStatus,
-    ResaleStatus, ReservationStatus, RoleScopeType, RoyaltyBasis,
+    PaymentTransactionStatus, Prisma, DropPriceStatus, RefundReason, RefundStatus,
+    ResaleStatus, ReservationStatus, RoleScopeType,
     SupplyItemType, SupportCaseStatus, SupportCaseType, TagLifecycleState,
     UserRole, VendorType, VirusScanStatus, Visibility,
 } from '@prisma/client';
 import { prisma } from '../src/index';
+import { seedFinanceDemo } from './seed-finance';
 
 // ── Deterministic ids ───────────────────────────────────────────────────────
 
@@ -344,12 +345,19 @@ async function main(): Promise<void> {
     // ── Release approvals ───────────────────────────────────────────────────
     await prisma.releaseApproval.createMany({
         data: products
-            .filter((p) => [DropStatus.SUBMITTED, DropStatus.IN_REVIEW, DropStatus.APPROVED, DropStatus.REJECTED].includes(p.status))
+            .filter((p) => p.status === DropStatus.SUBMITTED || p.status === DropStatus.IN_REVIEW
+                || p.status === DropStatus.APPROVED || p.status === DropStatus.REJECTED)
             .map((p, i) => {
                 const decided = p.status === DropStatus.APPROVED || p.status === DropStatus.REJECTED;
                 return {
                     id: id(`approval:${p.key}`), productId: id(`product:${p.key}`),
                     approverId: id('user:drops'),
+                    authority: ApprovalAuthority.ARTIST,
+                    requiredArtistId: id(`artist:${p.artist.key}`),
+                    requiredOrganizationId: null,
+                    legalComplianceAccepted: decided,
+                    legalComplianceAcceptedAt: decided ? daysAgo(12 + i) : null,
+                    legalComplianceVersion: decided ? 'terms-2026-03' : null,
                     status: p.status === DropStatus.REJECTED ? ApprovalStatus.REJECTED
                         : p.status === DropStatus.APPROVED ? ApprovalStatus.APPROVED
                             : ApprovalStatus.PENDING,
@@ -507,7 +515,7 @@ async function main(): Promise<void> {
     });
     await prisma.evolutionRule.createMany({
         data: [
-            { id: id('evorule:hold'), name: 'Held 30 days', collectionId: id('collection:kaze'), productId: null, thresholdType: EvolutionThresholdType.OWNED_DURATION, thresholdValue: 30, thresholdConfig: null, grantsBundleId: id('bundle:kaze'), isActive: true, archivedAt: null, createdAt: daysAgo(44) },
+            { id: id('evorule:hold'), name: 'Held 30 days', collectionId: id('collection:kaze'), productId: null, thresholdType: EvolutionThresholdType.OWNED_DURATION, thresholdValue: 30, thresholdConfig: Prisma.JsonNull, grantsBundleId: id('bundle:kaze'), isActive: true, archivedAt: null, createdAt: daysAgo(44) },
             { id: id('evorule:claims'), name: 'Five claims', collectionId: id('collection:ronin'), productId: null, thresholdType: EvolutionThresholdType.CLAIM_COUNT, thresholdValue: 5, thresholdConfig: { window: 'lifetime' }, grantsBundleId: id('bundle:ronin'), isActive: true, archivedAt: null, createdAt: daysAgo(43) },
         ],
     });
@@ -541,16 +549,16 @@ async function main(): Promise<void> {
             id: id(`order:${o.key}`), buyerId: id(`user:buyer:${o.buyerIdx}`),
             productId: id(`product:${o.product.key}`), variantId: null,
             // A SKU is assigned once payment settles, not before.
-            skuId: [OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED].includes(o.status)
+            skuId: o.status === OrderStatus.PENDING_PAYMENT || o.status === OrderStatus.CANCELLED
                 ? null : id(`sku:${o.product.key}:${1 + (o.index % 12)}`),
             quantity: o.quantity, organizationId: id(`org:${o.product.artist.org}`),
             marketId: id(`market:${o.market.key}`), status: o.status,
             unitPrice: dec(o.unit), amount: dec(o.unit * o.quantity),
             currency: o.market.currency, gateway: PaymentGateway.STRIPE,
             termsAcceptedAt: o.placedAt,
-            shippedAt: [OrderStatus.SHIPPED, OrderStatus.DELIVERED].includes(o.status) ? daysAgo(Math.max(1, 60 - o.index)) : null,
+            shippedAt: o.status === OrderStatus.SHIPPED || o.status === OrderStatus.DELIVERED ? daysAgo(Math.max(1, 60 - o.index)) : null,
             deliveredAt: o.status === OrderStatus.DELIVERED ? daysAgo(Math.max(1, 58 - o.index)) : null,
-            trackingNote: [OrderStatus.SHIPPED, OrderStatus.DELIVERED].includes(o.status) ? `TRK${900000 + o.index}` : null,
+            trackingNote: o.status === OrderStatus.SHIPPED || o.status === OrderStatus.DELIVERED ? `TRK${900000 + o.index}` : null,
             placedAt: o.placedAt, updatedAt: o.placedAt, archivedAt: null,
         })),
     });
@@ -569,7 +577,7 @@ async function main(): Promise<void> {
     });
     await prisma.inventoryReservation.createMany({
         data: orders
-            .filter((o) => ![OrderStatus.CANCELLED].includes(o.status))
+            .filter((o) => o.status !== OrderStatus.CANCELLED)
             .map((o) => ({
                 id: id(`reservation:${o.key}`), orderId: id(`order:${o.key}`),
                 skuId: id(`sku:${o.product.key}:${1 + (o.index % 12)}`),
@@ -606,7 +614,9 @@ async function main(): Promise<void> {
                 id: id(`refund:${o.key}`), orderId: id(`order:${o.key}`),
                 requestedById: id(`user:buyer:${o.buyerIdx}`),
                 reason: 'Item arrived damaged.', status: RefundStatus.PROCESSED,
-                amount: dec(o.unit * o.quantity),
+                reasonCode: RefundReason.DEFECTIVE_ITEM,
+                amount: dec(o.unit * o.quantity), currency: o.market.currency,
+                physicalReturnRequired: true,
                 physicalReturnConfirmedAt: daysAgo(6 + i),
                 approvedById: id('user:fin'), approvedAt: daysAgo(6 + i),
                 gatewayRefundId: `re_demo_${o.index}`,
@@ -618,7 +628,9 @@ async function main(): Promise<void> {
                 requestedById: id(`user:buyer:${o.buyerIdx}`),
                 reason: 'Changed my mind.',
                 status: pick([RefundStatus.REQUESTED, RefundStatus.AWAITING_RETURN, RefundStatus.APPROVED], i),
-                amount: dec(o.unit), physicalReturnConfirmedAt: null,
+                reasonCode: RefundReason.BUYER_CHANGED_MIND,
+                amount: dec(o.unit), currency: o.market.currency,
+                physicalReturnRequired: true, physicalReturnConfirmedAt: null,
                 approvedById: null, approvedAt: null, gatewayRefundId: null,
                 createdAt: daysAgo(3 + i), updatedAt: daysAgo(2 + i),
             })),
@@ -641,43 +653,19 @@ async function main(): Promise<void> {
     });
 
     // ── Finance + royalties ─────────────────────────────────────────────────
-    await prisma.royaltyRule.createMany({
-        data: artists.map((a, i) => ({
-            id: id(`royaltyrule:${a.key}`), organizationId: id(`org:${a.org}`),
-            artistId: id(`artist:${a.key}`), collectionId: null, productId: null,
-            basis: RoyaltyBasis.GROSS_REVENUE, splitType: 'percentage',
-            splitConfig: { artist: 20, brand: 10 }, percentage: dec(20 + i),
-            effectiveFrom: daysAgo(90), effectiveTo: null, createdAt: daysAgo(90),
-        })),
-    });
-    await prisma.royaltyLedgerEntry.createMany({
-        data: paid.map((o, i) => ({
-            id: id(`royaltyentry:${o.key}`), orderId: id(`order:${o.key}`),
-            ruleId: id(`royaltyrule:${o.product.artist.key}`),
-            amount: dec((o.unit * o.quantity * 0.2).toFixed(2)), currency: o.market.currency,
-            entryType: LedgerEntryType.ORIGINAL, adjustsEntryId: null,
-            createdAt: o.placedAt,
-        })).concat(
-            // One correction, so ADJUSTMENT netting is exercised.
-            paid.slice(0, 1).map((o) => ({
-                id: id(`royaltyentry:adj:${o.key}`), orderId: id(`order:${o.key}`),
-                ruleId: id(`royaltyrule:${o.product.artist.key}`),
-                amount: dec('-5.00'), currency: o.market.currency,
-                entryType: LedgerEntryType.ADJUSTMENT,
-                adjustsEntryId: id(`royaltyentry:${o.key}`), createdAt: daysAgo(2),
-            })),
-        ),
-    });
-    await prisma.financeLedgerEntry.createMany({
-        data: paid.map((o) => ({
-            id: id(`finentry:${o.key}`), orderId: id(`order:${o.key}`),
-            entryType: LedgerEntryType.ORIGINAL, direction: FinanceDirection.CREDIT,
-            amount: dec(o.unit * o.quantity), currency: o.market.currency,
-            costOfGoods: dec((o.unit * o.quantity * 0.4).toFixed(2)),
-            gatewayFee: dec((o.unit * o.quantity * 0.029 + 0.3).toFixed(2)),
-            description: `Order ${o.key}`, createdAt: o.placedAt,
-        })),
-    });
+    // Deferred to `seed-finance.ts`, which derives every rule, accrual, payout
+    // batch and correction from the artists, drops, orders and claims created
+    // above — and computes the money with @hitbox/finance's own
+    // `calculateRoyalty` / `resolveRule` / `splitsOf` rather than a second
+    // formula that can drift from the one the API runs. See that file's header
+    // for what the inline version used to get wrong.
+    const finance = await seedFinanceDemo();
+    console.log(
+        `  finance: ${finance.rules} rules, ${finance.entries} royalty entries, ` +
+        `${finance.payouts} payouts, ${finance.adjustments} adjustments, ` +
+        `${finance.financeEntries} ledger lines ` +
+        `(${finance.ordersLinkedToClaims} orders linked to their claim)`,
+    );
 
     // ── Notifications ───────────────────────────────────────────────────────
     await prisma.notificationTemplate.createMany({
@@ -803,7 +791,7 @@ async function main(): Promise<void> {
                 resourceType: pick(['Order', 'RefundRequest', 'Product', 'RoleAssignment'], i),
                 resourceId: id(`order:o${i % ORDER_COUNT}`),
                 actionResult: i % 11 === 0 ? AuditActionResult.DENIED : AuditActionResult.SUCCESS,
-                severity: t.severity, beforeState: null, afterState: { ok: true },
+                severity: t.severity, beforeState: Prisma.JsonNull, afterState: { ok: true },
                 ipAddress: `203.0.113.${i % 255}`, userAgent: 'HitBoxAdmin/1.0',
                 deviceId: null, correlationId: id(`correlation:${i}`),
                 ledgerReferenceId: null, metadata: { demo: true },
@@ -861,9 +849,14 @@ async function clearBusinessTables(): Promise<void> {
         prisma.contentUnlock.deleteMany(),
         prisma.contentBundleItem.deleteMany(),
         prisma.contentBundle.deleteMany(),
+        // Entries reference the payout batch and the rule, so they go first;
+        // the batch itself references Artist and Organization, so it has to be
+        // gone well before those are deleted below.
         prisma.royaltyLedgerEntry.deleteMany(),
-        prisma.financeLedgerEntry.deleteMany(),
+        prisma.royaltyPayout.deleteMany(),
         prisma.royaltyRule.deleteMany(),
+        prisma.adjustmentEntry.deleteMany(),
+        prisma.financeLedgerEntry.deleteMany(),
         prisma.refundRequest.deleteMany(),
         prisma.paymentTransaction.deleteMany(),
         prisma.paymentWebhookEvent.deleteMany(),
@@ -892,6 +885,9 @@ async function clearBusinessTables(): Promise<void> {
         prisma.roleAssignment.deleteMany(),
         prisma.authWebhookEvent.deleteMany(),
         prisma.platformConfig.deleteMany(),
+        // Three RESTRICT columns point at User (inviter, acceptor, revoker),
+        // so an invitation outlives nobody: it has to go before the users do.
+        prisma.staffInvitation.deleteMany(),
         prisma.user.deleteMany(),
         prisma.marketCountry.deleteMany(),
         prisma.market.deleteMany(),

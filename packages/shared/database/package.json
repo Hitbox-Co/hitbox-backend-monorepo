@@ -23,11 +23,13 @@
     "db:seed:audit": "dotenv -e ../../../.env -- tsx prisma/seed-audit.ts",
     "db:backfill:v31": "dotenv -e ../../../.env -- tsx prisma/backfill-v31.ts",
     "db:seed:demo": "dotenv -e ../../../.env -- tsx prisma/seed-demo.ts",
+    "db:seed:finance": "dotenv -e ../../../.env -- tsx prisma/seed-finance.ts",
     "db:link-admin": "dotenv -e ../../../.env -- tsx prisma/link-admin.ts"
   },
   "dependencies": {
     "@hitbox/access-control": "workspace:*",
     "@hitbox/audit": "workspace:*",
+    "@hitbox/finance": "workspace:*",
     "@prisma/client": "^6.12.0"
   },
   "devDependencies": {

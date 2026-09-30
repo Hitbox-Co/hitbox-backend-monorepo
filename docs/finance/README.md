@@ -32,6 +32,7 @@ document — why.
 | [module-boundaries.md](module-boundaries.md) | Which module owns what, which ports connect them, and why checkout lives in payments. |
 | [rbac-and-audit.md](rbac-and-audit.md) | Who can see and do what, and what lands in the compliance trail. |
 | [testing.md](testing.md) | What is tested, how to run it, and what is deliberately not covered yet. |
+| [demo-data.md](demo-data.md) | What `pnpm db:seed:finance` puts in the database, the deals it models, and the balances it produces. |
 
 ## The five principles, and where each one is enforced
 
