@@ -19,6 +19,9 @@
 /// later re-filed.
 model SkuClaim {
   id            String            @id @db.Uuid
+  /// Human-readable record id (`clm…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   claimCode     String            @unique
   claimedNo     Int
   claimedAt     DateTime
@@ -44,6 +47,9 @@ model SkuClaim {
 /// Signatures are captured on transfers to prove both parties consented.
 model BlockchainLedger {
   id                     String       @id @db.Uuid
+  /// Human-readable record id (`bcl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   skuId                  String       @db.Uuid
   sku                    Sku          @relation(fields: [skuId], references: [id])
   sequenceNo             Int
@@ -96,6 +102,9 @@ model BlockchainLedger {
 /// royalty analytics possible.
 model SkuHistory {
   id          String            @id @db.Uuid
+  /// Human-readable record id (`skh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   skuId       String            @db.Uuid
   sku         Sku               @relation(fields: [skuId], references: [id])
   ownerId     String?           @db.Uuid

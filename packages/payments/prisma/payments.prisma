@@ -15,6 +15,9 @@
 /// the provider's own id for reconciliation.
 model PaymentTransaction {
   id             String                   @id @db.Uuid
+  /// Human-readable record id (`pmt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId        String                   @db.Uuid
   order          Order                    @relation(fields: [orderId], references: [id])
   gateway        PaymentGateway
@@ -48,6 +51,9 @@ model PaymentTransaction {
 /// actual keys are never in this database.
 model PaymentGatewayConfig {
   id             String             @id @db.Uuid
+  /// Human-readable record id (`pgc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   scope          GatewayConfigScope
   organizationId String?            @db.Uuid
   organization   Organization?      @relation(fields: [organizationId], references: [id])
@@ -65,6 +71,9 @@ model PaymentGatewayConfig {
 /// for replay instead of dropping them.
 model PaymentWebhookEvent {
   id                String         @id
+  /// Human-readable record id (`pwh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   provider          PaymentGateway
   eventType         String
   payload           Json
@@ -86,6 +95,9 @@ model PaymentWebhookEvent {
 /// responding must not reappear on the resale market the next day.
 model RefundRequest {
   id                        String       @id @db.Uuid
+  /// Human-readable record id (`rfd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId                   String       @db.Uuid
   order                     Order        @relation(fields: [orderId], references: [id])
   requestedById             String       @db.Uuid
@@ -130,6 +142,9 @@ model RefundRequest {
 /// posted as two adjustment entries rather than one refund.
 model DisputeCase {
   id                   String             @id @db.Uuid
+  /// Human-readable record id (`dsp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId              String             @db.Uuid
   order                Order              @relation(fields: [orderId], references: [id])
   paymentTransactionId String?            @db.Uuid

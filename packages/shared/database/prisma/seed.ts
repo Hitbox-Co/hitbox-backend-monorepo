@@ -10,6 +10,7 @@
  */
 import { createHash } from 'node:crypto';
 import { PrismaClient, Prisma } from '@prisma/client';
+import { withPublicCodes } from '../src/public-code.extension';
 import type {
     MarketplaceStatus,
     ProductCategory,
@@ -18,7 +19,12 @@ import type {
     ProductType,
 } from '@prisma/client';
 
-const prisma = new PrismaClient();
+/**
+ * Wrapped, not bare. A plain `new PrismaClient()` skips the publicCode
+ * extension, and a seed that wrote rows with no human-readable id would leave
+ * exactly the gap the column exists to close.
+ */
+const prisma = withPublicCodes(new PrismaClient());
 
 const img = (seed: string, w = 600, h = 800) =>
     `https://picsum.photos/seed/${seed}/${w}/${h}`;

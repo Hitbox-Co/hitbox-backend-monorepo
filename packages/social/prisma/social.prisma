@@ -16,6 +16,9 @@
 /// organizations module can be extracted without touching this table.
 model Follow {
   id                     String   @id @db.Uuid
+  /// Human-readable record id (`flw…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   followerId             String   @db.Uuid
   follower               User     @relation(fields: [followerId], references: [id])
   artistId               String?  @db.Uuid
@@ -32,6 +35,9 @@ model Follow {
 /// module reads when a drop opens or restocks.
 model WishlistItem {
   id                String          @id @db.Uuid
+  /// Human-readable record id (`wsh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId            String          @db.Uuid
   user              User            @relation(fields: [userId], references: [id])
   productId         String          @db.Uuid

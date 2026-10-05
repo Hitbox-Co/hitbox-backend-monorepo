@@ -11,6 +11,9 @@
 /// before the local projection exists, and auth must never depend on users.
 model AuthWebhookEvent {
   id          String    @id
+  /// Human-readable record id (`awh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   eventType   String
   payload     Json
   processedAt DateTime?

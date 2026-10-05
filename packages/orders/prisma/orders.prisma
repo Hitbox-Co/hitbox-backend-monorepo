@@ -15,6 +15,9 @@
 /// time so later catalog or market edits never rewrite an order's totals.
 model Order {
   id             String          @id @db.Uuid
+  /// Human-readable record id (`odr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   buyerId        String          @db.Uuid
   buyer          User            @relation(fields: [buyerId], references: [id])
   productId      String          @db.Uuid
@@ -82,6 +85,9 @@ model Order {
 /// or deletes the address book entry. Unique per (order, usage).
 model OrderAddress {
   id              String       @id @db.Uuid
+  /// Human-readable record id (`oda…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId         String       @db.Uuid
   order           Order        @relation(fields: [orderId], references: [id])
   usage           AddressUsage
@@ -109,6 +115,9 @@ model OrderAddress {
 /// SKU is now the order's. This is what stops two buyers claiming one unit.
 model InventoryReservation {
   id        String            @id @db.Uuid
+  /// Human-readable record id (`ivr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId   String            @db.Uuid
   order     Order             @relation(fields: [orderId], references: [id])
   skuId     String            @db.Uuid

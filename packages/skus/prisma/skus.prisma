@@ -23,6 +23,9 @@
 /// (SkuHistory + BlockchainLedger).
 model Sku {
   id          String  @id @db.Uuid
+  /// Human-readable record id (`sku…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   skuCode     String  @unique
   productId   String  @db.Uuid
   drop        Drop    @relation(fields: [productId], references: [id])
@@ -111,6 +114,9 @@ model Sku {
 /// Append-only log of every tap verification. The single-use claim token stays on Sku.claimToken.
 model NfcVerification {
   id               String             @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`nfv…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   verificationCode String             @unique @db.VarChar(10) // NV
   nfcTagId         String?            @db.Uuid
   nfcTag           NfcTag?            @relation(fields: [nfcTagId], references: [id])

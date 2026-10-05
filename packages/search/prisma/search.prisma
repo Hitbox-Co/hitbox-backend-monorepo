@@ -14,6 +14,9 @@
 /// bounded retry with a dead-letter threshold.
 model SearchIndexJob {
   id          String         @id @db.Uuid
+  /// Human-readable record id (`sij…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   entityType  String
   entityId    String?        @db.Uuid
   operation   IndexOperation

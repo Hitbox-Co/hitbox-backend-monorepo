@@ -11,6 +11,9 @@
 /// the sender validate its payload before dispatch.
 model NotificationTemplate {
   id           String              @id @db.Uuid
+  /// Human-readable record id (`ntt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   eventType    String              @unique
   channel      NotificationChannel
   subject      String?
@@ -28,6 +31,9 @@ model NotificationTemplate {
 /// `failureReason` is retained on FAILED rows for retry triage.
 model Notification {
   id            String               @id @db.Uuid
+  /// Human-readable record id (`ntf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId        String               @db.Uuid
   user          User                 @relation(fields: [userId], references: [id])
   templateId    String               @db.Uuid
@@ -45,6 +51,9 @@ model Notification {
 /// the channel default applies.
 model NotificationPreference {
   id      String              @id @db.Uuid
+  /// Human-readable record id (`ntp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId  String              @db.Uuid
   user    User                @relation(fields: [userId], references: [id])
   channel NotificationChannel

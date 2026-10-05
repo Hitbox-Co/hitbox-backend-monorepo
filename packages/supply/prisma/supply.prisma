@@ -19,6 +19,9 @@
 /// A manufacturer or supplier.
 model Vendor {
   id           String     @id @db.Uuid
+  /// Human-readable record id (`vnd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name         String
   /// Registered entity name, where it differs from the trading name we use.
   legalName    String?
@@ -51,6 +54,9 @@ model Vendor {
 /// is what Sku.provisioningBatchId matches against.
 model SupplyBatch {
   id            String         @id @db.Uuid
+  /// Human-readable record id (`sbt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   vendorId      String         @db.Uuid
   vendor        Vendor         @relation(fields: [vendorId], references: [id])
   itemType      SupplyItemType
@@ -93,6 +99,9 @@ model SupplyBatch {
 /// and tap counter belong to the chip.
 model NfcTag {
   id              String            @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`nft…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   nfcTagCode      String            @unique @db.VarChar(10) // NT
   supplyBatchId   String            @db.Uuid
   supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])

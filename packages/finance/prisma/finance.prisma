@@ -25,6 +25,9 @@
 /// which versioning by `effectiveFrom` is exactly what gives us.
 model RoyaltyRule {
   id             String            @id @db.Uuid
+  /// Human-readable record id (`ryr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   organizationId String?           @db.Uuid
   organization   Organization?     @relation(fields: [organizationId], references: [id])
   artistId       String?           @db.Uuid
@@ -80,6 +83,9 @@ model RoyaltyRule {
 /// replayed claim event or a re-run job cannot double-credit an artist.
 model RoyaltyLedgerEntry {
   id             String          @id @db.Uuid
+  /// Human-readable record id (`rle…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId        String          @db.Uuid
   order          Order           @relation(fields: [orderId], references: [id])
   ruleId         String          @db.Uuid
@@ -146,6 +152,9 @@ model RoyaltyLedgerEntry {
 /// `status`; this carries the batch.
 model RoyaltyPayout {
   id                  String        @id @db.Uuid
+  /// Human-readable record id (`pyo…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   payeeType           RoyaltyPayeeType
   payeeArtistId       String?       @db.Uuid
   payeeArtist         Artist?       @relation(fields: [payeeArtistId], references: [id])
@@ -206,6 +215,9 @@ model RoyaltyPayout {
 /// corrects. `amountAdjustment` is signed — negative reverses, positive adds.
 model AdjustmentEntry {
   id               String              @id @db.Uuid
+  /// Human-readable record id (`adj…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   targetType       AdjustmentTargetType
   targetId         String              @db.Uuid
   /// The order the correction ultimately belongs to, when there is one, so
@@ -253,6 +265,9 @@ model AdjustmentEntry {
 /// settlement webhook that is delivered twice posts revenue once.
 model FinanceLedgerEntry {
   id          String           @id @db.Uuid
+  /// Human-readable record id (`fle…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId     String?          @db.Uuid
   order       Order?           @relation(fields: [orderId], references: [id])
   entryType   LedgerEntryType
@@ -283,6 +298,9 @@ model FinanceLedgerEntry {
 /// is the same immutability rule the ledgers above follow.
 model CogsReconciliation {
   id                   String               @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`cgr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   reconciliationNumber String               @unique @db.VarChar(10) // CR
   reconciliationMonth  DateTime             @db.Date
   dropId               String               @db.Uuid

@@ -101,6 +101,9 @@ enum PaymentGateway {
 /// would lock everyone out of the platform.
 model Role {
   id          String              @id @db.Uuid
+  /// Human-readable record id (`rol…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name        String              @unique
   displayName String
   entityGroup String
@@ -119,6 +122,9 @@ model Role {
 /// the (resource, action, scope) triple is the canonical identity.
 model Permission {
   id          String              @id @db.Uuid
+  /// Human-readable record id (`prm…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   resource    ResourceType
   action      PermissionAction
   scope       PermissionScope
@@ -143,6 +149,9 @@ model Permission {
 /// matrix rather than hand-authored, so they can be re-derived safely.
 model RolePermission {
   id             String     @id @db.Uuid
+  /// Human-readable record id (`rlp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   roleId         String     @db.Uuid
   role           Role       @relation(fields: [roleId], references: [id])
   permissionId   String     @db.Uuid
@@ -165,6 +174,9 @@ model RolePermission {
 /// the full grant history.
 model RoleAssignment {
   id           String        @id @db.Uuid
+  /// Human-readable record id (`ras…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId       String        @db.Uuid
   user         User          @relation("User_user", fields: [userId], references: [id])
   roleId       String        @db.Uuid
@@ -202,6 +214,9 @@ model RoleAssignment {
 /// question an access review asks.
 model StaffInvitation {
   id          String                @id @db.Uuid
+  /// Human-readable record id (`sti…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// Lower-cased at the service boundary, because this is matched against the
   /// address Clerk reports back and address comparison must not depend on how
   /// the inviter happened to type it.
@@ -394,6 +409,9 @@ enum RoleScopeType {
 /// before either link exists.
 model Artist {
   id                   String        @id @db.Uuid
+  /// Human-readable record id (`art…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name                 String
   slug                 String        @unique
   bio                  String?
@@ -454,6 +472,9 @@ model Artist {
 /// complete. `position` orders collections on the artist's page.
 model ArtistCollection {
   id             String        @id @db.Uuid
+  /// Human-readable record id (`acl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name           String
   slug           String        @unique
   description    String?
@@ -483,6 +504,9 @@ model ArtistCollection {
 /// (e.g. PRIMARY plus MERCHANDISE) but never duplicate one.
 model ArtistBrandLink {
   id             String              @id @db.Uuid
+  /// Human-readable record id (`abl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   artistId       String              @db.Uuid
   artist         Artist              @relation(fields: [artistId], references: [id])
   organizationId String              @db.Uuid
@@ -523,6 +547,9 @@ enum ArtistBrandLinkType {
 /// from, which is what makes the trail defensible in a review.
 model AuditEventType {
   eventType       String        @id
+  /// Human-readable record id (`aet…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   personaGroup    String
   description     String
   defaultSeverity AuditSeverity
@@ -566,6 +593,9 @@ model AuditEvent {
   insertedAt        DateTime
 
   @@id([eventId, occurredAt])
+  /// Human-readable record id (`aud…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
 
   // Read patterns, in the order the query API and the alerting rules hit
   // them. All non-unique: uniqueness is the primary key's job, and a unique
@@ -596,6 +626,9 @@ model AuditEvent {
 /// there is exactly one policy per level and no ambiguity for the pruner.
 model AuditRetentionPolicy {
   severity      AuditSeverity @id
+  /// Human-readable record id (`arp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   retentionDays Int
   notes         String
 }
@@ -641,6 +674,9 @@ enum AuditSeverity {
 /// before the local projection exists, and auth must never depend on users.
 model AuthWebhookEvent {
   id          String    @id
+  /// Human-readable record id (`awh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   eventType   String
   payload     Json
   processedAt DateTime?
@@ -670,6 +706,9 @@ model AuthWebhookEvent {
 /// later re-filed.
 model SkuClaim {
   id            String            @id @db.Uuid
+  /// Human-readable record id (`clm…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   claimCode     String            @unique
   claimedNo     Int
   claimedAt     DateTime
@@ -695,6 +734,9 @@ model SkuClaim {
 /// Signatures are captured on transfers to prove both parties consented.
 model BlockchainLedger {
   id                     String       @id @db.Uuid
+  /// Human-readable record id (`bcl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   skuId                  String       @db.Uuid
   sku                    Sku          @relation(fields: [skuId], references: [id])
   sequenceNo             Int
@@ -747,6 +789,9 @@ model BlockchainLedger {
 /// royalty analytics possible.
 model SkuHistory {
   id          String            @id @db.Uuid
+  /// Human-readable record id (`skh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   skuId       String            @db.Uuid
   sku         Sku               @relation(fields: [skuId], references: [id])
   ownerId     String?           @db.Uuid
@@ -814,6 +859,9 @@ enum AcquisitionMethod {
 /// individually revocable by nulling the column.
 model BuyerCollection {
   id         String     @id @db.Uuid
+  /// Human-readable record id (`bcn…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId     String     @db.Uuid
   user       User       @relation(fields: [userId], references: [id])
   skuId      String     @db.Uuid
@@ -844,6 +892,9 @@ model BuyerCollection {
 /// is earned rather than who has it; the grants are ContentUnlock rows.
 model ContentBundle {
   id           String            @id @db.Uuid
+  /// Human-readable record id (`cbd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name         String
   description  String?
   productId    String?           @db.Uuid
@@ -868,6 +919,9 @@ model ContentBundle {
 /// (bundle, asset) so an asset cannot be listed twice in the same bundle.
 model ContentBundleItem {
   id       String        @id @db.Uuid
+  /// Human-readable record id (`cbi…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   bundleId String        @db.Uuid
   bundle   ContentBundle @relation(fields: [bundleId], references: [id])
   assetId  String        @db.Uuid
@@ -884,6 +938,9 @@ model ContentBundleItem {
 /// control.
 model ContentUnlock {
   id              String        @id @db.Uuid
+  /// Human-readable record id (`cul…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId          String        @db.Uuid
   user            User          @relation(fields: [userId], references: [id])
   bundleId        String        @db.Uuid
@@ -927,6 +984,9 @@ enum ContentAccessType {
 /// EVENT_SPECIFIC rules that a single integer cannot express.
 model EvolutionRule {
   id              String                 @id @db.Uuid
+  /// Human-readable record id (`evr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name            String
   collectionId    String?                @db.Uuid
   collection      ArtistCollection?      @relation(fields: [collectionId], references: [id])
@@ -949,6 +1009,9 @@ model EvolutionRule {
 /// reward is never granted twice.
 model EvolutionEvent {
   id          String        @id @db.Uuid
+  /// Human-readable record id (`eve…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   ruleId      String        @db.Uuid
   rule        EvolutionRule @relation(fields: [ruleId], references: [id])
   skuId       String        @db.Uuid
@@ -998,6 +1061,9 @@ enum EvolutionThresholdType {
 /// which versioning by `effectiveFrom` is exactly what gives us.
 model RoyaltyRule {
   id             String            @id @db.Uuid
+  /// Human-readable record id (`ryr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   organizationId String?           @db.Uuid
   organization   Organization?     @relation(fields: [organizationId], references: [id])
   artistId       String?           @db.Uuid
@@ -1053,6 +1119,9 @@ model RoyaltyRule {
 /// replayed claim event or a re-run job cannot double-credit an artist.
 model RoyaltyLedgerEntry {
   id             String          @id @db.Uuid
+  /// Human-readable record id (`rle…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId        String          @db.Uuid
   order          Order           @relation(fields: [orderId], references: [id])
   ruleId         String          @db.Uuid
@@ -1119,6 +1188,9 @@ model RoyaltyLedgerEntry {
 /// `status`; this carries the batch.
 model RoyaltyPayout {
   id                  String        @id @db.Uuid
+  /// Human-readable record id (`pyo…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   payeeType           RoyaltyPayeeType
   payeeArtistId       String?       @db.Uuid
   payeeArtist         Artist?       @relation(fields: [payeeArtistId], references: [id])
@@ -1179,6 +1251,9 @@ model RoyaltyPayout {
 /// corrects. `amountAdjustment` is signed — negative reverses, positive adds.
 model AdjustmentEntry {
   id               String              @id @db.Uuid
+  /// Human-readable record id (`adj…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   targetType       AdjustmentTargetType
   targetId         String              @db.Uuid
   /// The order the correction ultimately belongs to, when there is one, so
@@ -1226,6 +1301,9 @@ model AdjustmentEntry {
 /// settlement webhook that is delivered twice posts revenue once.
 model FinanceLedgerEntry {
   id          String           @id @db.Uuid
+  /// Human-readable record id (`fle…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId     String?          @db.Uuid
   order       Order?           @relation(fields: [orderId], references: [id])
   entryType   LedgerEntryType
@@ -1256,6 +1334,9 @@ model FinanceLedgerEntry {
 /// is the same immutability rule the ledgers above follow.
 model CogsReconciliation {
   id                   String               @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`cgr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   reconciliationNumber String               @unique @db.VarChar(10) // CR
   reconciliationMonth  DateTime             @db.Date
   dropId               String               @db.Uuid
@@ -1402,6 +1483,9 @@ enum FinanceCategory {
 /// carry `isDefault = true` — the fallback when a buyer's country maps nowhere.
 model Market {
   id         String    @id @db.Uuid
+  /// Human-readable record id (`mkt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   code       String    @unique
   name       String
   currency   Currency
@@ -1424,6 +1508,9 @@ model Market {
 /// a country belongs to exactly one market and resolution is unambiguous.
 model MarketCountry {
   id          String   @id @db.Uuid
+  /// Human-readable record id (`mkc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   marketId    String   @db.Uuid
   market      Market   @relation(fields: [marketId], references: [id])
   countryCode String   @unique
@@ -1451,6 +1538,9 @@ model MarketCountry {
 /// entity it belongs to; `uploadedBy` always records the actor.
 model MediaAsset {
   id              String          @id @db.Uuid
+  /// Human-readable record id (`mda…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   assetType       AssetType
   storageRef      String
   fileName        String
@@ -1514,6 +1604,9 @@ enum VirusScanStatus {
 /// the sender validate its payload before dispatch.
 model NotificationTemplate {
   id           String              @id @db.Uuid
+  /// Human-readable record id (`ntt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   eventType    String              @unique
   channel      NotificationChannel
   subject      String?
@@ -1531,6 +1624,9 @@ model NotificationTemplate {
 /// `failureReason` is retained on FAILED rows for retry triage.
 model Notification {
   id            String               @id @db.Uuid
+  /// Human-readable record id (`ntf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId        String               @db.Uuid
   user          User                 @relation(fields: [userId], references: [id])
   templateId    String               @db.Uuid
@@ -1548,6 +1644,9 @@ model Notification {
 /// the channel default applies.
 model NotificationPreference {
   id      String              @id @db.Uuid
+  /// Human-readable record id (`ntp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId  String              @db.Uuid
   user    User                @relation(fields: [userId], references: [id])
   channel NotificationChannel
@@ -1589,6 +1688,9 @@ enum NotificationStatus {
 /// time so later catalog or market edits never rewrite an order's totals.
 model Order {
   id             String          @id @db.Uuid
+  /// Human-readable record id (`odr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   buyerId        String          @db.Uuid
   buyer          User            @relation(fields: [buyerId], references: [id])
   productId      String          @db.Uuid
@@ -1656,6 +1758,9 @@ model Order {
 /// or deletes the address book entry. Unique per (order, usage).
 model OrderAddress {
   id              String       @id @db.Uuid
+  /// Human-readable record id (`oda…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId         String       @db.Uuid
   order           Order        @relation(fields: [orderId], references: [id])
   usage           AddressUsage
@@ -1683,6 +1788,9 @@ model OrderAddress {
 /// SKU is now the order's. This is what stops two buyers claiming one unit.
 model InventoryReservation {
   id        String            @id @db.Uuid
+  /// Human-readable record id (`ivr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId   String            @db.Uuid
   order     Order             @relation(fields: [orderId], references: [id])
   skuId     String            @db.Uuid
@@ -1741,6 +1849,9 @@ enum ReservationStatus {
 /// BRAND, or a solo artist operating as their own org (ARTIST_INDIVIDUAL).
 model Organization {
   id         String           @id @db.Uuid
+  /// Human-readable record id (`org…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name       String
   type       OrganizationType
   slug       String           @unique
@@ -1799,6 +1910,9 @@ enum OrganizationType {
 /// the provider's own id for reconciliation.
 model PaymentTransaction {
   id             String                   @id @db.Uuid
+  /// Human-readable record id (`pmt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId        String                   @db.Uuid
   order          Order                    @relation(fields: [orderId], references: [id])
   gateway        PaymentGateway
@@ -1832,6 +1946,9 @@ model PaymentTransaction {
 /// actual keys are never in this database.
 model PaymentGatewayConfig {
   id             String             @id @db.Uuid
+  /// Human-readable record id (`pgc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   scope          GatewayConfigScope
   organizationId String?            @db.Uuid
   organization   Organization?      @relation(fields: [organizationId], references: [id])
@@ -1849,6 +1966,9 @@ model PaymentGatewayConfig {
 /// for replay instead of dropping them.
 model PaymentWebhookEvent {
   id                String         @id
+  /// Human-readable record id (`pwh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   provider          PaymentGateway
   eventType         String
   payload           Json
@@ -1870,6 +1990,9 @@ model PaymentWebhookEvent {
 /// responding must not reappear on the resale market the next day.
 model RefundRequest {
   id                        String       @id @db.Uuid
+  /// Human-readable record id (`rfd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId                   String       @db.Uuid
   order                     Order        @relation(fields: [orderId], references: [id])
   requestedById             String       @db.Uuid
@@ -1914,6 +2037,9 @@ model RefundRequest {
 /// posted as two adjustment entries rather than one refund.
 model DisputeCase {
   id                   String             @id @db.Uuid
+  /// Human-readable record id (`dsp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId              String             @db.Uuid
   order                Order              @relation(fields: [orderId], references: [id])
   paymentTransactionId String?            @db.Uuid
@@ -2046,6 +2172,9 @@ enum DisputeReason {
 /// outlives the account that last changed it.
 model PlatformConfig {
   id            String   @id @db.Uuid
+  /// Human-readable record id (`pcf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   key           String   @unique
   value         Json
   isFeatureFlag Boolean
@@ -2065,6 +2194,9 @@ model PlatformConfig {
 /// the index below is the "what is overdue" query the console opens on.
 model ExceptionCase {
   id            String          @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`exc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   exceptionCode String          @unique @db.VarChar(10) // EX
   caseType      String
   referenceType String
@@ -2118,6 +2250,9 @@ enum ExceptionStatus {
 /// with the decisions themselves recorded in the releases module.
 model Drop {
   id                String            @id @db.Uuid
+  /// Human-readable record id (`drp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   groupCode         String            @unique
   name              String
   description       String?
@@ -2178,6 +2313,9 @@ model Drop {
 /// same option value twice on one drop.
 model DropVariant {
   id          String    @id @db.Uuid
+  /// Human-readable record id (`dvr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// Kept as `productId` rather than renamed to `dropId`: the rename this
   /// release asks for is of *models* and *relation fields*, and renaming this
   /// scalar too would churn the compound key `productId_optionName_optionValue`
@@ -2213,6 +2351,9 @@ model DropVariant {
 /// primary flag, alt text).
 model DropImage {
   id         String     @id @db.Uuid
+  /// Human-readable record id (`dim…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// See the note on DropVariant.productId.
   productId  String     @db.Uuid
   drop       Drop       @relation(fields: [productId], references: [id])
@@ -2240,6 +2381,9 @@ model DropImage {
 /// now)`), because a unique index cannot express "at most one *open* row".
 model DropPrice {
   id            String          @id @db.Uuid
+  /// Human-readable record id (`dpr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   dropId        String          @db.Uuid
   drop          Drop            @relation(fields: [dropId], references: [id])
   variantId     String?         @db.Uuid
@@ -2304,6 +2448,9 @@ enum DropPriceStatus {
 /// mirrored onto Product.complianceStatus once decided.
 model ReleaseApproval {
   id                String           @id @db.Uuid
+  /// Human-readable record id (`rap…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   productId         String           @db.Uuid
   drop              Drop             @relation(fields: [productId], references: [id])
   approverId        String           @db.Uuid
@@ -2407,6 +2554,9 @@ enum ApprovalStatus {
 /// module; nothing about ownership is decided here.
 model ResaleListing {
   id        String       @id @db.Uuid
+  /// Human-readable record id (`rsl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   sellerId  String       @db.Uuid
   seller    User         @relation(fields: [sellerId], references: [id])
   skuId     String       @db.Uuid
@@ -2444,6 +2594,9 @@ enum ResaleStatus {
 /// bounded retry with a dead-letter threshold.
 model SearchIndexJob {
   id          String         @id @db.Uuid
+  /// Human-readable record id (`sij…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   entityType  String
   entityId    String?        @db.Uuid
   operation   IndexOperation
@@ -2496,6 +2649,9 @@ enum IndexJobStatus {
 /// (SkuHistory + BlockchainLedger).
 model Sku {
   id          String  @id @db.Uuid
+  /// Human-readable record id (`sku…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   skuCode     String  @unique
   productId   String  @db.Uuid
   drop        Drop    @relation(fields: [productId], references: [id])
@@ -2584,6 +2740,9 @@ model Sku {
 /// Append-only log of every tap verification. The single-use claim token stays on Sku.claimToken.
 model NfcVerification {
   id               String             @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`nfv…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   verificationCode String             @unique @db.VarChar(10) // NV
   nfcTagId         String?            @db.Uuid
   nfcTag           NfcTag?            @relation(fields: [nfcTagId], references: [id])
@@ -2646,6 +2805,9 @@ enum VerificationResult {
 /// organizations module can be extracted without touching this table.
 model Follow {
   id                     String   @id @db.Uuid
+  /// Human-readable record id (`flw…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   followerId             String   @db.Uuid
   follower               User     @relation(fields: [followerId], references: [id])
   artistId               String?  @db.Uuid
@@ -2662,6 +2824,9 @@ model Follow {
 /// module reads when a drop opens or restocks.
 model WishlistItem {
   id                String          @id @db.Uuid
+  /// Human-readable record id (`wsh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId            String          @db.Uuid
   user              User            @relation(fields: [userId], references: [id])
   productId         String          @db.Uuid
@@ -2698,6 +2863,9 @@ model WishlistItem {
 /// A manufacturer or supplier.
 model Vendor {
   id           String     @id @db.Uuid
+  /// Human-readable record id (`vnd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name         String
   /// Registered entity name, where it differs from the trading name we use.
   legalName    String?
@@ -2730,6 +2898,9 @@ model Vendor {
 /// is what Sku.provisioningBatchId matches against.
 model SupplyBatch {
   id            String         @id @db.Uuid
+  /// Human-readable record id (`sbt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   vendorId      String         @db.Uuid
   vendor        Vendor         @relation(fields: [vendorId], references: [id])
   itemType      SupplyItemType
@@ -2772,6 +2943,9 @@ model SupplyBatch {
 /// and tap counter belong to the chip.
 model NfcTag {
   id              String            @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`nft…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   nfcTagCode      String            @unique @db.VarChar(10) // NT
   supplyBatchId   String            @db.Uuid
   supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
@@ -2890,6 +3064,9 @@ enum SupplyBatchStatus {
 /// REVOKED/DISPUTED in the skus module.
 model SupportCase {
   id             String            @id @db.Uuid
+  /// Human-readable record id (`spc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   reporterId     String            @db.Uuid
   reporter       User              @relation("User_reporter", fields: [reporterId], references: [id])
   skuId          String?           @db.Uuid
@@ -2975,6 +3152,9 @@ enum SupportCaseStatus {
 /// nullable at the column level because US rows have no equivalent.
 model TaxConfiguration {
   id             String     @id @db.Uuid
+  /// Human-readable record id (`txc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// Null means "the default for this jurisdiction", used when no
   /// product-specific row exists. Products are the specific case.
   productId      String?    @db.Uuid
@@ -3034,6 +3214,9 @@ model TaxConfiguration {
 /// what proves the object in the bucket is still the document that was issued.
 model Invoice {
   id             String        @id @db.Uuid
+  /// Human-readable record id (`inv…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// e.g. 'INV-2026-27-IN-000123'. See domain/invoice-number.ts.
   invoiceNumber  String        @unique @db.VarChar(50)
   invoiceDate    DateTime
@@ -3144,6 +3327,9 @@ model Invoice {
 /// Every money column is a snapshot; nothing here is recomputed on read.
 model InvoiceLineItem {
   id          String   @id @db.Uuid
+  /// Human-readable record id (`ivl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   invoiceId   String   @db.Uuid
   invoice     Invoice  @relation(fields: [invoiceId], references: [id])
   /// Display order on the document, 1-based.
@@ -3186,6 +3372,9 @@ model InvoiceLineItem {
 /// series is a compliance finding, a few milliseconds of lock contention is not.
 model InvoiceNumberSequence {
   id          String   @id @db.Uuid
+  /// Human-readable record id (`ins…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// Country whose series this is; each jurisdiction numbers independently.
   countryCode String   @db.VarChar(2)
   /// '2026-27' (India, Apr–Mar) or '2026' (US, calendar year).
@@ -3211,6 +3400,9 @@ model InvoiceNumberSequence {
 /// be substantiated.
 model TaxReturnFiling {
   id             String        @id @db.Uuid
+  /// Human-readable record id (`trf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   filingType     TaxFilingType
   countryCode    String        @db.VarChar(2)
   stateCode      String?       @db.VarChar(2)
@@ -3269,6 +3461,9 @@ model TaxReturnFiling {
 /// inside the PDF, which is access-controlled as a whole.
 model ArtistTaxDocument {
   id             String   @id @db.Uuid
+  /// Human-readable record id (`atd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   artistId       String   @db.Uuid
   artist         Artist   @relation(fields: [artistId], references: [id])
   countryCode    String   @db.VarChar(2)
@@ -3319,6 +3514,9 @@ model ArtistTaxDocument {
 /// document that was issued and the correction that followed.
 model TaxAdjustmentEntry {
   id                 String   @id @db.Uuid
+  /// Human-readable record id (`tad…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   invoiceId          String   @db.Uuid
   invoice            Invoice  @relation(fields: [invoiceId], references: [id])
   adjustmentType     TaxAdjustmentType
@@ -3451,6 +3649,9 @@ enum TaxAdjustmentStatus {
 /// every other module can use a plain `userId` foreign key.
 model User {
   id                String     @id @db.Uuid
+  /// Human-readable record id (`usr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   clerkId           String     @unique
   email             String     @unique
   phone             String?
@@ -3516,6 +3717,9 @@ model User {
 /// editing or archiving an address never rewrites order history.
 model Address {
   id                String    @id @db.Uuid
+  /// Human-readable record id (`adr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId            String    @db.Uuid
   user              User      @relation(fields: [userId], references: [id])
   label             AddressLabel

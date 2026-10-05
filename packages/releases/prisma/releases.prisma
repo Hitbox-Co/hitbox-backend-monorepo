@@ -15,6 +15,9 @@
 /// mirrored onto Product.complianceStatus once decided.
 model ReleaseApproval {
   id                String           @id @db.Uuid
+  /// Human-readable record id (`rap…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   productId         String           @db.Uuid
   drop              Drop             @relation(fields: [productId], references: [id])
   approverId        String           @db.Uuid

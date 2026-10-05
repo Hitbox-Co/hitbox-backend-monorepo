@@ -17,6 +17,9 @@
 /// entity it belongs to; `uploadedBy` always records the actor.
 model MediaAsset {
   id              String          @id @db.Uuid
+  /// Human-readable record id (`mda…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   assetType       AssetType
   storageRef      String
   fileName        String

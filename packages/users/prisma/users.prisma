@@ -10,6 +10,9 @@
 /// every other module can use a plain `userId` foreign key.
 model User {
   id                String     @id @db.Uuid
+  /// Human-readable record id (`usr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   clerkId           String     @unique
   email             String     @unique
   phone             String?
@@ -75,6 +78,9 @@ model User {
 /// editing or archiving an address never rewrites order history.
 model Address {
   id                String    @id @db.Uuid
+  /// Human-readable record id (`adr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId            String    @db.Uuid
   user              User      @relation(fields: [userId], references: [id])
   label             AddressLabel

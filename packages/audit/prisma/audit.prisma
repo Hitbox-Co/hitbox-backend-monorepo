@@ -16,6 +16,9 @@
 /// from, which is what makes the trail defensible in a review.
 model AuditEventType {
   eventType       String        @id
+  /// Human-readable record id (`aet…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   personaGroup    String
   description     String
   defaultSeverity AuditSeverity
@@ -59,6 +62,9 @@ model AuditEvent {
   insertedAt        DateTime
 
   @@id([eventId, occurredAt])
+  /// Human-readable record id (`aud…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
 
   // Read patterns, in the order the query API and the alerting rules hit
   // them. All non-unique: uniqueness is the primary key's job, and a unique
@@ -89,6 +95,9 @@ model AuditEvent {
 /// there is exactly one policy per level and no ambiguity for the pruner.
 model AuditRetentionPolicy {
   severity      AuditSeverity @id
+  /// Human-readable record id (`arp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   retentionDays Int
   notes         String
 }

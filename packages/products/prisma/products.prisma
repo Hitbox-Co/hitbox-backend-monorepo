@@ -26,6 +26,9 @@
 /// with the decisions themselves recorded in the releases module.
 model Drop {
   id                String            @id @db.Uuid
+  /// Human-readable record id (`drp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   groupCode         String            @unique
   name              String
   description       String?
@@ -86,6 +89,9 @@ model Drop {
 /// same option value twice on one drop.
 model DropVariant {
   id          String    @id @db.Uuid
+  /// Human-readable record id (`dvr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// Kept as `productId` rather than renamed to `dropId`: the rename this
   /// release asks for is of *models* and *relation fields*, and renaming this
   /// scalar too would churn the compound key `productId_optionName_optionValue`
@@ -121,6 +127,9 @@ model DropVariant {
 /// primary flag, alt text).
 model DropImage {
   id         String     @id @db.Uuid
+  /// Human-readable record id (`dim…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// See the note on DropVariant.productId.
   productId  String     @db.Uuid
   drop       Drop       @relation(fields: [productId], references: [id])
@@ -148,6 +157,9 @@ model DropImage {
 /// now)`), because a unique index cannot express "at most one *open* row".
 model DropPrice {
   id            String          @id @db.Uuid
+  /// Human-readable record id (`dpr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   dropId        String          @db.Uuid
   drop          Drop            @relation(fields: [dropId], references: [id])
   variantId     String?         @db.Uuid

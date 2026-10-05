@@ -215,7 +215,103 @@ buyer everywhere else.
 
 ---
 
-## 6. Working with the schema
+## 6. Human-readable record ids
+
+Every table carries **`publicCode`** alongside its uuid primary key:
+
+```
+odr066pmre6rmxf03qf1jk     an order
+inv066pmq811yf0h99y3vp     an invoice
+sku066pmqz45abcew2emge     a serialized unit
+```
+
+The uuid is still the key, and **every foreign key still points at it**.
+`publicCode` is the string a person reads down a phone, types into a search
+box, or quotes on a ticket. Nothing joins on it.
+
+### The shape
+
+```
+odr      066pmre6r      mxf03qf1jk
+└prefix  └time, 9 chars └random, 10 chars
+```
+
+| Part | | |
+|---|---|---|
+| **prefix** | 3 lowercase letters | Names the table, so a bare code is self-describing |
+| **time** | 45 bits, ms since 2020-01-01 | Codes sort chronologically, and collisions are confined to one millisecond |
+| **random** | 50 bits from `crypto.randomBytes` | Node's CSPRNG — **not** `Math.random()`, which is seeded per process, so two workers starting together would emit the same stream |
+
+Total: 22 characters. The alphabet is **Crockford Base32**
+(`0123456789abcdefghjkmnpqrstvwxyz`) — it drops **i, l, o, u** because `1`/`l`
+and `0`/`o` are indistinguishable when read aloud, and dropping `u` means no
+generated code can spell an obscenity.
+
+### Why it will not collide at millions of rows
+
+Two codes clash only if generated **in the same millisecond** *and* drawing the
+same 50-bit random value. For `k` rows in one millisecond the chance is about
+`k² / 2⁵¹`:
+
+| rows in the same millisecond | probability of a collision |
+|---|---|
+| 1,000 | 1 in 2,000,000,000 |
+| 10,000 | 1 in 22,000,000 |
+| 100,000 | 1 in 225,000 |
+
+**Total row count does not enter into it** — the timestamp partitions the
+space, so ten million rows over a year collide no more easily than ten thousand
+do. Every column also carries a UNIQUE index, so the one-in-a-billion case is a
+failed insert, never two records sharing a code.
+
+### How it gets written
+
+A **Prisma client extension** (`public-code.extension.ts`), applied once where
+the client is constructed. It covers `create`, `createMany`,
+`createManyAndReturn` and the create branch of `upsert`.
+
+No repository, service or module was changed. Threading a generator call
+through ~200 write sites would have meant a table whose code is *sometimes*
+written, and a code that is sometimes missing is worse than none — the gap only
+shows when somebody cannot find a record.
+
+Consequences worth knowing:
+
+- **Raw SQL bypasses it.** `$queryRaw` / `$executeRaw` do not pass through the
+  client extension. That is fine here because raw SQL is reserved for reads and
+  migrations, but a raw INSERT would leave a NULL code.
+- **A client built with bare `new PrismaClient()` bypasses it too.** Wrap it
+  with `withPublicCodes()` — `prisma/seed.ts` does exactly this.
+- **It never overwrites.** A caller supplying its own `publicCode` keeps it,
+  which is what lets a seed stay reproducible.
+- **Adding a table** is a two-line change: a prefix in `PUBLIC_CODE_PREFIXES`
+  and the column in the partial. A model with no registered prefix simply gets
+  no code.
+
+### The column
+
+```prisma
+publicCode String? @unique @db.VarChar(32)
+```
+
+Nullable on purpose: Postgres unique indexes do not collide on NULLs, so the
+migration applied to 68 tables with existing rows without a backfill and
+without locking them. Rows predating the column stay NULL until backfilled —
+`PUBLIC_CODE_PREFIXES` plus a `ctid`-based UPDATE does that (note `ctid`, not
+`id`: `AuditEventType` is keyed on `eventType` and `AuditRetentionPolicy` on
+`severity`).
+
+### Existing domain codes are unaffected
+
+`Sku.skuCode`, `Drop.groupCode`, `NfcTag.nfcTagCode`, `SkuClaim.claimCode`,
+`Invoice.invoiceNumber` and the rest stay exactly as they were. Those carry
+business meaning — a serial within an edition, a tax-compliant invoice sequence
+— and `publicCode` does not replace them. It is the one field name that exists
+on *every* table, which is what a console needs.
+
+---
+
+## 7. Working with the schema
 
 ### Commands (run from the repo root)
 
@@ -266,7 +362,7 @@ exists. Both are already present in the root `.env`, which
 
 ---
 
-## 7. Current state
+## 8. Current state
 
 Applied to Neon as two migrations — the baseline `20260910073121_init_hitbox_platform` and
 `20260910101500_add_authorization_domain_and_scopes` (the RBAC additions, see

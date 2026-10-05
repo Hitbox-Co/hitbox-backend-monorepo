@@ -25,6 +25,9 @@
 /// would lock everyone out of the platform.
 model Role {
   id          String              @id @db.Uuid
+  /// Human-readable record id (`rol…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name        String              @unique
   displayName String
   entityGroup String
@@ -43,6 +46,9 @@ model Role {
 /// the (resource, action, scope) triple is the canonical identity.
 model Permission {
   id          String              @id @db.Uuid
+  /// Human-readable record id (`prm…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   resource    ResourceType
   action      PermissionAction
   scope       PermissionScope
@@ -67,6 +73,9 @@ model Permission {
 /// matrix rather than hand-authored, so they can be re-derived safely.
 model RolePermission {
   id             String     @id @db.Uuid
+  /// Human-readable record id (`rlp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   roleId         String     @db.Uuid
   role           Role       @relation(fields: [roleId], references: [id])
   permissionId   String     @db.Uuid
@@ -89,6 +98,9 @@ model RolePermission {
 /// the full grant history.
 model RoleAssignment {
   id           String        @id @db.Uuid
+  /// Human-readable record id (`ras…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId       String        @db.Uuid
   user         User          @relation("User_user", fields: [userId], references: [id])
   roleId       String        @db.Uuid
@@ -126,6 +138,9 @@ model RoleAssignment {
 /// question an access review asks.
 model StaffInvitation {
   id          String                @id @db.Uuid
+  /// Human-readable record id (`sti…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// Lower-cased at the service boundary, because this is matched against the
   /// address Clerk reports back and address comparison must not depend on how
   /// the inviter happened to type it.
