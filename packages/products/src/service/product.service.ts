@@ -19,6 +19,8 @@ import type {
 import type { IMediaAssets } from '../domain/interfaces/media-assets.interface';
 import type { IMarketLookup } from '../domain/interfaces/market-lookup.interface';
 import type { IProductAudit } from '../domain/interfaces/product-audit.interface';
+import type { DropTypeRepository, DropTypeRow } from '../drop-type/drop-type.repository';
+import type { VariantRepository } from '../variant/variant.repository';
 import type {
     IReleaseGate,
     ReleaseGateVerdict,
@@ -60,6 +62,14 @@ export interface PublishProductResult {
 
 interface ProductServiceDeps {
     products: ProductRepository;
+    /**
+     * Resolves `dropType` on create/update. Optional so existing test
+     * harnesses build without it; a `dropType` sent to a service without it
+     * is refused rather than ignored.
+     */
+    dropTypes?: DropTypeRepository | undefined;
+    /** Answers "does this drop have variants yet?" — a drop's type locks once it does. */
+    variants?: VariantRepository | undefined;
     eventBus: IEventBus;
     logger: Logger;
     /** Optional: without it, image URLs come back null rather than failing. */
@@ -138,7 +148,22 @@ export interface ProductResponse {
     images: string[];
     /** Base price in the default market, or null when none is configured. */
     price: { amount: string | null; currency: string; isFree: boolean } | null;
-    variants: { id: string; label: string; optionName: string; optionValue: string }[];
+    /** The product type, or null for a legacy (untyped) drop. */
+    dropType: { code: string; name: string; variantMode: string } | null;
+    /**
+     * Active variants. `optionName` / `optionValue` are unchanged for existing
+     * clients; `options` is the per-dimension breakdown, with color swatches.
+     */
+    variants: {
+        id: string;
+        variantCode: string;
+        label: string;
+        optionName: string;
+        optionValue: string;
+        options: { dimension: string; value: string; label: string; hexCode: string | null }[];
+        totalSupply: number | null;
+        isActive: boolean;
+    }[];
 }
 
 /**
@@ -265,11 +290,26 @@ export class ProductService {
             collectionId,
             artistId,
             organizationId,
+            dropType: dropTypeCode,
             skus,
             images,
             prices,
             ...fields
         } = dto;
+
+        const dropType = dropTypeCode ? await this.requireActiveDropType(dropTypeCode) : null;
+
+        // A REQUIRED-variant drop has no variants at the moment it is created,
+        // so units minted inline would belong to no variant — a T-shirt with no
+        // size. Create the drop, add variants, then mint per variant.
+        if (skus && dropType?.variantMode === 'REQUIRED') {
+            throw AppError.badRequest(
+                `Every unit of a ${dropType.name} must belong to a variant, and this drop has none yet. ` +
+                'Create it without `skus`, add variants, then mint through ' +
+                'POST /admin/products/:productId/skus with a variantId.',
+                PRODUCTS_ERROR_CODES.VARIANTS_REQUIRED,
+            );
+        }
 
         if (skus && !this.deps.skuMinting) {
             throw AppError.badRequest(
@@ -356,6 +396,10 @@ export class ProductService {
                     ...(organizationId && {
                         organization: { connect: { id: organizationId } },
                     }),
+                    ...(dropType && {
+                        dropType: { connect: { id: dropType.id } },
+                        dropTypeVersion: dropType.version,
+                    }),
                 },
                     // Runs inside the product's own transaction; a failure in
                     // either the mint or the gallery rolls the drop back too.
@@ -421,10 +465,32 @@ export class ProductService {
     }
 
     async update(id: string, dto: UpdateProductDto): Promise<ProductResponse> {
-        await this.requireById(id); // 404 before update
-        const { collectionId, artistId, organizationId, ...fields } = dto;
+        const current = await this.requireById(id); // 404 before update
+        const { collectionId, artistId, organizationId, dropType: dropTypeCode, ...fields } = dto;
+
+        // The type decides which variants are valid, so it is fixed once the
+        // drop has any — changing it would orphan them under rules they were
+        // never checked against.
+        let dropTypeChange: Prisma.DropUpdateInput = {};
+        if (dropTypeCode !== undefined && dropTypeCode !== (current.dropType?.code ?? null)) {
+            if (this.deps.variants && (await this.deps.variants.hasAny(id))) {
+                throw AppError.conflict(
+                    'This drop already has variants, so its drop type cannot change. ' +
+                    'Remove the variants first, or create a new drop.',
+                    PRODUCTS_ERROR_CODES.DROP_TYPE_LOCKED,
+                );
+            }
+            if (dropTypeCode === null) {
+                dropTypeChange = { dropType: { disconnect: true }, dropTypeVersion: null };
+            } else {
+                const type = await this.requireActiveDropType(dropTypeCode);
+                dropTypeChange = { dropType: { connect: { id: type.id } }, dropTypeVersion: type.version };
+            }
+        }
+
         const product = await this.deps.products.update(id, {
             ...fields,
+            ...dropTypeChange,
             ...relationUpdate('collection', collectionId),
             ...relationUpdate('artist', artistId),
             ...relationUpdate('organization', organizationId),
@@ -1077,13 +1143,47 @@ export class ProductService {
                     isFree: price.isFree,
                 }
                 : null,
+            dropType: product.dropType
+                ? {
+                    code: product.dropType.code,
+                    name: product.dropType.name,
+                    variantMode: product.dropType.variantMode,
+                }
+                : null,
             variants: product.dropVariants.map((variant) => ({
                 id: variant.id,
+                variantCode: variant.variantCode,
                 label: variant.label,
                 optionName: variant.optionName,
                 optionValue: variant.optionValue,
+                options: variant.options.map((option) => ({
+                    dimension: option.dimensionCode,
+                    value: option.valueCode,
+                    label: option.valueLabel,
+                    hexCode: option.hexCode,
+                })),
+                totalSupply: variant.totalSupply,
+                isActive: variant.isActive,
             })),
         };
+    }
+
+    /** An active drop type by code, or 404. */
+    private async requireActiveDropType(code: string): Promise<DropTypeRow> {
+        if (!this.deps.dropTypes) {
+            throw AppError.badRequest(
+                'This deployment has no drop types configured; create the drop without `dropType`.',
+                PRODUCTS_ERROR_CODES.DROP_TYPE_NOT_FOUND,
+            );
+        }
+        const type = await this.deps.dropTypes.findByCode(code);
+        if (!type || !type.isActive) {
+            throw AppError.notFound(
+                `Drop type ${code} not found. GET /admin/drop-types lists the available types.`,
+                PRODUCTS_ERROR_CODES.DROP_TYPE_NOT_FOUND,
+            );
+        }
+        return type;
     }
 
     private isUniqueViolation(error: unknown, field: string): boolean {

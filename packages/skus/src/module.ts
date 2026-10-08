@@ -14,6 +14,7 @@ import type { SkuPrincipalResolver } from './controller/sku.controller';
 import { NOOP_SKU_AUDIT } from './domain/interfaces/sku-audit.interface';
 import type { ISkuAudit } from './domain/interfaces/sku-audit.interface';
 import type { ISkuReleaseGate } from './domain/interfaces/release-gate.interface';
+import type { ISkuVariantPolicy } from './domain/interfaces/variant-policy.interface';
 import { SkuRepository } from './repository/sku.repository';
 import { SkuService } from './service/sku.service';
 
@@ -47,6 +48,13 @@ export interface SkusModuleDeps {
      * right behaviour for a deployment that does not run the review workflow.
      */
     releaseGate?: ISkuReleaseGate | undefined;
+    /**
+     * The drop's variant rules — a REQUIRED-variant drop cannot mint without
+     * a variant, a variant cannot be minted past its own cap. Provided by
+     * @hitbox/products. Optional: without it, minting is unconstrained by
+     * variant rules, exactly as before drop types existed.
+     */
+    variantPolicy?: ISkuVariantPolicy | undefined;
 }
 
 export interface SkusModule {
@@ -70,6 +78,7 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
         audit: deps.audit ?? NOOP_SKU_AUDIT,
         logger,
         releaseGate: deps.releaseGate,
+        variantPolicy: deps.variantPolicy,
     });
     const controller = new SkuController(service, deps.resolvePrincipal);
 

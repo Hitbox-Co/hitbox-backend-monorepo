@@ -13,6 +13,9 @@
 > Creating the drop itself, the accepted request formats (and the `422`
 > troubleshooting table), and the image gallery:
 > [product-upload-api.md](product-upload-api.md).
+> Drop types, variant rules and generating `DropVariant` rows — the
+> "business SKU", not the serialized `Sku` unit:
+> [drop-types-and-variants.md](drop-types-and-variants.md).
 > Session handling and the Clerk flow: [authentication.md](authentication.md).
 > The rest of the admin write surface: [admin-write-apis.md](admin-write-apis.md).
 > Screen-by-screen reference: [admin-console-api.md](admin-console-api.md).
@@ -25,6 +28,14 @@
 > mintable immediately, including through the `skus` block on
 > `POST /admin/products`. Full rule:
 > [drop-approval-lifecycle.md 10](drop-approval-lifecycle.md#10-minting-waits-for-approval).
+
+> 🆕 **Minting also checks the drop type's variant rules** — after the
+> approval check, which is unchanged. A drop whose type `REQUIRES` variants
+> (T-shirt, card, poster…) cannot mint without a `variantId`; a `NONE` type
+> (keychain) cannot mint with one; an archived/inactive variant, or one past
+> its own `totalSupply`, is refused. Legacy drops with no type mint exactly as
+> before. Codes and details:
+> [drop-types-and-variants.md §8](drop-types-and-variants.md#8-minting-and-submitting--what-changed).
 
 ## 1. The two things being created
 

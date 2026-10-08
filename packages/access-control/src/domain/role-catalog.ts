@@ -165,6 +165,7 @@ const HITBOX_SYSTEM_ADMIN: RoleDefinition = {
         'self-profile:manage:global',
         'buyer-profile:manage:global',
         'drop:manage:global',
+        'drop-type:manage:global',
         'release-approval:manage:global',
         'release-approval:override:global',
         'collectible-instance:manage:global',

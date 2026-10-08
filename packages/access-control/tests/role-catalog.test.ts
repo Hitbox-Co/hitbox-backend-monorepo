@@ -77,6 +77,7 @@ const EXPECTED: Record<string, string[]> = {
         'collectible-instance:manage:global',
         'content-unlock:manage:global',
         'drop:manage:global',
+        'drop-type:manage:global',
         'employee-role-mgmt:assign:global',
         'employee-role-mgmt:delete:global',
         'employee-role-mgmt:manage:global',

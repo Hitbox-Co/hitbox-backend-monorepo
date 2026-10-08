@@ -34,6 +34,7 @@ export const RESOURCE_DOMAIN: Record<ResourceType, AuthorizationDomain> = {
     [ResourceType.SELF_PROFILE]: AuthorizationDomain.BUSINESS,
     [ResourceType.BUYER_PROFILE]: AuthorizationDomain.BUSINESS,
     [ResourceType.DROP]: AuthorizationDomain.BUSINESS,
+    [ResourceType.DROP_TYPE]: AuthorizationDomain.BUSINESS,
     [ResourceType.RELEASE_APPROVAL]: AuthorizationDomain.BUSINESS,
     [ResourceType.COLLECTIBLE_INSTANCE]: AuthorizationDomain.BUSINESS,
     [ResourceType.REPORTS_DASHBOARDS]: AuthorizationDomain.BUSINESS,
@@ -171,6 +172,7 @@ export const RESOURCE_DISPLAY: Record<ResourceType, string> = {
     [ResourceType.SELF_PROFILE]: 'My Profile',
     [ResourceType.BUYER_PROFILE]: 'Buyer Profiles',
     [ResourceType.DROP]: 'Drops & Products',
+    [ResourceType.DROP_TYPE]: 'Drop Types & Variant Rules',
     [ResourceType.RELEASE_APPROVAL]: 'Release Approvals',
     [ResourceType.COLLECTIBLE_INSTANCE]: 'Collectible Instances',
     [ResourceType.REPORTS_DASHBOARDS]: 'Reports & Dashboards',
@@ -258,6 +260,10 @@ const DEFINITIONS: Record<string, string> = {
     'drop:read:global': 'View any drop, including unpublished.',
     'drop:manage:organization': "Create, edit and retire your organization's drops.",
     'drop:manage:global': 'Create, edit and retire any drop on the platform.',
+
+    // ── Drop types (variant configuration) ──────────────────────────────────
+    'drop-type:manage:global':
+        'Create and edit drop types — their variant dimensions, values, colors and rules.',
 
     // ── Release approval workflow ───────────────────────────────────────────
     'release-approval:read:organization': "View your organization's pending releases.",

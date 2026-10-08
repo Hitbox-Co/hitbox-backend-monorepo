@@ -194,6 +194,16 @@ export function bootstrap(): Bootstrapped {
             describeLatest: (productId: string) =>
                 releasesModule.releaseGate.describeLatest(productId),
         },
+        /**
+         * The drop type's variant rules — a REQUIRED-variant drop cannot mint
+         * a unit without a variant, a capped variant stops at its cap.
+         * Products owns drop types; deferred lambda because `productsModule`
+         * is constructed further down.
+         */
+        variantPolicy: {
+            checkMint: (input: { productId: string; variantId: string | null; count: number }) =>
+                productsModule.variantPolicy.checkMint(input),
+        },
         // Adapted onto the real recorder, which is constructed further down —
         // the lambda closes over it and only runs per request, so the order of
         // the two `const`s here does not matter. Same arrangement as releases.
@@ -421,6 +431,8 @@ export function bootstrap(): Bootstrapped {
         guard: accessControlModule.guard,
         resolveCaller: releaseView,
         audit: releaseAudit,
+        // A drop whose type requires variants must have one before review.
+        variantPolicy: productsModule.variantPolicy,
     });
 
     const discoverModule = createDiscoverModule({
@@ -659,6 +671,7 @@ export function bootstrap(): Bootstrapped {
         adminOrders: ordersModule.createRouter(authModule.requireAuth),
         adminReleases: releasesModule.createRouter(authModule.requireAuth),
         adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
+        adminDropTypes: productsModule.createDropTypesRouter(authModule.requireAuth),
         adminProductSkus: skusModule.createProductRouter(authModule.requireAuth),
         adminSkus: skusModule.createRouter(authModule.requireAuth),
         adminOrganizations: organizationsModule.createRouter(authModule.requireAuth),

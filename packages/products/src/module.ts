@@ -6,6 +6,7 @@ import type { IEventBus } from '@hitbox/shared';
 import type { IProductDiscovery } from '@hitbox/discover';
 import type { IListingCatalog } from '@hitbox/marketplace';
 import {
+    DROP_TYPE_MANAGE_CAPABILITY,
     PRODUCT_READ_CAPABILITY,
     PRODUCT_WRITE_CAPABILITY,
     PRODUCTS_MODULE,
@@ -22,6 +23,13 @@ import type { IProductAudit } from './domain/interfaces/product-audit.interface'
 import type { IReleaseGate } from './domain/interfaces/release-gate.interface';
 import { ProductRepository } from './repository/product.repository';
 import { ProductService } from './service/product.service';
+import { DropTypeController } from './drop-type/drop-type.controller';
+import { DropTypeRepository } from './drop-type/drop-type.repository';
+import { DropTypeService } from './drop-type/drop-type.service';
+import { VariantController } from './variant/variant.controller';
+import { VariantRepository } from './variant/variant.repository';
+import { VariantService } from './variant/variant.service';
+import { VariantPolicyAdapter } from './domain/variant-policy.adapter';
 
 export interface ProductsModuleDeps {
     prisma: PrismaClient;
@@ -102,6 +110,13 @@ export interface ProductsModule {
     discovery: IProductDiscovery;
     /** Injected into createMarketplaceModule — marketplace's port, products' adapter. */
     listings: IListingCatalog;
+    /**
+     * Variant rules for other modules: skus asks before minting, releases
+     * asks at submit. Satisfies their ports structurally.
+     */
+    variantPolicy: VariantPolicyAdapter;
+    /** Drop-type administration. Mounted at /api/v1/admin/drop-types. */
+    createDropTypesRouter(requireAuth: RequestHandler): Router;
     /** Public, read-only catalog. Mounted at /api/v1/products. */
     createRouter(requireAuth: RequestHandler): Router;
     /** Catalog administration. Mounted at /api/v1/admin/products. */
@@ -113,8 +128,14 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
 
     const cache = new ProductCache();
     const products = new ProductRepository(deps.prisma, cache);
+    const dropTypes = new DropTypeRepository(deps.prisma);
+    const variants = new VariantRepository(deps.prisma, cache);
+    const dropTypeService = new DropTypeService({ dropTypes, eventBus: deps.eventBus, logger });
+    const variantService = new VariantService({ variants, eventBus: deps.eventBus, logger });
     const service = new ProductService({
         products,
+        dropTypes,
+        variants,
         eventBus: deps.eventBus,
         logger,
         mediaUrls: deps.mediaUrls,
@@ -129,6 +150,46 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
         service,
         discovery: new ProductDiscoveryAdapter(products, deps.mediaUrls),
         listings: new MarketplaceListingAdapter(products, deps.mediaUrls),
+        variantPolicy: new VariantPolicyAdapter(variants),
+
+        createDropTypesRouter(requireAuth) {
+            if (!deps.guard) {
+                throw new Error(
+                    'createProductsModule({ guard }) is required to build the drop-types router.',
+                );
+            }
+            const { guard } = deps;
+            const controller = new DropTypeController(dropTypeService);
+            const router = Router();
+            router.use(requireAuth);
+
+            // Reading is what every drop-creation screen does first, so it
+            // takes the same capability as reading a drop.
+            const read = guard.requirePermission(PRODUCT_READ_CAPABILITY);
+            // Changing a type changes the rules for every drop that uses it:
+            // System Admin only.
+            const manage = guard.requirePermission(DROP_TYPE_MANAGE_CAPABILITY, { globalOnly: true });
+
+            router.get('/', read, controller.list);
+            router.get('/:code', read, controller.get);
+            router.post('/', manage, controller.create);
+            router.patch('/:code', manage, controller.update);
+
+            router.post('/:code/dimensions', manage, controller.addDimension);
+            router.patch('/:code/dimensions/:dimension', manage, controller.updateDimension);
+            router.delete('/:code/dimensions/:dimension', manage, controller.archiveDimension);
+            router.post('/:code/dimensions/:dimension/restore', manage, controller.restoreDimension);
+
+            router.post('/:code/dimensions/:dimension/values', manage, controller.addValue);
+            router.patch('/:code/dimensions/:dimension/values/:value', manage, controller.updateValue);
+            router.delete('/:code/dimensions/:dimension/values/:value', manage, controller.archiveValue);
+            router.post(
+                '/:code/dimensions/:dimension/values/:value/restore',
+                manage,
+                controller.restoreValue,
+            );
+            return router;
+        },
         createRouter(_requireAuth) {
             const controller = new ProductController(service);
             const router = Router();
@@ -240,6 +301,37 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
                 '/:id/prices/:priceId',
                 guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
                 controller.removePrice,
+            );
+
+            // Variants — the drop's sellable options (size × color, pack size…).
+            // Reading takes the detail screen's capability; writing is catalog
+            // administration. The type's rules and the DRAFT/REJECTED gate
+            // are enforced in VariantService, not here.
+            const variantController = new VariantController(variantService);
+            router.get(
+                '/:id/variants',
+                guard.requirePermission(PRODUCT_READ_CAPABILITY, { context: dropOrganization }),
+                variantController.list,
+            );
+            router.post(
+                '/:id/variants',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                variantController.create,
+            );
+            router.post(
+                '/:id/variants/generate',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                variantController.generate,
+            );
+            router.patch(
+                '/:id/variants/:variantId',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                variantController.update,
+            );
+            router.delete(
+                '/:id/variants/:variantId',
+                guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
+                variantController.remove,
             );
 
             // Gallery. Reading takes the same capability as the detail screen;

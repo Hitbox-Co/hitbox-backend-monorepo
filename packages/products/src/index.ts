@@ -68,3 +68,15 @@ export type {
     SkuMintOutcome,
     SkuMintSpec,
 } from './domain/interfaces/sku-minting.interface';
+
+// ── Drop types & variants (docs/admin/drop-types-and-variants.md) ───────────
+export type { VariantVerdict } from './domain/variant-policy.adapter';
+export type { DropTypeResponse } from './drop-type/drop-type.service';
+export type { VariantResponse } from './variant/variant.service';
+export {
+    dropTypeRuleSchema,
+    dropTypeRulesSchema,
+    normalizeHex,
+    type DropTypeRule,
+} from './drop-type/rules';
+export { DROP_TYPE_MANAGE_CAPABILITY, VARIANT_GENERATE_MAX } from './constants/products.constant';

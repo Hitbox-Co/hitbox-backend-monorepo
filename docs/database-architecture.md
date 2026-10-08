@@ -52,7 +52,7 @@ Every model has exactly one owning module. The merge script enforces this — a 
 | **Access control** | `@hitbox/access-control` | `Role`, `Permission`, `RolePermission`, `RoleAssignment` | Authorisation: who may do what, at what scope. |
 | **Organizations** | `@hitbox/organizations` | `Organization` | The tenant root — HitBox, brands, artist-individuals. |
 | **Artist** | `@hitbox/artist` | `Artist`, `ArtistCollection`, `ArtistBrandLink` | Creator identity, curated series, artist↔brand deals. |
-| **Products** | `@hitbox/products` | `Drop`, `DropVariant`, `DropImage`, `DropPrice` | The catalog — what is for sale, in which options, at what price. Tables are still `Product*`; see [v3.1](schema-v3.1-changes.md). |
+| **Products** | `@hitbox/products` | `Drop`, `DropVariant`, `DropVariantOption`, `DropImage`, `DropPrice`, `DropType`, `DropTypeDimension`, `DropTypeDimensionValue` | The catalog — what is for sale, in which options, at what price. Tables were renamed from `Product*` in v3.1.1; see [v3.1](schema-v3.1-changes.md). Also `DropType`, `DropTypeDimension`, `DropTypeDimensionValue`, `DropVariantOption` — the variant rules per product type; see [drop-types-and-variants.md](admin/drop-types-and-variants.md). |
 | **Markets** | `@hitbox/markets` | `Market`, `MarketCountry` | Pricing/currency regions and country→market resolution. |
 | **Releases** | `@hitbox/releases` | `ReleaseApproval` | The review workflow that gates `Drop.status`. |
 | **SKUs** | `@hitbox/skus` | `Sku`, `NfcVerification` | The serialized-item registry: one row per physical collectible, one per tap. `NfcTag` now belongs to `supply` (see below). |

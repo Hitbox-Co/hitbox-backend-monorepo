@@ -30,6 +30,37 @@ export const PRODUCTS_ERROR_CODES = {
     PUBLISH_BLOCKED: 'PRODUCTS_PUBLISH_BLOCKED',
     /** The release gate is not wired in, so approval cannot be verified. */
     RELEASE_GATE_UNAVAILABLE: 'PRODUCTS_RELEASE_GATE_UNAVAILABLE',
+
+    // ── Drop types & variants (docs/admin/drop-types-and-variants.md) ───────
+    /** Unknown, or inactive, drop type code. */
+    DROP_TYPE_NOT_FOUND: 'PRODUCTS_DROP_TYPE_NOT_FOUND',
+    /** A drop type with this code already exists. */
+    DROP_TYPE_CODE_TAKEN: 'PRODUCTS_DROP_TYPE_CODE_TAKEN',
+    /** The type definition itself is invalid — bad rule, pattern, hex, duplicate code. */
+    DROP_TYPE_INVALID: 'PRODUCTS_DROP_TYPE_INVALID',
+    /** Changing something that drops already depend on (variantMode in use, a drop's type once it has variants). */
+    DROP_TYPE_LOCKED: 'PRODUCTS_DROP_TYPE_LOCKED',
+    DIMENSION_NOT_FOUND: 'PRODUCTS_DIMENSION_NOT_FOUND',
+    DIMENSION_VALUE_NOT_FOUND: 'PRODUCTS_DIMENSION_VALUE_NOT_FOUND',
+    /** Variant writes on a drop with no type — set `dropType` first. */
+    DROP_TYPE_REQUIRED: 'PRODUCTS_DROP_TYPE_REQUIRED',
+    /** Adding / removing variants outside DRAFT or REJECTED. */
+    DROP_NOT_EDITABLE: 'PRODUCTS_DROP_NOT_EDITABLE',
+    VARIANT_NOT_FOUND: 'PRODUCTS_VARIANT_NOT_FOUND',
+    /** The combination already exists on this drop. */
+    VARIANT_DUPLICATE: 'PRODUCTS_VARIANT_DUPLICATE',
+    /** Options break the type's rules; `details.problems` lists each. */
+    VARIANT_INVALID_OPTIONS: 'PRODUCTS_VARIANT_INVALID_OPTIONS',
+    /** The drop's type has `variantMode = NONE`. */
+    VARIANTS_NOT_ALLOWED: 'PRODUCTS_VARIANTS_NOT_ALLOWED',
+    /** The drop's type has `variantMode = REQUIRED` and the action needs a variant. */
+    VARIANTS_REQUIRED: 'PRODUCTS_VARIANTS_REQUIRED',
+    /** Variant supplies exceed the drop's, or a mint exceeds the variant's. */
+    VARIANT_SUPPLY_EXCEEDED: 'PRODUCTS_VARIANT_SUPPLY_EXCEEDED',
+    /** The variant is archived or inactive. */
+    VARIANT_INACTIVE: 'PRODUCTS_VARIANT_INACTIVE',
+    /** Generation would produce more than VARIANT_GENERATE_MAX combinations. */
+    VARIANT_GENERATE_TOO_LARGE: 'PRODUCTS_VARIANT_GENERATE_TOO_LARGE',
 } as const;
 
 /**
@@ -46,13 +77,35 @@ export const PRODUCT_READ_CAPABILITY = 'drop:read' as const;
  */
 export const PRODUCT_WRITE_CAPABILITY = 'drop:manage' as const;
 
+/**
+ * Drop-type administration: dimensions, values, colors, rules. System Admin
+ * only (`drop-type:manage:global`). Reading types takes `drop:read`, because
+ * every drop-creation screen needs the type list.
+ */
+export const DROP_TYPE_MANAGE_CAPABILITY = 'drop-type:manage' as const;
+
 export const PRODUCT_EVENTS = {
     PRODUCT_CREATED: 'products.product.created',
     PRODUCT_UPDATED: 'products.product.updated',
     PRODUCT_ARCHIVED: 'products.product.archived',
     /** A drop went live. Payload carries the target status and the review it cleared. */
     PRODUCT_PUBLISHED: 'products.product.published',
+    VARIANT_CREATED: 'products.variant.created',
+    VARIANT_UPDATED: 'products.variant.updated',
+    VARIANT_ARCHIVED: 'products.variant.archived',
+    DROP_TYPE_CREATED: 'products.drop-type.created',
+    DROP_TYPE_UPDATED: 'products.drop-type.updated',
 } as const;
+
+/**
+ * Most combinations one `variants/generate` call may produce, counted BEFORE
+ * rules prune anything. Over it, the request is refused — never truncated, so
+ * nothing is silently left out. Also the cap on an explicit `variants` list.
+ */
+export const VARIANT_GENERATE_MAX = 200;
+
+/** Drop statuses in which variants may be added or removed. */
+export const VARIANT_EDITABLE_STATUSES = ['DRAFT', 'REJECTED'] as const;
 
 /** Audit event key for publication. Registered in the audit catalog. */
 export const PRODUCT_AUDIT_EVENTS = {

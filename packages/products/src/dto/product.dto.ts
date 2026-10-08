@@ -54,7 +54,7 @@ const facet = z
 const facetQuery = z.string().trim().min(1).max(64);
 
 /** Free text. `""` and `null` both mean "no value" and normalise to null. */
-const optionalText = (max: number) =>
+export const optionalText = (max: number) =>
     z
         .union([z.string(), z.null()])
         .transform((value) => {
@@ -74,7 +74,7 @@ const optionalUuid = z
     .pipe(z.string().uuid().nullable());
 
 /** An integer that tolerates `"500"`. Rejects `"abc"`, as it should. */
-const int = (opts: { min?: number; max?: number } = {}) => {
+export const int = (opts: { min?: number; max?: number } = {}) => {
     let schema = z.coerce.number().int();
     if (opts.min !== undefined) schema = schema.min(opts.min);
     if (opts.max !== undefined) schema = schema.max(opts.max);
@@ -88,7 +88,7 @@ const int = (opts: { min?: number; max?: number } = {}) => {
  * `Boolean(value)`, and `Boolean("false")` is `true` — so the single most
  * common wire representation of false would silently become true.
  */
-const bool = z.union([
+export const bool = z.union([
     z.boolean(),
     z.literal('true').transform(() => true),
     z.literal('false').transform(() => false),
@@ -349,6 +349,21 @@ export const createProductSchema = z.object({
     collectionId: optionalUuid.optional(),
     artistId: optionalUuid.optional(),
     organizationId: optionalUuid.optional(),
+    /**
+     * The drop's product type — a `DropType.code` such as `T_SHIRT`. Decides
+     * which variants the drop may have (docs/admin/drop-types-and-variants.md).
+     *
+     * Optional: omitted or `null` creates a legacy, untyped drop, exactly as
+     * before drop types existed. Case-insensitive on the wire. On `PATCH` it
+     * can only change while the drop has no variants.
+     */
+    dropType: z
+        .union([z.string(), z.null()])
+        .transform((value) => {
+            const trimmed = value?.trim() ?? '';
+            return trimmed === '' ? null : trimmed.toUpperCase();
+        })
+        .optional(),
     /** Number of serialized SKUs that will exist for this drop. */
     totalSupply: int({ min: 0 }).default(0),
     /** Max units one buyer may purchase; omit for unlimited. */

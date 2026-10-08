@@ -4,6 +4,9 @@
 > pricing, the image gallery, and the brand/artist pickers the form needs.
 >
 > Serialized units and NFC tags: [sku-api.md](sku-api.md).
+> Drop types and variants (size × color, card packs, …), including the new
+> optional `dropType` field on create:
+> [drop-types-and-variants.md](drop-types-and-variants.md).
 > Session handling and the Clerk flow: [authentication.md](authentication.md).
 > The rest of the admin write surface: [admin-write-apis.md](admin-write-apis.md).
 
@@ -15,6 +18,13 @@
 > then mint through `POST /admin/products/:productId/skus`. A drop with neither
 > owner is HitBox's own and still mints at creation. See
 > [drop-approval-lifecycle.md §10](drop-approval-lifecycle.md#10-minting-waits-for-approval).
+
+> 🆕 **`dropType`** — send a drop type code (`"T_SHIRT"`, `"CARD"`…) to give
+> the drop variant rules. Optional; omitted means a legacy drop, exactly as
+> before. A `REQUIRED`-variant type also refuses the `skus` block
+> (`400 PRODUCTS_VARIANTS_REQUIRED`) — add variants first, then mint per
+> variant. Responses now carry `dropType` and a richer `variants[]`. See
+> [drop-types-and-variants.md §6](drop-types-and-variants.md#6-drop-create--update--what-changed).
 
 ## 1. If you are getting `422` on create — read this first
 

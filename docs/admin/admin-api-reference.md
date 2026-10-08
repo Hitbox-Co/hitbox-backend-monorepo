@@ -22,6 +22,9 @@
 > Product upload, request-format rules (and `422` troubleshooting), market
 > pricing, the image gallery, and the brand/artist pickers:
 > [product-upload-api.md](product-upload-api.md).
+> Drop types (T-Shirt, Card, Poster…), variant rules, color swatches and
+> generating a drop's variants:
+> [drop-types-and-variants.md](drop-types-and-variants.md).
 > Minting SKU units, NFC tag manifests, and per-role unit visibility:
 > [sku-api.md](sku-api.md).
 > Editing units afterwards — trust flags, tag lifecycle, archival, batch edits

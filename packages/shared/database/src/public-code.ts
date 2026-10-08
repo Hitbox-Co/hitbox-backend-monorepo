@@ -173,6 +173,10 @@ export const PUBLIC_CODE_PREFIXES: Record<string, string> = {
     DropVariant: 'dvr',
     DropImage: 'dim',
     DropPrice: 'dpr',
+    DropVariantOption: 'dvo',
+    DropType: 'dty',
+    DropTypeDimension: 'dtd',
+    DropTypeDimensionValue: 'dtv',
     // releases
     ReleaseApproval: 'rap',
     // resale

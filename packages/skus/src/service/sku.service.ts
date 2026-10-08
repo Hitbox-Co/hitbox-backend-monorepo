@@ -19,6 +19,7 @@ import {
 import type { SkuUpdatePlan, SkuUpdateTarget } from '../domain/sku-update';
 import type { ISkuAudit } from '../domain/interfaces/sku-audit.interface';
 import type { ISkuReleaseGate } from '../domain/interfaces/release-gate.interface';
+import type { ISkuVariantPolicy } from '../domain/interfaces/variant-policy.interface';
 import type {
     BatchUpdateItem,
     BatchUpdateResult,
@@ -70,6 +71,7 @@ interface SkuServiceDeps {
      * one where the approval workflow is not wired at all.
      */
     releaseGate?: ISkuReleaseGate | undefined;
+    variantPolicy?: ISkuVariantPolicy | undefined;
 }
 
 /**
@@ -142,6 +144,22 @@ export class SkuService {
                 'variantId does not belong to this product',
                 SKUS_ERROR_CODES.VARIANT_MISMATCH,
             );
+        }
+
+        // The drop type's variant rules: a T-shirt unit needs a size, a
+        // keychain unit takes no variant, and a capped variant stops at its
+        // cap. Asked of products, which owns the rules. A pre-check like the
+        // tag check below — the drop-wide cap inside the mint stays the
+        // authority on totalSupply.
+        if (this.deps.variantPolicy) {
+            const verdict = await this.deps.variantPolicy.checkMint({
+                productId,
+                variantId: dto.variantId ?? null,
+                count: dto.count,
+            });
+            if (!verdict.ok) {
+                throw AppError.badRequest(verdict.message, verdict.code, verdict.details);
+            }
         }
 
         // Pre-checked only for a usable error message — the unique index on

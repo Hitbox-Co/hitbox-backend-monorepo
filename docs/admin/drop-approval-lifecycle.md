@@ -757,6 +757,7 @@ platform administrator on another.
 | `RELEASES_COMMENT_REQUIRED` | 422 | Rejecting without a reason |
 | `RELEASES_COMPLIANCE_INCOMPLETE` | 400 | Age-restricted drop with no `minimumAge` |
 | `RELEASES_NOT_REOPENABLE` | 409 | Reopening a review that was never decided |
+| `PRODUCTS_VARIANTS_REQUIRED` | 400 | Submitting a drop whose type requires variants while it has none — see [drop-types-and-variants.md §8](drop-types-and-variants.md#8-minting-and-submitting--what-changed). Checked before the auto-pass too |
 
 ### Publication (`POST /admin/products/:id/publish`)
 

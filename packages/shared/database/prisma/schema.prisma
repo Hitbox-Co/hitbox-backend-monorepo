@@ -347,6 +347,9 @@ enum ResourceType {
   /// Running the platform it sits on: nodes, networking, provisioning.
   /// Technical domain — no business role holds these.
   INFRASTRUCTURE
+  /// Product-type configuration: which variant dimensions, values and rules a
+  /// kind of drop has. Appended last — see migration drop_types_and_variants.
+  DROP_TYPE
 }
 
 /// The two authorization domains. Domain is a hard boundary, not a label: a
@@ -2226,7 +2229,12 @@ enum ExceptionStatus {
 // PRODUCTS MODULE SCHEMA  (packages/products/prisma/products.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: Drop, DropVariant, DropImage, DropPrice
+// Owns: Drop, DropVariant, DropImage, DropPrice,
+//       DropType, DropTypeDimension, DropTypeDimensionValue, DropVariantOption
+//
+// Drop types drive variants: a type declares which dimensions a variant varies
+// along (size, color, edition…), which values each may take, and the rules
+// between them. See docs/admin/drop-types-and-variants.md.
 //
 // This module is the CATALOG — the definition of what is for sale. The
 // serialized physical items are the skus module (Sku); the two are deliberately
@@ -2262,6 +2270,12 @@ model Drop {
   artist            Artist?           @relation(fields: [artistId], references: [id])
   organizationId    String?           @db.Uuid
   organization      Organization?     @relation(fields: [organizationId], references: [id])
+  /// What kind of product this is. Null = a legacy drop created before drop
+  /// types existed: no variant rules apply to it.
+  dropTypeId        String?           @db.Uuid
+  dropType          DropType?         @relation(fields: [dropTypeId], references: [id])
+  /// The DropType.version this drop's variants were last validated against.
+  dropTypeVersion   Int?
   vertical          String?
   category          String?
   rarity            String?
@@ -2308,9 +2322,12 @@ model Drop {
   supplyBatches       SupplyBatch[]
 }
 
-/// A purchasable option of a drop — size, colourway, edition. Modelled as a
-/// single name/value pair per row, with the composite unique preventing the
-/// same option value twice on one drop.
+/// A purchasable option of a drop — "M / Black", "Pack of 5", "A3 Limited".
+///
+/// The options themselves live in DropVariantOption, one row per dimension.
+/// `optionName` / `optionValue` are kept for existing readers: for a typed
+/// variant they hold the dimension codes and value codes joined by "/"
+/// ("size/color", "M/BLK"); legacy rows keep their original single pair.
 model DropVariant {
   id          String    @id @db.Uuid
   /// Human-readable record id (`dvr…`). Unique, never a foreign key —
@@ -2327,6 +2344,10 @@ model DropVariant {
   label       String
   optionName  String
   optionValue String
+  /// Canonical, sorted "color=BLK|size=M" — the database-level guard against
+  /// the same combination twice on one drop. Built by the service, never sent
+  /// by a client. Legacy rows hold "legacy:<optionName>=<optionValue>".
+  optionsKey  String
   position    Int
   /// Per-variant supply cap; null = drawn from the drop's totalSupply.
   totalSupply Int?
@@ -2337,6 +2358,7 @@ model DropVariant {
 
   // ── Own-module back-relations ─────────────────────────────────────────────
   dropPrices DropPrice[]
+  options    DropVariantOption[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   skus          Sku[]
@@ -2344,6 +2366,103 @@ model DropVariant {
   wishlistItems WishlistItem[]
 
   @@unique([productId, optionName, optionValue])
+  @@unique([productId, optionsKey])
+}
+
+/// One dimension value of one variant. "M / Black" is two rows.
+///
+/// Labels and the hex code are SNAPSHOTS taken when the variant was created:
+/// renaming "Black" to "Jet Black" on the type must not rewrite what an
+/// existing order or invoice says was bought.
+model DropVariantOption {
+  id             String      @id @db.Uuid
+  /// Human-readable record id (`dvo…`). Written by the publicCode extension.
+  publicCode     String?     @unique @db.VarChar(32)
+  variantId      String      @db.Uuid
+  variant        DropVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  dimensionCode  String
+  dimensionLabel String
+  valueCode      String
+  valueLabel     String
+  /// "#RRGGBB" for a COLOR dimension, so a swatch renders without a lookup.
+  hexCode        String?     @db.VarChar(7)
+  position       Int
+  createdAt      DateTime
+
+  @@unique([variantId, dimensionCode])
+  @@index([dimensionCode, valueCode])
+}
+
+/// What kind of product a drop is — T-shirt, card, poster — and the variant
+/// rules that follow from it. Configuration, not code: a new product type is a
+/// new row, with no change to the Drop, variant or SKU APIs.
+model DropType {
+  id                 String      @id @db.Uuid
+  /// Human-readable record id (`dty…`). Written by the publicCode extension.
+  publicCode         String?     @unique @db.VarChar(32)
+  /// Stable machine key — `T_SHIRT`. Never changes once drops use it.
+  code               String      @unique
+  name               String
+  description        String?
+  variantMode        VariantMode
+  /// Tokens: {groupCode}, {values}. Must contain both.
+  variantCodePattern String      @default("{groupCode}-{values}")
+  /// Cross-dimension rules (require / forbid / exclude), zod-validated on
+  /// write. See packages/products/src/drop-type/rules.ts.
+  rules              Json        @default("[]")
+  /// Bumped on every change to dimensions, values or rules.
+  version            Int         @default(1)
+  isActive           Boolean     @default(true)
+  createdAt          DateTime
+  updatedAt          DateTime
+
+  dimensions DropTypeDimension[]
+  drops      Drop[]
+}
+
+/// One axis a variant varies along — size, color, edition.
+model DropTypeDimension {
+  id                String               @id @db.Uuid
+  /// Human-readable record id (`dtd…`). Written by the publicCode extension.
+  publicCode        String?              @unique @db.VarChar(32)
+  dropTypeId        String               @db.Uuid
+  dropType          DropType             @relation(fields: [dropTypeId], references: [id])
+  /// Machine key — `size`. Used in DropVariant.optionsKey.
+  code              String
+  label             String
+  position          Int
+  required          Boolean
+  /// The admin may enter a value not in the list for one drop.
+  allowCustomValues Boolean              @default(false)
+  /// How a screen should render the values. COLOR values may carry a hex code.
+  displayType       DimensionDisplayType @default(TEXT)
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  values DropTypeDimensionValue[]
+
+  @@unique([dropTypeId, code])
+}
+
+/// One allowed value of a dimension — "M", "Black", "Pack".
+model DropTypeDimensionValue {
+  id          String            @id @db.Uuid
+  /// Human-readable record id (`dtv…`). Written by the publicCode extension.
+  publicCode  String?           @unique @db.VarChar(32)
+  dimensionId String            @db.Uuid
+  dimension   DropTypeDimension @relation(fields: [dimensionId], references: [id])
+  /// Short uppercase code used in variantCode — `BLK`. [A-Z0-9], 1–12 chars.
+  code        String
+  label       String
+  /// "#RRGGBB". Only on a COLOR dimension; optional even there.
+  hexCode     String?           @db.VarChar(7)
+  position    Int
+  archivedAt  DateTime?
+  createdAt   DateTime
+  updatedAt   DateTime
+
+  @@unique([dimensionId, code])
 }
 
 /// Joins a drop to a media asset for gallery display. The asset itself is
@@ -2421,6 +2540,24 @@ enum DropStatus {
   ACTIVE
   ENDED
   ARCHIVED
+}
+
+/// Whether a drop of a type has variants at all.
+enum VariantMode {
+  /// No variants — the drop itself is the one sellable item (a keychain).
+  NONE
+  /// Variants allowed but not needed.
+  OPTIONAL
+  /// At least one active variant before the drop can be submitted for review,
+  /// and every minted unit must belong to one.
+  REQUIRED
+}
+
+/// How a dimension's values are shown.
+enum DimensionDisplayType {
+  TEXT
+  /// Rendered as swatches; values may carry `hexCode`.
+  COLOR
 }
 
 /// Whether a price point is currently in effect.

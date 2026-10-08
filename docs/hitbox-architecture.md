@@ -79,7 +79,7 @@ hitbox-backend/
 ├── packages/
 │   ├── auth/                     # Clerk auth, webhooks, requireAuth middleware
 │   ├── users/                    # User profiles (local projection of Clerk users)
-│   ├── products/                 # Catalog: Drop, DropVariant, DropImage, DropPrice
+│   ├── products/                 # Catalog: Drop, DropVariant, DropImage, DropPrice + drop types & variant rules
 │   ├── artist/                   # Owns Artist + ArtistCollection
 │   │   └── src/{profile,collection}/   # profile = reserved; collection = capacity port
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
@@ -362,7 +362,10 @@ packages/shared/database/prisma/base.prisma    ← generator + datasource (poole
 packages/shared/database/prisma/enums.prisma   ← shared enums (used across modules)
 packages/auth/prisma/auth.prisma               ← AuthWebhookEvent
 packages/users/prisma/users.prisma             ← User
-packages/products/prisma/products.prisma       ← Drop, DropVariant, DropImage, DropPrice
+packages/products/prisma/products.prisma       ← Drop, DropVariant, DropVariantOption, DropImage,
+                                                 DropPrice, DropType, DropTypeDimension,
+                                                 DropTypeDimensionValue
+                                                 (docs/admin/drop-types-and-variants.md)
 packages/artist/prisma/artist.prisma           ← Artist, ArtistCollection (has maximumLimit)
 packages/skus/prisma/skus.prisma               ← Sku, NfcVerification (claim state + taps)
 packages/supply/prisma/supply.prisma           ← Vendor, SupplyBatch, NfcTag (the chip itself)

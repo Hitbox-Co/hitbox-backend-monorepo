@@ -321,9 +321,19 @@ async function main(): Promise<void> {
             ['S', 'M', 'L'].map((size, v) => ({
                 id: id(`variant:${p.key}:${size}`), productId: id(`product:${p.key}`),
                 variantCode: `HB-${1000 + p.index}-${size}`, label: `Size ${size}`,
-                optionName: 'size', optionValue: size, position: v,
+                optionName: 'size', optionValue: size, optionsKey: `size=${size}`, position: v,
                 totalSupply: Math.floor(p.supply / 3), isActive: true, archivedAt: null,
                 createdAt: daysAgo(55 - p.index * 2), updatedAt: daysAgo(10),
+            })),
+        ),
+    });
+    // One option row per variant — the per-dimension form the variant API reads.
+    await prisma.dropVariantOption.createMany({
+        data: products.flatMap((p) =>
+            ['S', 'M', 'L'].map((size) => ({
+                id: id(`variant-option:${p.key}:${size}`), variantId: id(`variant:${p.key}:${size}`),
+                dimensionCode: 'size', dimensionLabel: 'Size', valueCode: size, valueLabel: size,
+                position: 0, createdAt: daysAgo(55 - p.index * 2),
             })),
         ),
     });

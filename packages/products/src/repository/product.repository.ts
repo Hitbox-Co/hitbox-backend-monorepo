@@ -45,7 +45,12 @@ const basePriceArgs = {
 const listInclude = {
     dropImages: imageArgs,
     dropPrices: basePriceArgs,
-    dropVariants: { where: { archivedAt: null }, orderBy: { position: 'asc' } },
+    dropVariants: {
+        where: { archivedAt: null },
+        orderBy: { position: 'asc' },
+        include: { options: { orderBy: { position: 'asc' } } },
+    },
+    dropType: { select: { code: true, name: true, variantMode: true } },
     collection: { include: { artist: true } },
     artist: true,
 } satisfies Prisma.DropInclude;

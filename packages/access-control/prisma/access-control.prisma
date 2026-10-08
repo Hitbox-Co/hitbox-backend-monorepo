@@ -271,6 +271,9 @@ enum ResourceType {
   /// Running the platform it sits on: nodes, networking, provisioning.
   /// Technical domain — no business role holds these.
   INFRASTRUCTURE
+  /// Product-type configuration: which variant dimensions, values and rules a
+  /// kind of drop has. Appended last — see migration drop_types_and_variants.
+  DROP_TYPE
 }
 
 /// The two authorization domains. Domain is a hard boundary, not a label: a

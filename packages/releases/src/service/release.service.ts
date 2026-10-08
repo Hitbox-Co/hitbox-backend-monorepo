@@ -28,6 +28,7 @@ import type {
     UpdateReleaseApprovalDto,
 } from '../dto/release.dto';
 import type { ReleaseApprovalRow, ReleaseRepository } from '../repository/release.repository';
+import type { IReleaseVariantPolicy } from '../domain/interfaces/variant-policy.interface';
 
 /** What the caller may see and do. Resolved from grants by the controller. */
 export interface ReleaseView {
@@ -57,6 +58,8 @@ export interface ReleaseServiceDeps {
      * approval nobody can account for is not an approval.
      */
     audit: IReleaseAudit;
+    /** Variant completeness at submit — see domain/interfaces/variant-policy.interface.ts. */
+    variantPolicy?: IReleaseVariantPolicy | undefined;
 }
 
 /**
@@ -168,6 +171,16 @@ export class ReleaseService {
             throw AppError.notFound('Product not found.', RELEASES_ERROR_CODES.NOT_FOUND);
         }
         const authority = resolveAuthority(ownership);
+
+        // The owner approves the drop together with its variants, so a drop
+        // whose type requires variants cannot be reviewed without them —
+        // including the auto-pass below, which approves on the spot.
+        if (this.deps.variantPolicy) {
+            const verdict = await this.deps.variantPolicy.checkSubmittable(dto.productId);
+            if (!verdict.ok) {
+                throw AppError.badRequest(verdict.message, verdict.code, verdict.details);
+            }
+        }
 
         // ── No owner to ask: pass the review rather than queue it ────────────
         //

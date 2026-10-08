@@ -18,6 +18,7 @@ import { ReleaseController } from './controller/release.controller';
 import type { ReleaseCallerResolver } from './controller/release.controller';
 import { ReleaseRepository } from './repository/release.repository';
 import { ReleaseService } from './service/release.service';
+import type { IReleaseVariantPolicy } from './domain/interfaces/variant-policy.interface';
 
 /** What a route tells the guard about the record being reached. */
 type ReleaseAccessContext =
@@ -60,6 +61,12 @@ export interface ReleasesModuleDeps {
      * happening.
      */
     audit?: IReleaseAudit | undefined;
+    /**
+     * A drop whose type REQUIRES variants must have one before it is
+     * submitted. Provided by @hitbox/products. Optional: without it,
+     * submission behaves as before drop types existed.
+     */
+    variantPolicy?: IReleaseVariantPolicy | undefined;
 }
 
 export interface ReleasesModule {
@@ -80,6 +87,7 @@ export function createReleasesModule(deps: ReleasesModuleDeps): ReleasesModule {
         eventBus: deps.eventBus,
         logger,
         audit: deps.audit ?? NOOP_RELEASE_AUDIT,
+        variantPolicy: deps.variantPolicy,
     });
     const controller = new ReleaseController(service, deps.resolveCaller);
 
