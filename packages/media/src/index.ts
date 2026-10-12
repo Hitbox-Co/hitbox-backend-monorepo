@@ -18,6 +18,9 @@
 
 export { createMediaModule } from './module';
 export type {
+    ArtistImageAsset,
+    ArtistImageUpload,
+    IArtistProfileImages,
     IAssetLookup,
     MediaModule,
     MediaModuleDeps,

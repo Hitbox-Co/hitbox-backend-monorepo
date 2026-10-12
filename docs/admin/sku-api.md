@@ -54,9 +54,32 @@ integration mistake:
 number of `Sku` rows is the **fact**. They are allowed to disagree while an
 edition is being minted, and the API tells you the gap (`remainingSupply`).
 
-A unit's ownership history is not written here. The claims module appends the
-`MINT` row of a unit's hash chain on first use, so minting stays a catalog
-operation and the ledger stays append-only under a single owner.
+**Every unit is born with its `MINT` ledger record.** When units are minted
+— through `POST /admin/products/:productId/skus` or the inline `skus` block on
+`POST /admin/products` — each one gets a `BlockchainLedger` row (sequence 0,
+`txType: MINT`, owner `HitBox`, no previous hash) **in the same database
+transaction** that inserts the units. They commit together or roll back
+together: there is never a unit without its MINT record, and never a MINT
+record for a unit that was rolled back.
+
+| MINT row field | Value |
+|---|---|
+| `sequenceNo` | `0` — the start of the chain |
+| `txType` | `MINT` |
+| `previousHash` | `null` |
+| `currentHash` | `SHA-256(groupCode + tagId + "HitBox" + createdAt)` — same formula as every other row |
+| `actorType` / `actorRef` | `USER` + the minting admin's user id (mint endpoint); `SYSTEM` + null (inline mint at drop creation) |
+| `reason` | `Minted` |
+
+`tagId` in the hash is whatever was bound at mint time — usually nothing,
+since tags are normally bound later from the vendor manifest (3a). The genesis
+record describes the unit as it was born.
+
+The ledger table belongs to the claims module, so the skus module writes
+through an injected port (`ISkuMintLedger`, implemented by
+`claimsModule.mintLedger`) and passes it its own transaction client. Units
+minted before this change get their MINT row lazily on first claim, as
+before.
 
 ---
 

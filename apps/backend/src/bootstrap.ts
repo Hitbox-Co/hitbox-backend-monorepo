@@ -204,6 +204,14 @@ export function bootstrap(): Bootstrapped {
             checkMint: (input: { productId: string; variantId: string | null; count: number }) =>
                 productsModule.variantPolicy.checkMint(input),
         },
+        /**
+         * Every unit is born with its MINT ledger record, written inside the
+         * minting transaction. Claims owns BlockchainLedger; deferred lambda
+         * because `claimsModule` is constructed further down.
+         */
+        mintLedger: {
+            recordMintWithin: (tx, input) => claimsModule.mintLedger.recordMintWithin(tx, input),
+        },
         // Adapted onto the real recorder, which is constructed further down —
         // the lambda closes over it and only runs per request, so the order of
         // the two `const`s here does not matter. Same arrangement as releases.
@@ -449,6 +457,11 @@ export function bootstrap(): Bootstrapped {
         prisma,
         eventBus,
         guard: accessControlModule.guard,
+        // Artist self-service: "which artist" is always the caller's own.
+        resolveUserId: (req: Request) => req.auth?.accountId,
+        // Media owns MediaAsset and the bucket; undefined on a deploy with no
+        // bucket, in which case avatar/cover uploads are refused clearly.
+        images: mediaModule?.profileImages,
     });
 
     // The organization directory — read-only, and the other half of the drop
@@ -671,6 +684,7 @@ export function bootstrap(): Bootstrapped {
         adminOrders: ordersModule.createRouter(authModule.requireAuth),
         adminReleases: releasesModule.createRouter(authModule.requireAuth),
         adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
+        artistSelf: artistModule.createSelfRouter(authModule.requireAuth),
         adminDropTypes: productsModule.createDropTypesRouter(authModule.requireAuth),
         adminProductSkus: skusModule.createProductRouter(authModule.requireAuth),
         adminSkus: skusModule.createRouter(authModule.requireAuth),

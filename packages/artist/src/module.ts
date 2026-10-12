@@ -17,6 +17,15 @@ import { ArtistOwnershipAdapter } from './adapter/artist-ownership.adapter';
 import { ARTIST_MODULE } from './collection/constants/artist-collection.constant';
 import { ArtistCollectionStatsAdapter } from './collection/adapter/artist-collection-stats.adapter';
 import { ArtistCollectionRepository } from './collection/repository/artist-collection.repository';
+import {
+    ARTIST_SELF_READ_CAPABILITY,
+    ARTIST_SELF_UPDATE_CAPABILITY,
+} from './self/constants/artist-self.constant';
+import { ArtistSelfController } from './self/controller/artist-self.controller';
+import type { ArtistUserIdResolver } from './self/controller/artist-self.controller';
+import type { IArtistImageStorage } from './self/domain/artist-image-storage.interface';
+import { ArtistSelfRepository } from './self/repository/artist-self.repository';
+import { ArtistSelfService } from './self/service/artist-self.service';
 
 /** Structural guard — the shape of `requirePermission`, not an import. */
 export interface ArtistPermissionGuard {
@@ -36,8 +45,20 @@ export interface ArtistModuleDeps {
      * only wants the read side.
      */
     eventBus?: IEventBus | undefined;
-    /** Required only to build the admin router. */
+    /** Required to build the admin and self-service routers. */
     guard?: ArtistPermissionGuard | undefined;
+    /**
+     * The signed-in account id (`req => req.auth?.accountId`). Required to
+     * build the self-service router — "which artist" is always the caller's
+     * own profile, never a request parameter.
+     */
+    resolveUserId?: ArtistUserIdResolver | undefined;
+    /**
+     * Avatar / cover storage, provided by @hitbox/media. Optional: without a
+     * bucket, the image endpoints answer ARTIST_IMAGES_UNAVAILABLE and the
+     * rest of the profile still works.
+     */
+    images?: IArtistImageStorage | undefined;
 }
 
 export interface ArtistModule {
@@ -63,6 +84,12 @@ export interface ArtistModule {
      */
     createAdminRouter(requireAuth: RequestHandler): Router;
     /**
+     * Artist self-service, mounted at /api/v1/artist: an artist reading and
+     * editing their OWN profile — name, handle, bio, genre, visibility,
+     * avatar and cover. docs/artist/artist-profile-api.md.
+     */
+    createSelfRouter(requireAuth: RequestHandler): Router;
+    /**
      * Creates the `Artist` row behind an invitation. Exposed for tests and for
      * a backfill script; in the running app it is driven by the subscriptions
      * this factory sets up.
@@ -78,6 +105,12 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
 
     const logger = createModuleLogger(ARTIST_MODULE);
     const provisioning = new ArtistProvisioningService({ artists, logger });
+    const selfService = new ArtistSelfService({
+        artists: new ArtistSelfRepository(deps.prisma),
+        images: deps.images,
+        eventBus: deps.eventBus,
+        logger,
+    });
 
     /**
      * Inviting someone as an artist creates their artist profile.
@@ -125,6 +158,37 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
         provisioning,
         collectionStats: new ArtistCollectionStatsAdapter(collections),
         ownership: new ArtistOwnershipAdapter(deps.prisma),
+
+        createSelfRouter(requireAuth) {
+            if (!deps.guard || !deps.resolveUserId) {
+                throw new Error(
+                    'createArtistModule({ guard, resolveUserId }) is required to build the self-service router.',
+                );
+            }
+            const { guard, resolveUserId } = deps;
+            const controller = new ArtistSelfController(selfService, resolveUserId);
+
+            // `own` scope, checked against the caller's own id: only a holder
+            // of brand-artist-record:*:own (the ARTIST role) passes. A Brand
+            // Admin's :organization grant does not reach it.
+            const mine = (req: Request) => ({ ownerId: resolveUserId(req) ?? null });
+            const read = guard.requirePermission(ARTIST_SELF_READ_CAPABILITY, { context: mine });
+            const update = guard.requirePermission(ARTIST_SELF_UPDATE_CAPABILITY, { context: mine });
+
+            const router = Router();
+            router.use(requireAuth);
+
+            router.get('/genres', read, controller.genres);
+            router.get('/me', read, controller.get);
+            router.patch('/me', update, controller.update);
+
+            for (const kind of ['avatar', 'cover'] as const) {
+                router.post(`/me/${kind}/upload-url`, update, controller.createUpload(kind));
+                router.put(`/me/${kind}`, update, controller.setImage(kind));
+                router.delete(`/me/${kind}`, update, controller.removeImage(kind));
+            }
+            return router;
+        },
 
         createAdminRouter(requireAuth) {
             if (!deps.guard) {

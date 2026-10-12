@@ -389,6 +389,9 @@ Render the type next to the name.
 `GET /api/v1/admin/organizations/:organizationId` returns one, as
 `{ "data": OrganizationResponse }`.
 
+> The artist's own profile screen — where artists set their name, genre,
+> bio, avatar and cover — is [artist/artist-profile-api.md](../artist/artist-profile-api.md).
+
 ### `GET /api/v1/admin/artists`
 
 | Param | Type | Notes |

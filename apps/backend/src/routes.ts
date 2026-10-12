@@ -36,6 +36,8 @@ export interface ApiRouters {
     adminReleases: Router;
     /** Catalog administration: product detail with performance + SKU units, CRUD. */
     adminProducts: Router;
+    /** Artist self-service — docs/artist/artist-profile-api.md. */
+    artistSelf: Router;
     /** Drop types & variant rules — docs/admin/drop-types-and-variants.md. */
     adminDropTypes: Router;
     /** Serialized units of one drop: mint, list, summary. */
@@ -130,6 +132,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     // is one refactor away from breaking silently.
     api.use('/admin/products/:productId/skus', routers.adminProductSkus);
     api.use('/admin/products', routers.adminProducts);
+    api.use('/artist', routers.artistSelf);
     api.use('/admin/drop-types', routers.adminDropTypes);
     api.use('/admin/skus', routers.adminSkus);
     api.use('/admin/organizations', routers.adminOrganizations);

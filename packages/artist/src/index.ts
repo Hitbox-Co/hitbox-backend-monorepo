@@ -29,3 +29,6 @@ export type {
     StaffInvitedEvent,
 } from './profile/service/artist-provisioning.service';
 export { nameFromEmail, roleImpliesArtistProfile, slugify } from './profile/domain/artist-role';
+export { ARTIST_GENRES } from './self/constants/artist-self.constant';
+export type { IArtistImageStorage } from './self/domain/artist-image-storage.interface';
+export type { MyArtistProfile } from './self/service/artist-self.service';

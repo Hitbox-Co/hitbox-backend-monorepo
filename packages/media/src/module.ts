@@ -2,7 +2,9 @@ import { Router } from 'express';
 import type { Request, RequestHandler } from 'express';
 import type { PrismaClient } from '@hitbox/database';
 import { createModuleLogger } from '@hitbox/shared';
+import { AssetType } from '@hitbox/database';
 import { MEDIA_CAPABILITY, MEDIA_MODULE } from './constants/media.constant';
+import { isPublicKey } from './domain/storage-key';
 import { MediaController } from './controller/media.controller';
 import type { MediaCallerResolver } from './controller/media.controller';
 import type { IObjectStorage } from './domain/interfaces/object-storage.interface';
@@ -71,6 +73,44 @@ export interface MediaModule {
      * letting a consumer query it directly.
      */
     assets: IAssetLookup;
+    /**
+     * Artist profile images (avatar / cover). The provider side of the
+     * artist module's `IArtistImageStorage` port.
+     *
+     * The artist module has already proven the caller owns the artist before
+     * it calls this, so no organization scope is applied here — an artist
+     * uploads to their own profile, not to an organization's media library.
+     */
+    profileImages: IArtistProfileImages;
+}
+
+export interface ArtistImageUpload {
+    assetId: string;
+    uploadUrl: string;
+    expiresIn: number;
+    publicUrl: string | null;
+}
+
+export interface ArtistImageAsset {
+    id: string;
+    assetType: string;
+    mimeType: string;
+    artistId: string | null;
+    archived: boolean;
+    virusScanStatus: string;
+    /** Permanent URL — profile-images/ is publicly readable. */
+    publicUrl: string | null;
+}
+
+export interface IArtistProfileImages {
+    createUpload(input: {
+        artistId: string;
+        uploadedById: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+    }): Promise<ArtistImageUpload>;
+    findAsset(assetId: string): Promise<ArtistImageAsset | null>;
 }
 
 /** The provider side of products' `IMediaAssets` port. */
@@ -92,6 +132,45 @@ export function createMediaModule(deps: MediaModuleDeps): MediaModule {
 
     return {
         assets: { findByIds: (ids) => repository.findManyByIds(ids) },
+
+        profileImages: {
+            async createUpload(input) {
+                const result = await service.createUploadUrl({
+                    dto: {
+                        assetType: AssetType.PROFILE_IMAGE,
+                        ownerType: 'artist',
+                        ownerId: input.artistId,
+                        fileName: input.fileName,
+                        mimeType: input.mimeType,
+                        sizeBytes: input.sizeBytes,
+                    },
+                    uploadedById: input.uploadedById,
+                    // Ownership was proven by the artist module (the caller's
+                    // user is this artist's user). Same type, mime and size
+                    // rules as every other upload still apply inside.
+                    scope: { organizationIds: null, assertScope: () => undefined },
+                });
+                return {
+                    assetId: result.assetId,
+                    uploadUrl: result.uploadUrl,
+                    expiresIn: result.expiresIn,
+                    publicUrl: result.publicUrl,
+                };
+            },
+            async findAsset(assetId) {
+                const [row] = await repository.findManyByIds([assetId]);
+                if (!row) return null;
+                return {
+                    id: row.id,
+                    assetType: row.assetType,
+                    mimeType: row.mimeType,
+                    artistId: row.artistId,
+                    archived: row.archivedAt !== null,
+                    virusScanStatus: row.virusScanStatus,
+                    publicUrl: isPublicKey(row.storageRef) ? deps.storage.publicUrl(row.storageRef) : null,
+                };
+            },
+        },
 
         createRouter(requireAuth) {
             const router = Router();

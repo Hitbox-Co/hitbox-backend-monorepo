@@ -36,6 +36,11 @@
 **There is no SQS queue, no scan worker and no scan callback in this
 deployment.** See 8 for what that means and what was left in place.
 
+Artists upload their own avatar and cover image through
+`/api/v1/artist/me/{avatar|cover}/upload-url` — the same presigned flow into
+`profile-images/artists/…`, without needing the media capability. See
+[artist/artist-profile-api.md §7](../artist/artist-profile-api.md#7-avatar--cover-image--upload-set-remove).
+
 The backend never proxies file bytes. A 500 MB `EXCLUSIVE_CONTENT` upload
 never touches a Railway dyno — only the ~1 KB presign request does.
 
