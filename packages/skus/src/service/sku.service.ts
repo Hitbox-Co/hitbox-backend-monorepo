@@ -20,6 +20,7 @@ import type { SkuUpdatePlan, SkuUpdateTarget } from '../domain/sku-update';
 import type { ISkuAudit } from '../domain/interfaces/sku-audit.interface';
 import type { ISkuReleaseGate } from '../domain/interfaces/release-gate.interface';
 import type { ISkuVariantPolicy } from '../domain/interfaces/variant-policy.interface';
+import type { ISkuMintLedger } from '../domain/interfaces/mint-ledger.interface';
 import type {
     BatchUpdateItem,
     BatchUpdateResult,
@@ -72,6 +73,8 @@ interface SkuServiceDeps {
      */
     releaseGate?: ISkuReleaseGate | undefined;
     variantPolicy?: ISkuVariantPolicy | undefined;
+    /** Writes each new unit's MINT ledger record in the minting transaction. */
+    mintLedger?: ISkuMintLedger | undefined;
 }
 
 /**
@@ -181,6 +184,7 @@ export class SkuService {
             try {
                 const outcome = await this.deps.skus.runInTransaction((tx) =>
                     this.mintWithin(tx, {
+                        actorId: access.userId,
                         productId,
                         groupCode: product.groupCode,
                         totalSupply: product.totalSupply,
@@ -246,6 +250,8 @@ export class SkuService {
             vendorId?: string | null | undefined;
             provisioningBatchId?: string | null | undefined;
             isActive?: boolean | undefined;
+            /** Who minted — recorded on the MINT ledger rows. */
+            actorId?: string | null | undefined;
         },
     ): Promise<MintOutcome> {
         const existing = await this.deps.skus.countForProduct(tx, spec.productId);
@@ -261,7 +267,7 @@ export class SkuService {
             );
         }
 
-        return this.deps.skus.mintWithin(tx, {
+        const { outcome, units } = await this.deps.skus.mintWithin(tx, {
             productId: spec.productId,
             groupCode: spec.groupCode,
             count: spec.count,
@@ -271,6 +277,19 @@ export class SkuService {
             provisioningBatchId: spec.provisioningBatchId ?? null,
             isActive: spec.isActive,
         });
+
+        // Every unit's provenance chain starts at birth: one MINT record per
+        // unit, written with the SAME `tx` that inserted the units. If the
+        // ledger write fails, the units roll back with it — there is never a
+        // unit without its MINT record. This runs for both mint paths: the
+        // mint endpoint and the inline `skus` block on drop creation.
+        if (this.deps.mintLedger && units.length > 0) {
+            await this.deps.mintLedger.recordMintWithin(tx, {
+                units,
+                actorId: spec.actorId ?? null,
+            });
+        }
+        return outcome;
     }
 
     // ── Tag binding ─────────────────────────────────────────────────────────

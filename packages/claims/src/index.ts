@@ -36,3 +36,5 @@ export type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.i
 
 // Service type (for other modules that receive it via DI)
 export type { ClaimsService } from './service/claims.service';
+export { MintLedgerWriter } from './repository/mint-ledger.writer';
+export type { MintLedgerUnit } from './repository/mint-ledger.writer';

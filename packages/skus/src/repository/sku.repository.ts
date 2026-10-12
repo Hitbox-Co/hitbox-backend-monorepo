@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { ClaimedStatus, Prisma, TagLifecycleState } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
+import type { MintedUnitRef } from '../domain/interfaces/mint-ledger.interface';
 import { SKU_SERIAL_PAD } from '../constants/skus.constant';
 import type { BatchTargetsDto, ListSkusQuery } from '../dto/sku.dto';
 
@@ -239,7 +240,10 @@ export class SkuRepository {
      * too, so there is no window in which a product exists with a half-minted
      * edition and no record of which half.
      */
-    async mintWithin(tx: Prisma.TransactionClient, spec: MintSpec): Promise<MintOutcome> {
+    async mintWithin(
+        tx: Prisma.TransactionClient,
+        spec: MintSpec,
+    ): Promise<{ outcome: MintOutcome; units: MintedUnitRef[] }> {
         const now = new Date();
 
         // Read inside the transaction: a count taken outside it is a guess.
@@ -283,11 +287,22 @@ export class SkuRepository {
         await tx.sku.createMany({ data: rows });
 
         return {
-            minted: rows.length,
-            firstSerial,
-            lastSerial: firstSerial + rows.length - 1,
-            skuCodes: rows.map((row) => row.skuCode),
-            tagsBound: tagIds.length,
+            outcome: {
+                minted: rows.length,
+                firstSerial,
+                lastSerial: firstSerial + rows.length - 1,
+                skuCodes: rows.map((row) => row.skuCode),
+                tagsBound: tagIds.length,
+            },
+            // Handed to the MINT-ledger writer inside the same transaction.
+            units: rows.map((row) => ({
+                skuId: row.id,
+                skuCode: row.skuCode,
+                serialNumber: row.serialNumber,
+                tagId: row.tagId,
+                groupCode: spec.groupCode,
+                createdAt: row.createdAt,
+            })),
         };
     }
 

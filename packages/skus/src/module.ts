@@ -15,6 +15,7 @@ import { NOOP_SKU_AUDIT } from './domain/interfaces/sku-audit.interface';
 import type { ISkuAudit } from './domain/interfaces/sku-audit.interface';
 import type { ISkuReleaseGate } from './domain/interfaces/release-gate.interface';
 import type { ISkuVariantPolicy } from './domain/interfaces/variant-policy.interface';
+import type { ISkuMintLedger } from './domain/interfaces/mint-ledger.interface';
 import { SkuRepository } from './repository/sku.repository';
 import { SkuService } from './service/sku.service';
 
@@ -55,6 +56,12 @@ export interface SkusModuleDeps {
      * variant rules, exactly as before drop types existed.
      */
     variantPolicy?: ISkuVariantPolicy | undefined;
+    /**
+     * Writes each new unit's MINT (genesis) ledger record inside the minting
+     * transaction. Provided by @hitbox/claims, which owns BlockchainLedger.
+     * A running server must pass it — every unit is born with its MINT row.
+     */
+    mintLedger?: ISkuMintLedger | undefined;
 }
 
 export interface SkusModule {
@@ -79,6 +86,7 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
         logger,
         releaseGate: deps.releaseGate,
         variantPolicy: deps.variantPolicy,
+        mintLedger: deps.mintLedger,
     });
     const controller = new SkuController(service, deps.resolvePrincipal);
 
