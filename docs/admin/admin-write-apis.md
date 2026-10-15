@@ -291,6 +291,10 @@ not five. This is what makes "why has this not shipped" answerable.
 `allowedTransitions` is precomputed so the UI enables exactly the buttons that
 will work, instead of discovering the rule by getting a 400.
 
+> **Money:** the order detail's `money` summary, payments, refunds and the
+> refund workflow (with `allowedActions` per refund) are documented in
+> [orders/order-payments-and-refunds-api.md](../orders/order-payments-and-refunds-api.md).
+>
 > **Packing:** which physical unit (NFC tag) goes into the parcel is chosen
 > by scanning at packing, and an order can't move to `SHIPPED` until that's
 > done — see [orders/order-unit-assignment-api.md](../orders/order-unit-assignment-api.md).

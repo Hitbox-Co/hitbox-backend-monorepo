@@ -35,6 +35,8 @@ export type OrderListRow = Prisma.OrderGetPayload<{ select: typeof listSelect }>
 const detailSelect = {
     ...listSelect,
     gateway: true,
+    paidAt: true,
+    unitAssignedById: true,
     trackingNote: true,
     termsAcceptedAt: true,
     updatedAt: true,
@@ -72,14 +74,18 @@ const detailSelect = {
     paymentTransactions: {
         orderBy: { createdAt: 'desc' },
         select: {
-            id: true, status: true, gateway: true, amount: true,
-            currency: true, needsReview: true, failureReason: true, createdAt: true,
+            id: true, status: true, gateway: true, gatewayRef: true, amount: true,
+            currency: true, needsReview: true, reviewedAt: true, reviewNote: true,
+            failureReason: true, createdAt: true, updatedAt: true,
         },
     },
     refundRequests: {
         orderBy: { createdAt: 'desc' },
         select: {
-            id: true, status: true, amount: true, reason: true, createdAt: true,
+            id: true, status: true, amount: true, currency: true, reason: true, reasonCode: true,
+            physicalReturnRequired: true, physicalReturnConfirmedAt: true, nfcTagCondition: true,
+            approvedAt: true, rejectionReason: true, gatewayRefundId: true, processedAt: true,
+            claimRevokedAt: true, createdAt: true, updatedAt: true,
         },
     },
 } satisfies Prisma.OrderSelect;

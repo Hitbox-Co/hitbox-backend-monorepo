@@ -22,6 +22,7 @@ import { PaymentScope, requireRefund } from '../domain/payment-access';
 import {
     REFUND_TRANSITIONS,
     canTransition,
+    refundActions,
     resaleBlockUntil,
 } from '../domain/refund-workflow';
 import type {
@@ -162,7 +163,7 @@ export class RefundService {
             'refund requested',
         );
 
-        return this.toView(refund);
+        return this.toView(refund, access);
     }
 
     // ── 2. Physical return ──────────────────────────────────────────────────
@@ -578,12 +579,12 @@ export class RefundService {
             page: query.page,
             limit: query.limit,
             total,
-            items: items.map((row) => this.toView(row)),
+            items: items.map((row) => this.toView(row, access)),
         };
     }
 
     async getById(id: string, access: PaymentAccess): Promise<RefundView> {
-        return this.toView(await this.requireInScope(id, access));
+        return this.toView(await this.requireInScope(id, access), access);
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -613,7 +614,7 @@ export class RefundService {
         return refund;
     }
 
-    private toView(row: RefundRequest): RefundView {
+    private toView(row: RefundRequest, access: PaymentAccess): RefundView {
         return {
             id: row.id,
             orderId: row.orderId,
@@ -635,6 +636,7 @@ export class RefundService {
             resaleBlockedUntil: row.resaleBlockedUntil?.toISOString() ?? null,
             createdAt: row.createdAt.toISOString(),
             allowedTransitions: REFUND_TRANSITIONS[row.status],
+            allowedActions: refundActions(row, access.canRefund),
         };
     }
 }

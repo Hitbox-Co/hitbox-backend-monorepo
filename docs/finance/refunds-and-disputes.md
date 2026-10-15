@@ -2,6 +2,10 @@
 
 Two ways money goes back out, with almost nothing in common.
 
+> Building the admin screens? The endpoint-by-endpoint guide — request and
+> response shapes, `allowedActions`, the order's `money` summary — is
+> [orders/order-payments-and-refunds-api.md](../orders/order-payments-and-refunds-api.md).
+
 ## The refund workflow (D4-35)
 
 The source document specifies six steps:

@@ -2,6 +2,7 @@ import { OrderStatus } from '@hitbox/database';
 import { z } from 'zod';
 import { ORDERS_DEFAULT_LIMIT, ORDERS_MAX_LIMIT } from '../constants/orders.constant';
 import { ADMIN_SETTABLE_STATUSES } from '../domain/order-status';
+import type { OrderMoneySummary } from '../domain/order-money';
 
 export const listOrdersQuerySchema = z.object({
     status: z.nativeEnum(OrderStatus).optional(),
@@ -136,21 +137,50 @@ export interface OrderDetail extends OrderListItem {
     /** Which statuses this order may move to right now. Drives the UI. */
     allowedTransitions: OrderStatus[];
 
-    /** Only with `payment-royalty:read`. */
+    /** When payment settled. Null until PAID. */
+    paidAt: string | null;
+    /** Who scanned the unit at packing (docs/orders/order-unit-assignment-api.md). */
+    unitAssignedById: string | null;
+
+    /**
+     * Only with `payment-royalty:read` — see
+     * docs/orders/order-payments-and-refunds-api.md.
+     */
+    money?: OrderMoneySummary;
+    /** Only with `payment-royalty:read`. Newest first. */
     payments?: {
         id: string;
         status: string;
         gateway: string;
+        /** The provider's charge id, e.g. Stripe `pi_…`. */
+        gatewayRef: string | null;
         amount: string;
         currency: string;
+        needsReview: boolean;
+        reviewedAt: string | null;
+        reviewNote: string | null;
+        failureReason: string | null;
         createdAt: string;
+        updatedAt: string;
     }[];
+    /** Only with `payment-royalty:read`. Newest first. */
     refunds?: {
         id: string;
         status: string;
+        reasonCode: string;
+        reason: string | null;
         amount: string | null;
         currency: string | null;
-        reason: string | null;
+        physicalReturnRequired: boolean;
+        physicalReturnConfirmedAt: string | null;
+        nfcTagCondition: string | null;
+        approvedAt: string | null;
+        rejectionReason: string | null;
+        /** The provider's refund id, e.g. Stripe `re_…`. */
+        gatewayRefundId: string | null;
+        processedAt: string | null;
+        claimRevokedAt: string | null;
         createdAt: string;
+        updatedAt: string;
     }[];
 }

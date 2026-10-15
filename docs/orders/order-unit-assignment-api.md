@@ -7,6 +7,9 @@
 > packing**: the packer takes **any** Red S shirt, scans its tag, and the order
 > is bound to exactly that tag. The buyer later taps that same tag to claim it.
 >
+> Payments, refunds and the order's money summary:
+> [order-payments-and-refunds-api.md](order-payments-and-refunds-api.md).
+>
 > Related: the order list/detail and status changes —
 > [admin/admin-write-apis.md](../admin/admin-write-apis.md); minting units and
 > binding tags — [admin/sku-api.md](../admin/sku-api.md); claiming —

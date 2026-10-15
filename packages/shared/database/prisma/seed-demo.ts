@@ -884,8 +884,11 @@ async function main(): Promise<void> {
                 amount: dec(o.unitPrice), currency: o.market.currency,
                 physicalReturnRequired: true,
                 physicalReturnConfirmedAt: hours(o.deliveredAt!, 96),
+                // The item was damaged; its NFC tag came back intact.
+                nfcTagCondition: 'INTACT' as const,
                 approvedById: id('user:fin'), approvedAt: hours(o.deliveredAt!, 100),
                 gatewayRefundId: `re_demo_${o.index}`,
+                processedAt: hours(o.deliveredAt!, 102),
                 createdAt: hours(o.deliveredAt!, 30), updatedAt: hours(o.deliveredAt!, 100 + i),
             })),
             ...returning.map((o, i) => ({

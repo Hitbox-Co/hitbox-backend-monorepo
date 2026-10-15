@@ -340,6 +340,9 @@ export function bootstrap(): Bootstrapped {
             organizationIds: global ? null : orgIds,
             canSeeMoney: has('payment-royalty:'),
             canSeeBuyer: has('buyer-profile:'),
+            // Drives `money.canRequestRefund` on the order detail; the payments
+            // module enforces the same grant when the refund is actually raised.
+            canRefund: principal.permissions.includes('order:refund:global'),
             canOverride: principal.permissions.includes('release-approval:override:global'),
         };
     };

@@ -22,6 +22,9 @@
     "db:seed:audit": "pnpm --filter @hitbox/database db:seed:audit",
     "db:backfill:v31": "pnpm --filter @hitbox/database db:backfill:v31",
     "db:seed:demo": "pnpm --filter @hitbox/database db:seed:demo",
+    "db:seed:drop-types": "pnpm --filter @hitbox/database db:seed:drop-types",
+    "db:seed:test-tee": "pnpm --filter @hitbox/database db:seed:test-tee",
+    "db:seed:test-refunds": "pnpm --filter @hitbox/database db:seed:test-refunds",
     "db:link-admin": "pnpm --filter @hitbox/database db:link-admin"
   },
   "keywords": [],

@@ -334,6 +334,12 @@ export interface RefundView {
     createdAt: string;
     /** What this request may do next, so the UI enables the right buttons. */
     allowedTransitions: string[];
+    /**
+     * The actions the CALLER may take on it right now — CONFIRM_RETURN,
+     * APPROVE, APPROVE_WITH_OVERRIDE, REJECT, PROCESS. Empty without the
+     * refund grant. Prefer this over `allowedTransitions` for buttons.
+     */
+    allowedActions: string[];
 }
 
 export interface DisputeView {

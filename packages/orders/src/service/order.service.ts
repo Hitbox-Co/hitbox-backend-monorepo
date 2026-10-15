@@ -9,6 +9,7 @@ import {
     canTransition,
     timestampsFor,
 } from '../domain/order-status';
+import { buildMoneySummary } from '../domain/order-money';
 import type {
     ChangeOrderStatusDto,
     ListOrdersQuery,
@@ -33,6 +34,11 @@ export interface OrderView {
     canSeeMoney: boolean;
     /** `buyer-profile:read` — the buyer's email and name. */
     canSeeBuyer: boolean;
+    /**
+     * `order:refund:global` — may start and drive refunds. Optional so older
+     * callers stay valid; absent means "no".
+     */
+    canRefund?: boolean;
 }
 
 export interface OrderServiceDeps {
@@ -83,6 +89,8 @@ export class OrderService {
             trackingNote: order.trackingNote,
             termsAcceptedAt: order.termsAcceptedAt?.toISOString() ?? null,
             updatedAt: order.updatedAt.toISOString(),
+            paidAt: order.paidAt?.toISOString() ?? null,
+            unitAssignedById: order.unitAssignedById,
             archivedAt: order.archivedAt?.toISOString() ?? null,
             market: order.market
                 ? {
@@ -117,21 +125,45 @@ export class OrderService {
         };
 
         if (view.canSeeMoney) {
+            detail.money = buildMoneySummary({
+                orderStatus: order.status,
+                orderAmount: order.amount,
+                currency: order.currency,
+                payments: order.paymentTransactions,
+                refunds: order.refundRequests,
+                callerCanRefund: view.canRefund === true,
+            });
             detail.payments = order.paymentTransactions.map((payment) => ({
                 id: payment.id,
                 status: payment.status,
                 gateway: payment.gateway,
-                amount: payment.amount.toString(),
+                gatewayRef: payment.gatewayRef,
+                amount: payment.amount.toFixed(2),
                 currency: payment.currency,
+                needsReview: payment.needsReview,
+                reviewedAt: payment.reviewedAt?.toISOString() ?? null,
+                reviewNote: payment.reviewNote,
+                failureReason: payment.failureReason,
                 createdAt: payment.createdAt.toISOString(),
+                updatedAt: payment.updatedAt.toISOString(),
             }));
             detail.refunds = order.refundRequests.map((refund) => ({
                 id: refund.id,
                 status: refund.status,
-                amount: refund.amount?.toString() ?? null,
-                currency: order.currency,
+                reasonCode: refund.reasonCode,
                 reason: refund.reason,
+                amount: refund.amount?.toFixed(2) ?? null,
+                currency: refund.currency ?? order.currency,
+                physicalReturnRequired: refund.physicalReturnRequired,
+                physicalReturnConfirmedAt: refund.physicalReturnConfirmedAt?.toISOString() ?? null,
+                nfcTagCondition: refund.nfcTagCondition,
+                approvedAt: refund.approvedAt?.toISOString() ?? null,
+                rejectionReason: refund.rejectionReason,
+                gatewayRefundId: refund.gatewayRefundId,
+                processedAt: refund.processedAt?.toISOString() ?? null,
+                claimRevokedAt: refund.claimRevokedAt?.toISOString() ?? null,
                 createdAt: refund.createdAt.toISOString(),
+                updatedAt: refund.updatedAt.toISOString(),
             }));
         }
 
