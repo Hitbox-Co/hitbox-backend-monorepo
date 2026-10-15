@@ -108,8 +108,11 @@ export class OrderService {
             })),
             // Precomputed so the UI enables exactly the buttons that will work,
             // instead of discovering the rule by getting a 409.
-            allowedTransitions: ORDER_STATUS_TRANSITIONS[order.status].filter((status) =>
-                ADMIN_SETTABLE_STATUSES.includes(status),
+            // SHIPPED is withheld until a packer has scanned the unit.
+            allowedTransitions: ORDER_STATUS_TRANSITIONS[order.status].filter(
+                (status) =>
+                    ADMIN_SETTABLE_STATUSES.includes(status) &&
+                    !(status === OrderStatus.SHIPPED && order.unitAssignedAt === null),
             ),
         };
 
@@ -167,6 +170,16 @@ export class OrderService {
                 `An order that is ${order.status} cannot become ${to}.`,
                 ORDERS_ERROR_CODES.INVALID_TRANSITION,
                 { from: order.status, to, allowed: ORDER_STATUS_TRANSITIONS[order.status] },
+            );
+        }
+
+        // A parcel ships with a scanned, confirmed unit — otherwise the tag in
+        // the box may not be the one on the order, and the buyer can't claim it.
+        if (to === OrderStatus.SHIPPED && order.unitAssignedAt === null) {
+            throw AppError.badRequest(
+                'Scan the item going into this parcel before shipping it ' +
+                '(POST /admin/orders/:orderId/unit).',
+                ORDERS_ERROR_CODES.UNIT_NOT_ASSIGNED,
             );
         }
 
@@ -238,6 +251,7 @@ export class OrderService {
             placedAt: row.placedAt.toISOString(),
             shippedAt: row.shippedAt?.toISOString() ?? null,
             deliveredAt: row.deliveredAt?.toISOString() ?? null,
+            unitAssignedAt: row.unitAssignedAt?.toISOString() ?? null,
         };
 
         if (view.canSeeBuyer) {

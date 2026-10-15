@@ -71,6 +71,12 @@ export interface OrderListItem {
     placedAt: string;
     shippedAt: string | null;
     deliveredAt: string | null;
+    /**
+     * When a packer scanned and confirmed the physical unit. Null = `skuId` is
+     * still provisional (the unit held at checkout) — see
+     * docs/orders/order-unit-assignment-api.md. The order cannot ship until set.
+     */
+    unitAssignedAt: string | null;
 
     /** Only with `buyer-profile:read`. */
     buyerId?: string;

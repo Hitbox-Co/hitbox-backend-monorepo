@@ -22,6 +22,7 @@ const listSelect = {
     placedAt: true,
     shippedAt: true,
     deliveredAt: true,
+    unitAssignedAt: true,
     unitPrice: true,
     amount: true,
     currency: true,

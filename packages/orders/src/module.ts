@@ -8,6 +8,9 @@ import {
     ORDER_WRITE_CAPABILITY,
     ORDERS_MODULE,
 } from './constants/orders.constant';
+import { OrderFulfilmentController } from './controller/order-fulfilment.controller';
+import { OrderFulfilmentRepository } from './repository/order-fulfilment.repository';
+import { OrderFulfilmentService } from './service/order-fulfilment.service';
 import { OrderController } from './controller/order.controller';
 import type { OrderCallerResolver } from './controller/order.controller';
 import {
@@ -69,6 +72,14 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
     const writes = new OrderWriteRepository(deps.prisma);
     const service = new OrderService({ orders, eventBus: deps.eventBus, logger });
     const controller = new OrderController(service, deps.resolveCaller);
+    const fulfilment = new OrderFulfilmentController(
+        new OrderFulfilmentService({
+            fulfilment: new OrderFulfilmentRepository(deps.prisma),
+            eventBus: deps.eventBus,
+            logger,
+        }),
+        deps.resolveCaller,
+    );
 
     /**
      * Payment and ownership are decoupled, so the order needs telling when its
@@ -113,6 +124,31 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
                 '/',
                 deps.guard.requirePermission(ORDER_READ_CAPABILITY),
                 controller.list,
+            );
+
+            // ── Packing: scan-to-assign (docs/orders/order-unit-assignment-api.md)
+            // Static paths are mounted before '/:orderId' so they are not read
+            // as an order id. Same capabilities and organization scoping as
+            // shipping: whoever may ship an order may pack it.
+            router.get(
+                '/fulfilment-queue',
+                deps.guard.requirePermission(ORDER_READ_CAPABILITY),
+                fulfilment.queue,
+            );
+            router.post(
+                '/assign-by-scan',
+                deps.guard.requirePermission(ORDER_WRITE_CAPABILITY),
+                fulfilment.assignByScan,
+            );
+            router.get(
+                '/:orderId/unit',
+                deps.guard.requirePermission(ORDER_READ_CAPABILITY),
+                fulfilment.get,
+            );
+            router.post(
+                '/:orderId/unit',
+                deps.guard.requirePermission(ORDER_WRITE_CAPABILITY),
+                fulfilment.assign,
             );
             router.get(
                 '/:orderId',
