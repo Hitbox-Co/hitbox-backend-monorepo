@@ -182,7 +182,11 @@ const TYPES: SeedType[] = [
     },
 ];
 
-async function main(): Promise<void> {
+/**
+ * Creates whatever built-in types, dimensions and values are missing.
+ * Exported so `seed-demo.ts` can guarantee the types its drops point at exist.
+ */
+export async function seedDropTypes(): Promise<string[]> {
     const summary: string[] = [];
 
     for (const type of TYPES) {
@@ -264,13 +268,19 @@ async function main(): Promise<void> {
         }
     }
 
-    console.log('✔ drop types seeded');
-    console.log(summary.length ? summary.join('\n') : '  (nothing to add — all present)');
+    return summary;
 }
 
-main()
-    .catch((error) => {
-        console.error('✖ drop-type seed failed:', error);
-        process.exitCode = 1;
-    })
-    .finally(() => prisma.$disconnect());
+// Run directly (`pnpm db:seed:drop-types`), not when imported by another seed.
+if (process.argv[1]?.replace(/\\/g, '/').endsWith('prisma/seed-drop-types.ts')) {
+    seedDropTypes()
+        .then((summary) => {
+            console.log('✔ drop types seeded');
+            console.log(summary.length ? summary.join('\n') : '  (nothing to add — all present)');
+        })
+        .catch((error) => {
+            console.error('✖ drop-type seed failed:', error);
+            process.exitCode = 1;
+        })
+        .finally(() => prisma.$disconnect());
+}

@@ -1728,6 +1728,14 @@ model Order {
   shippedAt       DateTime?
   deliveredAt     DateTime?
   trackingNote    String?
+  /// When a packer scanned the physical unit going into this parcel and it was
+  /// confirmed as the order's unit. Null = the unit is still PROVISIONAL (held
+  /// at checkout, not yet matched to a physical item). An order cannot ship
+  /// until this is set. See docs/orders/order-unit-assignment-api.md.
+  unitAssignedAt   DateTime?
+  /// The user who scanned it. No foreign key — like other actor ids, the record
+  /// must outlive the staff account.
+  unitAssignedById String?   @db.Uuid
   placedAt        DateTime
   updatedAt       DateTime
   archivedAt      DateTime?
