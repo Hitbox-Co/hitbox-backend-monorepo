@@ -291,6 +291,11 @@ not five. This is what makes "why has this not shipped" answerable.
 `allowedTransitions` is precomputed so the UI enables exactly the buttons that
 will work, instead of discovering the rule by getting a 400.
 
+> **Packing:** which physical unit (NFC tag) goes into the parcel is chosen
+> by scanning at packing, and an order can't move to `SHIPPED` until that's
+> done — see [orders/order-unit-assignment-api.md](../orders/order-unit-assignment-api.md).
+> Until then `skuId` is a provisional placeholder.
+
 ### `PATCH /admin/orders/:orderId/status`
 
 ```jsonc
