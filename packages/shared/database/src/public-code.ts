@@ -144,6 +144,7 @@ export const PUBLIC_CODE_PREFIXES: Record<string, string> = {
     AdjustmentEntry: 'adj',
     FinanceLedgerEntry: 'fle',
     CogsReconciliation: 'cgr',
+    DropPricing: 'dpg',
     // markets
     Market: 'mkt',
     MarketCountry: 'mkc',

@@ -194,6 +194,14 @@ model RoyaltyPayout {
   transferInitiatedById String?   @db.Uuid
   transferInitiatedAt   DateTime?
 
+  // ── Rejection trail ───────────────────────────────────────────────────────
+  /// A rejected batch is status CANCELLED with these set (the enum has no
+  /// REJECTED value and is left as built). `rejectionReason` is mandatory at
+  /// the API, mirroring `approvalReason`. No FK — the record outlives the user.
+  rejectedById          String?   @db.Uuid
+  rejectedAt            DateTime?
+  rejectionReason       String?
+
   royaltyLedgerEntrys RoyaltyLedgerEntry[]
   /// Form 16A / 1099-NEC filings substantiated by this payout. Both report
   /// *paid* royalty income, so a filing points at the executed payout rather
