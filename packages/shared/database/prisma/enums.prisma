@@ -1,83 +1,47 @@
 // ============================================================================
-// SOURCE PARTIAL — shared enums used across modules. Owned by shared/database.
+// SOURCE PARTIAL — shared enums. Owned by shared/database.
+//
+// OWNERSHIP RULE: an enum lives here ONLY if two or more module partials
+// reference it. An enum used by a single module belongs in that module's own
+// partial, so the module carries it along when it is extracted into a service.
+// See docs/database-architecture.md §5.
 // ============================================================================
 
-enum ProductType {
-    GROUP
-    INDIVIDUAL
-}
-
-enum ProductCategory {
-    TRADING_CARD
-    FIGURE
-    POSTER
-    BOOK
-    AUTOGRAPH
-    JERSEY
-    DIGITAL_ASSET
-    ACCESSORY
-    GAME_BOX
-    CARD_PACK
-    OTHER
-}
-
-enum ProductGenre {
-    MUSIC
-    SPORTS
-    FILM
-    GAMING
-    PUBLICATION
-    ART
-    ANIME
-    OTHER
-}
-
-enum MarketplaceStatus {
-    TRENDING_NOW
-    NEW_RELEASE
-    TOP_CREATORS
-}
-
-enum ProductRarity {
-    COMMON
-    UNCOMMON
-    RARE
-    EPIC
-    LEGENDARY
-    EXCLUSIVE
-}
-
-enum UserRole {
-    USER
-}
-
-enum UserState {
-    ACTIVE
-    INACTIVE
-    SUSPENDED
-}
-
-enum ProductState {
-    ACTIVE
-    INACTIVE
-    SUSPENDED
-}
-
-enum CollectionVisibility {
+/// Public/private toggle. Used by users (User.profileVisibility) and
+/// collections (BuyerCollection.visibility).
+enum Visibility {
     PUBLIC
     PRIVATE
 }
 
-enum ClaimedStatus {
-    UNCLAIMED
-    CLAIMED
+/// Settlement currency. Used by markets, orders, payments, finance, resale and
+/// claims (ProductHistory.price). Every monetary column pairs an amount with
+/// one of these.
+enum Currency {
+    USD
+    INR
+    GBP
 }
 
-// Kind of ownership event recorded on the provenance ledger. Each product's
-// ledger is an append-only chain: MINT (origin, seller = HitBox) → CLAIM
-// (first buyer) → TRANSFER (0..n subsequent owner changes).
-enum LedgerTxType {
-    MINT
-    CLAIM
-    TRANSFER
+/// Regulatory clearance state. Used by products (Product.complianceStatus) and
+/// releases (ReleaseApproval.complianceStatus) — the release reviewer writes
+/// it, the catalog reflects it.
+enum ComplianceStatus {
+    PENDING
+    CLEARED
+    FLAGGED
+}
+
+/// Address nickname. Used by users (Address) and orders (OrderAddress), which
+/// snapshots the label alongside the address lines at purchase time.
+enum AddressLabel {
+    HOME
+    WORK
+    OTHER
+}
+
+/// Payment provider. Used by orders (Order.gateway) and payments
+/// (PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent).
+enum PaymentGateway {
+    STRIPE
 }

@@ -1,0 +1,56 @@
+// ============================================================================
+// ORGANIZATIONS MODULE SCHEMA  (packages/organizations/prisma/organizations.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Organization
+//
+// The tenant root. Almost every commercial record (drop, order, media,
+// royalty rule, gateway config) carries an optional organizationId, and
+// RoleAssignment uses an Organization id as its ORG scope.
+// ============================================================================
+
+/// A commercial entity on the platform: the HITBOX organization itself, a
+/// BRAND, or a solo artist operating as their own org (ARTIST_INDIVIDUAL).
+model Organization {
+  id         String           @id @db.Uuid
+  /// Human-readable record id (`org…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name       String
+  type       OrganizationType
+  slug       String           @unique
+  isActive   Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  artists               Artist[]
+  releaseApprovals      ReleaseApproval[]
+  artistCollections     ArtistCollection[]
+  drops                 Drop[]
+  artistBrandLinks      ArtistBrandLink[]
+  roleAssignments       RoleAssignment[]
+  mediaAssets           MediaAsset[]
+  orders                Order[]
+  paymentGatewayConfigs PaymentGatewayConfig[]
+  royaltyRules          RoyaltyRule[]
+  /// Royalties owed TO this organization (a brand deal), as distinct from the
+  /// rules that define them — named relations because an org can be both the
+  /// scope a rule applies to and the party it pays.
+  royaltyLedgerEntrys   RoyaltyLedgerEntry[] @relation("RoyaltyLedgerEntry_payeeOrganization")
+  royaltyPayouts        RoyaltyPayout[]
+  /// Invoices issued for this organization's drops — see packages/tax.
+  invoices              Invoice[]
+  /// Pending staff invitations scoped to this organization.
+  staffInvitations      StaffInvitation[]
+}
+
+/// Which kind of entity an Organization represents. HITBOX is the platform's
+/// own org (there is exactly one); ARTIST_INDIVIDUAL lets a solo artist hold
+/// commercial records without a separate brand behind them.
+enum OrganizationType {
+  HITBOX
+  BRAND
+  ARTIST_INDIVIDUAL
+}

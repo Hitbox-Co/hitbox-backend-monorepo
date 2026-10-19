@@ -1,0 +1,645 @@
+# Product Upload & Images API
+
+> Creating a drop, what the request body may actually look like, market
+> pricing, the image gallery, and the brand/artist pickers the form needs.
+>
+> Serialized units and NFC tags: [sku-api.md](sku-api.md).
+> Drop types and variants (size × color, card packs, …), including the new
+> optional `dropType` field on create:
+> [drop-types-and-variants.md](drop-types-and-variants.md).
+> Session handling and the Clerk flow: [authentication.md](authentication.md).
+> The rest of the admin write surface: [admin-write-apis.md](admin-write-apis.md).
+
+---
+
+> ⚠️ **The `skus` block is now refused for a drop that names an artist or an
+> organization** (`400 PRODUCTS_NOT_APPROVED`). Units may only be minted once
+> the drop's owner has approved it — create the drop, submit it for review,
+> then mint through `POST /admin/products/:productId/skus`. A drop with neither
+> owner is HitBox's own and still mints at creation. See
+> [drop-approval-lifecycle.md §10](drop-approval-lifecycle.md#10-minting-waits-for-approval).
+
+> 🆕 **`dropType`** — send a drop type code (`"T_SHIRT"`, `"CARD"`…) to give
+> the drop variant rules. Optional; omitted means a legacy drop, exactly as
+> before. A `REQUIRED`-variant type also refuses the `skus` block
+> (`400 PRODUCTS_VARIANTS_REQUIRED`) — add variants first, then mint per
+> variant. Responses now carry `dropType` and a richer `variants[]`. See
+> [drop-types-and-variants.md §6](drop-types-and-variants.md#6-drop-create--update--what-changed).
+
+## 1. If you are getting `422` on create — read this first
+
+**It is not your account.** A `422 VALIDATION_ERROR` is returned *after*
+authentication and authorization have both passed. A System Admin whose grant
+was wrong would get `401` or `403 AUTHZ_FORBIDDEN`, never `422`. So a 422 means
+the session and the capability were fine and the **request body** was refused.
+
+The schema used to reject seven shapes that ordinary clients send. All seven
+are now accepted:
+
+| What you send | Before | Now |
+|---|---|---|
+| `"totalSupply": "500"` (number as string) | ❌ 422 | ✅ → `500` |
+| `"isAgeSpecific": "false"` | ❌ 422 | ✅ → `false` |
+| `"description": ""` (blank field) | ❌ 422 | ✅ → `null` |
+| `"artistId": null` (nothing selected) | ❌ 422 | ✅ → `null` |
+| `"status": "draft"` (lower case) | ❌ 422 | ✅ → `DRAFT` |
+| `"groupCode": "123456780042"` (the 12-digit code the API returned) | ❌ 422 | ✅ → `0042` |
+| `"skus": { "count": "500" }` | ❌ 422 | ✅ → `500` |
+
+Two notes on the subtle ones:
+
+- **`"false"` really becomes `false`.** The obvious implementation,
+  `z.coerce.boolean()`, applies `Boolean(value)` — and `Boolean("false")` is
+  `true`, so the single most common wire spelling of false would have silently
+  flipped every age-gated drop. Accepted spellings are `true`/`false`,
+  `"true"`/`"false"`, `1`/`0`, `"1"`/`"0"`.
+- **`groupCode` takes a 4-digit suffix but the API returns 12 digits.** The
+  server generates 8 random digits and appends your suffix. A client
+  round-tripping the value it was handed is therefore sending 12 digits, so the
+  12-digit form is now accepted and its last four taken.
+
+### What is still rejected, and should be
+
+`totalSupply: "lots"`, `artistId: "not-a-uuid"`, `status: "LAUNCHED"`,
+`name: "   "`, `groupCode: "123"`, `totalSupply: -1`, and any unknown key
+inside `skus` or `images`. Leniency about *format* is not leniency about
+*content*.
+
+### Reading a 422 body
+
+Validation errors now report what arrived, not just what was expected:
+
+```json
+{
+  "error": {
+    "code": "VALIDATION_ERROR",
+    "message": "Request validation failed",
+    "details": [
+      {
+        "path": "totalSupply",
+        "message": "Expected number, received nan",
+        "code": "invalid_type",
+        "receivedType": "string",
+        "received": "lots"
+      }
+    ]
+  }
+}
+```
+
+`received` is truncated to 60 characters and omitted for objects and arrays —
+a validation error on an address or a token should not echo it into logs.
+
+### `400 BODY_REQUIRED` — the other one that looked like nothing
+
+```json
+{
+  "error": {
+    "code": "BODY_REQUIRED",
+    "message": "No request body was parsed. Send a JSON body with Content-Type: application/json.",
+    "details": {
+      "contentType": "text/plain;charset=UTF-8",
+      "hint": "The Content-Type is not application/json, so the JSON body parser skipped this request."
+    }
+  }
+}
+```
+
+Express 5 leaves `req.body` as `undefined` when no parser matched, where
+Express 4 gave `{}`. Previously that surfaced as a `422` whose only detail was
+`"": "Required"` — pointing at no field, with no clue that the real problem was
+a missing `Content-Type: application/json` header. It now says so.
+
+---
+
+## 2. `POST /api/v1/admin/products`
+
+**Capability:** `drop:manage` at `GLOBAL` scope. Today `HITBOX_SYSTEM_ADMIN`
+and `HITBOX_DROP_MANAGER` hold it — see
+[admin-write-apis.md 0](admin-write-apis.md).
+
+```http
+POST /api/v1/admin/products
+Authorization: Bearer <clerk session token>
+Content-Type: application/json
+```
+
+```json
+{
+  "name": "Neon Drift — Series 2",
+  "description": "Hand-finished resin figure.",
+  "vertical": "figures",
+  "category": "collectible",
+  "rarity": "limited",
+  "artistId": "6b5f3a10-1c2d-4e5f-8a9b-0c1d2e3f4a5b",
+  "organizationId": "9f8e7d6c-5b4a-3928-1706-fedcba987654",
+  "totalSupply": 500,
+  "purchaseLimit": 2,
+  "releaseStart": "2026-10-01T09:00:00.000Z",
+  "isAgeSpecific": false,
+  "groupCode": "0042",
+
+  "skus": { "count": 500 },
+
+  "prices": [
+    { "marketCode": "IN", "amount": "1999.00", "costOfGoods": "640.00" },
+    { "marketCode": "US", "amount": "24.99" }
+  ],
+
+  "images": [
+    { "assetId": "aaaa1111-…", "isPrimary": true, "altText": "Front" },
+    { "assetId": "bbbb2222-…", "altText": "Back" }
+  ]
+}
+```
+
+| Field | Type | Required | Notes |
+|---|---|---|---|
+| `name` | string 1–255 | **yes** | trimmed |
+| `description` | string ≤5000 | no | `""`/`null` → `null` |
+| `vertical` / `category` / `rarity` | string ≤64 | no | free-form, not enums |
+| `collectionId` / `artistId` / `organizationId` | uuid | no | `null` detaches on PATCH |
+| `totalSupply` | int ≥ 0 | no (`0`) | `0` = size not declared yet |
+| `purchaseLimit` | int ≥ 1 | no | omit for unlimited |
+| `releaseStart` / `releaseEnd` | ISO date | no | |
+| `status` | `DropStatus` | no (`DRAFT`) | case-insensitive |
+| `isAgeSpecific` | boolean | no (`false`) | |
+| `minimumAge` | int 0–120 | no | |
+| `oddsDisclosureRef` | string ≤500 | no | required for randomised drops |
+| `groupCode` | 4 or 12 digits | no (`0000`) | the **group suffix** |
+| `skus.count` | int 1–1000 | no | mints the edition in the same transaction |
+| `prices[]` | 1–200 entries | **yes** | at least one market price — see §3 |
+| `images[]` | ≤24 entries | no | attaches uploaded assets as the gallery |
+
+Everything in `prices`, `skus` and `images` is written in the **same
+transaction** as the product. The request either produces a complete drop —
+catalog row, pricing, units, gallery — or produces nothing.
+
+**Response `201`** carries the product, plus `skus` when units were minted.
+`images` on the product body is the array of URLs, as everywhere else.
+
+```json
+{
+  "data": {
+    "id": "0f1e2d3c-…",
+    "groupCode": "123456780042",
+    "name": "Neon Drift — Series 2",
+    "status": "DRAFT",
+    "totalSupply": 500,
+    "images": ["https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/drop-images/…"],
+    "skus": { "minted": 500, "firstSerial": 1, "lastSerial": 500, "skuCodes": ["…"], "tagsBound": 0 }
+  }
+}
+```
+
+**Asset ids and market references are validated before the product is
+written.** A typo'd uuid or an unknown market code fails the request without
+creating anything, so the whole payload does not have to be resubmitted to fix
+one id.
+
+Note the ordering inside the transaction: prices are written first, then units,
+then the gallery. Pricing is the required part, so a failure there aborts
+before 500 SKUs are minted.
+
+---
+
+## 3. Market pricing
+
+### At least one price is compulsory
+
+`prices` is **required** on `POST /admin/products`, with a minimum of one
+entry. A drop with no price is not purchasable anywhere: the storefront reads
+`ProductPrice` for the buyer's market and finds nothing to show and nothing to
+charge. Every previous route to that state was a half-finished form, so the API
+no longer allows it.
+
+> ⚠️ **Breaking change.** A create that worked yesterday without `prices` now
+> returns `422` with `prices: At least one market price is required`. Any
+> existing client or script that creates drops needs a price block added.
+
+### One price row per market
+
+`ProductPrice` is scoped to `(product, variant, market)`. An admin prices the
+drop once per market they sell in:
+
+```json
+{
+  "prices": [
+    { "marketCode": "IN", "amount": "1999.00", "costOfGoods": "640.00" },
+    { "marketCode": "US", "amount": "24.99",   "costOfGoods": "8.10" },
+    { "marketCode": "GB", "amount": "19.99" }
+  ]
+}
+```
+
+| Field | Type | Notes |
+|---|---|---|
+| `marketId` | uuid | **exactly one of** `marketId` or `marketCode` |
+| `marketCode` | string | `IN`, `US`, `GB` — matched case-insensitively |
+| `amount` | decimal string or number | required **unless** `isFree` |
+| `isFree` | boolean | default `false`. Cannot be combined with `amount` |
+| `costOfGoods` | decimal string or number | unit cost, so finance computes margin without re-deriving it |
+| `status` | `ACTIVE` \| `DISABLED` | default `ACTIVE`; `DISABLED` stages a price without making it live |
+| `variantId` | uuid | price one variant instead of the product as a whole |
+
+### There is no `currency` field, and that is deliberate
+
+The currency is the **market's** (`Market.currency`). Accepting one per price
+would let a drop be quoted in GBP inside a market that settles in INR, and no
+constraint in the schema would catch it. Send the amount; read the currency
+back off the response.
+
+```json
+{ "marketCode": "IN", "amount": "1999.00" }   →   currency: "INR"
+```
+
+### Money stays a string
+
+`amount` and `costOfGoods` accept a number or a string and are carried to the
+database **as strings**. A price that round-trips through a JavaScript float
+can arrive as `1999.9899999999998`, and `Decimal(12, 2)` would round it
+silently — on the column that decides what a buyer is charged. Send strings if
+you can; the column holds up to 10 digits and 2 decimal places.
+
+### `GET /admin/products/:id/prices`
+
+Capability `drop:read`. Base prices first, then variant prices, each by market
+code.
+
+```json
+{
+  "data": [
+    {
+      "priceId": "p1p1p1p1-…",
+      "marketId": "5a9e…",
+      "marketCode": "IN",
+      "marketName": "India",
+      "currency": "INR",
+      "amount": "1999.00",
+      "isFree": false,
+      "costOfGoods": "640.00",
+      "status": "ACTIVE",
+      "variantId": null,
+      "createdAt": "2026-09-21T10:04:22.118Z",
+      "updatedAt": "2026-09-21T10:04:22.118Z"
+    }
+  ]
+}
+```
+
+`amount` is `"0"` for a free price, and `null` only for a row that carries
+neither — which the API will not create.
+
+### `PUT /admin/products/:id/prices` — replace the price list 🔒 platform-wide
+
+```json
+{
+  "prices": [
+    { "marketCode": "IN", "amount": "2199.00" },
+    { "marketCode": "US", "amount": "24.99" }
+  ]
+}
+```
+
+Replaces the list wholesale: markets present before and absent now are removed.
+This is the endpoint the pricing table saves to — a table is edited as a whole,
+and "these are the prices now" is the only statement that can express *dropping
+a market*.
+
+The minimum of one still applies, so this can never de-price a drop.
+
+### `PATCH /admin/products/:id/prices/:priceId` 🔒 platform-wide
+
+Edit one row: `amount`, `isFree`, `costOfGoods` (`null` clears it), `status`.
+The free/amount pair is re-checked against the **stored** row, so flipping
+`isFree: false` on a row with no amount is refused rather than producing a
+priced entry with nothing to charge.
+
+### `DELETE /admin/products/:id/prices/:priceId` 🔒 platform-wide
+
+Removes one market's price. **Refused when it is the last one** —
+`409 PRODUCTS_PRICE_REQUIRED`. To stop selling in every market without
+deleting the pricing, set the rows to `status: "DISABLED"` instead.
+
+Deletion here is a real delete, not an archive. Unlike a gallery placement, a
+price point carries no history worth keeping: an order snapshots `unitPrice`,
+`amount` and `currency` at purchase time, so nothing downstream ever reads back
+through this row.
+
+### One caveat worth knowing
+
+`@@unique([productId, variantId, marketId])` does **not** actually prevent two
+base prices for the same market. `variantId` is nullable, and in Postgres NULLs
+never collide in a unique index — so the constraint silently does not apply to
+the most common row shape. Duplicates are therefore rejected in the API layer,
+both in the payload and when matching existing rows. If you write to
+`ProductPrice` by any other route, that guarantee is not there for you.
+
+### Which market does a buyer get?
+
+The storefront resolves the buyer's country to a market through
+`MarketCountry`, and falls back to the **default** market when the country maps
+nowhere. A drop priced only in `IN` is therefore invisible to a US buyer's
+price lookup. Price the markets you intend to sell in; see
+[admin-write-apis.md §1](admin-write-apis.md) for market administration.
+
+---
+
+## 4. Brand & artist pickers
+
+`POST /admin/products` takes `organizationId` and `artistId` as **uuids**, so
+the form needs somewhere to get them. These two directories are that source —
+they replace any hard-coded option list in the frontend, which goes stale the
+moment a brand is renamed, added or retired.
+
+Both are read-only, alphabetical by name, and paginated at 100 by default.
+
+### `GET /api/v1/admin/organizations`
+
+| Param | Type | Notes |
+|---|---|---|
+| `search` | string | matches name or slug, case-insensitively |
+| `type` | `HITBOX` \| `BRAND` \| `ARTIST_INDIVIDUAL` | case-insensitive |
+| `isActive` | boolean | |
+| `includeArchived` | boolean | default `false` |
+| `page` / `limit` | int | `1` / `100` (max 200) |
+
+```json
+{
+  "data": [
+    { "id": "1cabd03c-2b3b-4c9c-8269-28f617b2bc46", "name": "HitBox",
+      "type": "HITBOX", "slug": "hitbox", "isActive": true, "archivedAt": null,
+      "counts": { "artists": 0, "products": 4 } },
+    { "id": "f3bb6065-76c0-4fc9-8d57-a3fcd93d9bfa", "name": "Kaze (solo)",
+      "type": "ARTIST_INDIVIDUAL", "slug": "kaze-solo", "isActive": true,
+      "archivedAt": null, "counts": { "artists": 1, "products": 6 } },
+    { "id": "90ff1548-ae54-4d9c-9e01-ac552d41e4c7", "name": "Lumen Studios",
+      "type": "BRAND", "slug": "lumen-studios", "isActive": true,
+      "archivedAt": null, "counts": { "artists": 3, "products": 22 } }
+  ],
+  "meta": { "page": 1, "limit": 100, "total": 4, "totalPages": 1 }
+}
+```
+
+`type` is part of the row, not a detail: "Kaze" as an `ARTIST_INDIVIDUAL`
+organization and "Kaze" as an `Artist` record are different rows with
+different ids, and picking the wrong one files the drop under the wrong owner.
+Render the type next to the name.
+
+`GET /api/v1/admin/organizations/:organizationId` returns one, as
+`{ "data": OrganizationResponse }`.
+
+> The artist's own profile screen — where artists set their name, genre,
+> bio, avatar and cover — is [artist/artist-profile-api.md](../artist/artist-profile-api.md).
+
+### `GET /api/v1/admin/artists`
+
+| Param | Type | Notes |
+|---|---|---|
+| `search` | string | matches name or slug |
+| `organizationId` | uuid | **narrow to one brand's roster** |
+| `isActive` | boolean | |
+| `isPublic` | boolean | profile visibility — unrelated to `isActive` |
+| `includeArchived` | boolean | default `false` |
+| `page` / `limit` | int | `1` / `100` (max 200) |
+
+```json
+{
+  "data": [
+    { "id": "23ef4303-f877-4dc5-a375-ab4fe568b361", "name": "Kaze",
+      "slug": "kaze", "genre": "street", "avatarUrl": null,
+      "isPublic": true, "isActive": true, "archivedAt": null,
+      "organizationId": "f3bb6065-76c0-4fc9-8d57-a3fcd93d9bfa",
+      "organizationName": "Kaze (solo)",
+      "counts": { "products": 6, "collections": 2 } }
+  ],
+  "meta": { "page": 1, "limit": 100, "total": 3, "totalPages": 1 }
+}
+```
+
+`GET /api/v1/admin/artists/:artistId` returns one.
+
+**Where artist rows come from.** Inviting somebody as an artist through
+`POST /admin/authz/invitations` creates their `Artist` row immediately — before
+they have signed up — so they appear in this picker straight away and a drop
+can be filed against them. Pass `artistName` on the invitation; without it the
+name is derived from the email address and ends up on the product page. Full
+behaviour: [admin-provisioning.md 6a](../authorization/admin-provisioning.md).
+
+Invited artists arrive with `isPublic: false` (no bio or avatar yet) and, until
+they accept, no linked account. Both are fine for picking them on a drop form;
+filter with `?isPublic=true` only where the storefront is concerned.
+
+**Chain the two pickers.** After a brand is chosen, load
+`/admin/artists?organizationId=<chosen>` so the artist list only offers that
+brand's roster. `organizationName` is returned on every artist row so an
+unfiltered list is still unambiguous.
+
+### Both are gated on `drop:read`, not `brand-artist-record:read`
+
+That is deliberate, and worth knowing before you wire the permission checks.
+`HITBOX_DROP_MANAGER` — the role whose entire job is creating drops across
+every brand — holds **no** `brand-artist-record` grant. Gating the pickers on
+that resource would lock the role out of a form it cannot complete without
+them.
+
+What makes it safe is the payload. These are *directories*: id, name, type,
+slug, genre, avatar and counts. Brand and artist names are already printed on
+the storefront beside every product. The sensitive half of an artist record —
+bio, the linked user account, the compliance attestation and who signed it,
+payout terms — is **not selected by these queries at all**, and stays behind
+`brand-artist-record:read` on the artist profile screen, which is not built.
+
+### Replacing the hard-coded lists
+
+If your frontend currently ships something like:
+
+```ts
+export const ORGANIZATION_OPTIONS = [
+  { id: "90ff1548-…", name: "Lumen Studios", type: "BRAND" },
+  // …
+];
+```
+
+…swap it for a fetch of `/admin/organizations` and `/admin/artists` at form
+mount. The ids in a checked-in constant are environment-specific: they are seed
+uuids and will not exist in staging or production, so a form built on them
+fails validation with `400 PRODUCTS_…` or a foreign-key error the first time it
+meets a real database.
+
+---
+
+## 5. Images
+
+`ProductImage` joins a product to a `MediaAsset`. The **file** belongs to the
+media module; these endpoints only arrange **where it sits** on the drop —
+which is why `assetId` is the only required field.
+
+### The upload flow, end to end
+
+```
+1. POST /api/v1/admin/media/upload-url     → { assetId, uploadUrl, key }
+2. PUT  <uploadUrl>   (browser → S3 directly, no backend hop)
+3. POST /api/v1/admin/products/:id/images  { images: [{ assetId, … }] }
+```
+
+Step 1 needs `assetType: "DROP_IMAGE"` — that is the only asset type a product
+gallery accepts, and the only product-facing prefix (`drop-images/`) with
+public read. Attaching an `EXCLUSIVE_CONTENT` or `LEGAL_DOCUMENT` asset would
+produce a gallery URL that `403`s for every shopper, so it is refused at attach
+time rather than rendering as a permanently broken image. See
+[media/s3-configuration.md](../media/s3-configuration.md).
+
+### `GET /admin/products/:id/images`
+
+Capability `drop:read`.
+
+```json
+{
+  "data": [
+    {
+      "imageId": "c1c1c1c1-…",
+      "assetId": "aaaa1111-…",
+      "url": "https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/drop-images/2026/09/front.jpg",
+      "storageRef": "drop-images/2026/09/front.jpg",
+      "position": 0,
+      "isPrimary": true,
+      "altText": "Front",
+      "createdAt": "2026-09-15T10:04:22.118Z"
+    }
+  ]
+}
+```
+
+`url` is `null` on a deployment with no bucket configured; `storageRef` is
+always present so a client can build its own URL if it must.
+
+### `POST /admin/products/:id/images` — append 🔒 platform-wide
+
+```json
+{ "images": [ { "assetId": "bbbb2222-…", "altText": "Back", "isPrimary": false } ] }
+```
+
+→ `201` with the **whole** gallery.
+
+Re-attaching an asset already in the gallery is a `409
+PRODUCTS_IMAGE_DUPLICATE` — usually a double-submit, and silently moving the
+existing entry would hide that. Re-attaching one that was previously *removed*
+succeeds and revives it.
+
+### `PUT /admin/products/:id/images` — replace 🔒 platform-wide
+
+```json
+{
+  "images": [
+    { "assetId": "bbbb2222-…", "position": 0, "isPrimary": true },
+    { "assetId": "aaaa1111-…", "position": 1 }
+  ]
+}
+```
+
+Replaces the gallery wholesale. **This is the endpoint a drag-and-drop reorder
+should call**: after a reorder the client knows the final state, not the
+sequence of moves that produced it. An empty array clears the gallery — a
+legitimate thing to want, and impossible to express with a merge.
+
+Assets present before and absent now are archived, not deleted; the
+`MediaAsset` is never touched.
+
+### `PATCH /admin/products/:id/images/:imageId` 🔒 platform-wide
+
+```json
+{ "isPrimary": true }
+```
+
+Any of `position`, `isPrimary`, `altText`. Returns the whole gallery.
+
+### `DELETE /admin/products/:id/images/:imageId` 🔒 platform-wide
+
+Soft-removes the placement and returns the remaining gallery. If the removed
+image was primary, **the next one is promoted automatically** — a drop with a
+gallery and no primary renders with no image at all.
+
+### The two invariants, enforced on every write
+
+Neither is expressible in the schema (`position` is a plain `Int`, `isPrimary`
+a plain `Boolean`), and both render wrong rather than failing loudly, so both
+are normalised server-side every time:
+
+1. **Positions are contiguous, 0-first.** Send `0, 5, 5, 11` and you get back
+   `0, 1, 2, 3` in that relative order. Explicit `position` wins; entries
+   without one keep their arrival order after the positioned ones.
+2. **Exactly one image is primary.** Two claimants → the first wins and the
+   second is demoted (rather than a 422, because "make this the cover" is the
+   obvious intent). No claimant → position 0 gets it.
+
+This is why every gallery mutation returns the **entire** gallery: a response
+carrying only the row you touched would leave the client guessing what
+cascaded, and guessing wrong on every reorder.
+
+---
+
+## 6. Errors
+
+| HTTP | `code` | Raised when |
+|---|---|---|
+| `400` | `BODY_REQUIRED` | no JSON body was parsed — check `Content-Type` |
+| `400` | `PRODUCTS_MINTING_UNAVAILABLE` | `skus` sent but no minting provider wired in |
+| `400` | `PRODUCTS_SUPPLY_EXCEEDED` | `skus.count` > `totalSupply` in the same payload |
+| `400` | `PRODUCTS_MEDIA_UNAVAILABLE` | `images` sent on a deploy with no bucket configured |
+| `400` | `PRODUCTS_MARKETS_UNAVAILABLE` | no market-lookup provider is wired in |
+| `400` | `PRODUCTS_PRICE_MARKET_INVALID` | market missing, archived, inactive, or a foreign `variantId` |
+| `400` | `PRODUCTS_IMAGE_ASSET_INVALID` | asset missing, archived, or not a `DROP_IMAGE` |
+| `403` | `AUTHZ_FORBIDDEN` | grant is organization-scoped, not `:global` |
+| `404` | `PRODUCTS_NOT_FOUND` | no such drop |
+| `404` | `PRODUCTS_IMAGE_NOT_FOUND` | no such placement on this drop |
+| `409` | `PRODUCTS_IMAGE_DUPLICATE` | asset already in this gallery |
+| `409` | `PRODUCTS_PRICE_REQUIRED` | deleting the drop's only price |
+| `404` | `PRODUCTS_PRICE_NOT_FOUND` | no such price point on this drop |
+| `404` | `ORGANIZATIONS_NOT_FOUND` | no such organization |
+| `404` | `ARTIST_NOT_FOUND` | no such artist |
+| `409` | `PRODUCTS_CODE_TAKEN` | five consecutive `groupCode` collisions |
+| `422` | `VALIDATION_ERROR` | schema failure — see 1 |
+
+`PRODUCTS_PRICE_MARKET_INVALID` reports **every** bad market at once — a
+pricing table is filled in for several markets in one sitting, and one error
+per submission is a poor way to find three typos:
+
+```json
+{ "error": {
+    "code": "PRODUCTS_PRICE_MARKET_INVALID",
+    "message": "Cannot price: XX: no such market; GB: market is archived",
+    "details": null } }
+```
+
+`PRODUCTS_IMAGE_ASSET_INVALID` reports **every** bad asset at once, so a
+twelve-image gallery does not need twelve submissions to surface twelve
+problems:
+
+```json
+{ "error": {
+    "code": "PRODUCTS_IMAGE_ASSET_INVALID",
+    "message": "Cannot attach: aaaa1111-…: no such media asset; bbbb2222-…: assetType is LEGAL_DOCUMENT, expected one of DROP_IMAGE",
+    "details": null } }
+```
+
+---
+
+## 7. Checklist
+
+- [ ] Send at least one entry in `prices` — a create without it is now a `422`
+- [ ] Do **not** send `currency` on a price; read it back off the response
+- [ ] Send money as strings (`"1999.00"`), not floats
+- [ ] Save the pricing table with `PUT .../prices`, not N× `PATCH`
+- [ ] Offer `status: "DISABLED"` rather than delete when stopping sales in a market
+- [ ] Load `GET /admin/markets` to populate the market picker
+- [ ] Load `GET /admin/organizations` and `GET /admin/artists` for the owner pickers — never a hard-coded list
+- [ ] Filter the artist picker by `organizationId` once a brand is chosen
+- [ ] Show `type` beside each organization; the name alone is ambiguous
+- [ ] Send `Content-Type: application/json` — its absence is the `BODY_REQUIRED` case
+- [ ] Upload assets with `assetType: "DROP_IMAGE"`; nothing else attaches
+- [ ] Call `PUT .../images` after a drag-and-drop reorder, not N× `PATCH`
+- [ ] Re-render the gallery from the response of every mutation — positions cascade
+- [ ] Do not send `position` at all unless the user reordered; arrival order is respected
+- [ ] Expect the primary flag to move on its own when you delete the primary image
+- [ ] Read `details[].received` on a 422 before changing the payload by guesswork

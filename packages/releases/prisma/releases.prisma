@@ -1,0 +1,103 @@
+// ============================================================================
+// RELEASES MODULE SCHEMA  (packages/releases/prisma/releases.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ReleaseApproval
+//
+// The review workflow that gates Drop.status. Separated from products
+// because it is a different actor's surface (HitBox reviewer / compliance)
+// with its own audit expectations.
+// ============================================================================
+
+/// One approval decision on one version of a drop. `version` increments each
+/// time the drop is resubmitted, so the full review history is preserved rather
+/// than overwritten. The compliance fields are the reviewer's sign-off and are
+/// mirrored onto Product.complianceStatus once decided.
+model ReleaseApproval {
+  id                String           @id @db.Uuid
+  /// Human-readable record id (`rap…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  productId         String           @db.Uuid
+  drop              Drop             @relation(fields: [productId], references: [id])
+  approverId        String           @db.Uuid
+  approver          User             @relation("User_approver", fields: [approverId], references: [id])
+  status            ApprovalStatus
+  comment           String?
+  version           Int
+  decidedAt         DateTime?
+  complianceStatus  ComplianceStatus
+  oddsDisclosureRef String?
+  checkedById       String?          @db.Uuid
+  checkedBy         User?            @relation("User_checkedBy", fields: [checkedById], references: [id])
+  checkedAt         DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  // ── Who is entitled to decide this release ────────────────────────────────
+  /// Resolved from the drop's owner when the review opened, and frozen here.
+  ///
+  /// Stored rather than re-derived at decision time on purpose: a drop that
+  /// moves between a brand and an artist afterwards must not retroactively
+  /// change who was accountable for the sign-off already given.
+  authority         ApprovalAuthority
+  /// The artist whose sign-off is required, when `authority` is ARTIST.
+  requiredArtistId  String?          @db.Uuid
+  requiredArtist    Artist?          @relation(fields: [requiredArtistId], references: [id])
+  /// The organization whose sign-off is required, when `authority` is
+  /// ORGANIZATION. Denormalised from the product for the same freezing reason.
+  requiredOrganizationId String?     @db.Uuid
+  requiredOrganization   Organization? @relation(fields: [requiredOrganizationId], references: [id])
+
+  // ── Legal compliance acceptance ───────────────────────────────────────────
+  /// The approver's explicit acceptance of the legal compliance terms.
+  ///
+  /// An approval cannot be recorded without it. Kept as its own column rather
+  /// than folded into `complianceStatus` because they answer different
+  /// questions: `complianceStatus` is the platform's assessment of the drop,
+  /// this is a named person accepting liability for it.
+  legalComplianceAccepted   Boolean
+  legalComplianceAcceptedAt DateTime?
+  /// Which wording they accepted. Without it the trail says somebody ticked a
+  /// box but not which box, and the terms change over time.
+  legalComplianceVersion    String?
+
+  // ── Reopening ─────────────────────────────────────────────────────────────
+  /// Set on the version created when an administrator sends a rejected drop
+  /// back for another decision, so a reopened review is distinguishable from
+  /// an ordinary resubmission by the owner.
+  reopenedFromVersion Int?
+  reopenedById        String?        @db.Uuid
+  reopenedBy          User?          @relation("User_reopenedBy", fields: [reopenedById], references: [id])
+  reopenedAt          DateTime?
+  reopenReason        String?
+
+  @@unique([productId, version])
+}
+
+/// Who must sign a release off, decided from the drop's owner.
+///
+/// The platform is deliberately NOT a substitute for the other two: a HitBox
+/// administrator cannot approve a brand's or an artist's drop on their behalf,
+/// because the approval carries a legal acceptance that only the owner can
+/// give. PLATFORM applies to HitBox's own drops.
+enum ApprovalAuthority {
+  ARTIST
+  ORGANIZATION
+  PLATFORM
+  /// No owner to ask: the drop names neither an artist nor an organization, so
+  /// it is HitBox's own and there is nobody outside HitBox whose consent the
+  /// review exists to capture. These reviews are opened and decided in the same
+  /// transaction — see docs/admin/drop-approval-lifecycle.md.
+  ///
+  /// Appended, never inserted: an enum value's position is part of the physical
+  /// type in Postgres.
+  NONE
+}
+
+/// Outcome of a release review.
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}

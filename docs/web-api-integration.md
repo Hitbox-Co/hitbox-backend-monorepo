@@ -31,7 +31,7 @@ configuration. See `apps/backend/src/app.ts` for the current setting.
 
 **20 requests per 60 seconds, per client IP**, shared across all four endpoints (i.e. it's one
 budget, not 20 per endpoint) — noticeably tighter than the mobile API's 100/min, because these are
-unauthenticated public forms with no CAPTCHA yet (see [leads-schema.md](leads-schema.md) §6.4).
+unauthenticated public forms with no CAPTCHA yet (see [leads-schema.md](leads-schema.md) 6.4).
 Exceeding it returns:
 
 ```json
@@ -95,7 +95,7 @@ own HTML**, not by this endpoint — the footer/compact variants never send them
   "email": "fan@example.com",             // required
   "firstName": "Ava",                     // full-page variant
   "lastName": "Novak",                    // full-page variant
-  "country": "United States",             // full-page variant — send whatever your <select> uses; not format-constrained server-side (see leads-schema.md §2.4)
+  "country": "United States",             // full-page variant — send whatever your <select> uses; not format-constrained server-side (see leads-schema.md 2.4)
   "interests": ["Music", "Gaming"],        // array OR a single string OR omit entirely — all three are handled, see below
   "musicGenres": ["Rock"],
   "stateRegion": "California",
@@ -249,7 +249,7 @@ Backs `BusinessPartnerForm`. **Field name note**, same pattern as above:
 
 `jobTitle` and `website` are optional here, matching the form — earlier schema drafts had them
 required in storage; that's been relaxed to match reality (see
-[leads-schema.md](leads-schema.md) §2.1).
+[leads-schema.md](leads-schema.md) 2.1).
 
 `companyDescription` is a **different question** from the internal `relevantCapabilities` field
 (which nothing currently populates) — don't conflate the two if the form ever grows a

@@ -18,13 +18,13 @@ const ledgerHash = (productCode: string, tag: string, ownerId: string, dt: Date)
     createHash('sha256').update([productCode, tag, ownerId, dt.toISOString()].join('+')).digest('hex');
 
 async function main() {
-    const existing = await prisma.product.findUnique({ where: { tagId: TAG_ID } });
+    const existing = await prisma.drop.findUnique({ where: { tagId: TAG_ID } });
     if (existing) {
         console.log(`✔ tag ${TAG_ID} already provisioned → product ${existing.id} (${existing.claimedStatus})`);
         return;
     }
 
-    const product = await prisma.product.create({
+    const product = await prisma.drop.create({
         data: {
             productCode: PRODUCT_CODE,
             name: 'HitBox Demo Collectible',

@@ -11,3 +11,7 @@ export type { MeDto, PublicUserDto, UpdateProfileDto } from './dto/user.dto';
 
 // Service type (for other modules that receive it via DI)
 export type { UserService } from './service/user.service';
+
+// Events this module publishes.
+export { USERS_EVENTS } from './constants/users.constant';
+export type { AccountProvisionedPayload } from './events/users-event.payloads';

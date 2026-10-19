@@ -63,11 +63,52 @@ pnpm db:studio       # browse data
 pnpm db:seed         # fill the database with realistic dummy data (see below)
 ```
 
+### Applying schema changes to an existing database
+
+In this order, every time:
+
+```bash
+pnpm db:deploy          # apply pending migrations (non-interactive; `db:migrate` prompts)
+pnpm db:seed:authz      # reconcile the permission + role catalog
+pnpm db:seed:audit      # reconcile the audit event catalog — NOT optional, see below
+pnpm db:backfill:v31    # one-off: repair v3.1's column defaults and fill its new tables
+```
+
+`db:seed:audit` is not optional on any database. `AuditEvent.eventType` is a
+foreign key to `AuditEventType`, so on an unseeded database *every* audited
+write in the platform — a release decision, a refund, a SKU edit — fails with a
+`500`. All three seeds are idempotent.
+
+`db:backfill:v31` is a one-off for the v3.1 migration and is also idempotent;
+what it repairs and why is in
+[schema-v3.1-changes.md](schema-v3.1-changes.md) §8.
+
 ### Dummy data
 
 `pnpm db:seed` populates **every table** with realistic development data: 5 users, 6 artists, 8 collections, 16 products (with images, spread across trending / new releases / top creators), plus claims, ledger entries, ownership history and buyer collections — so the discover feed, product listings, search and detail endpoints all return real-looking responses immediately.
 
 Each `ArtistCollection` is seeded with a `maximumLimit` (the progress denominator) and one seed user (`liam_collects`) owns products across two collections, so `GET /collections/me/stats` returns meaningful numbers (owned 3 / total 20 = 15%).
+
+#### Admin demo data
+
+```bash
+pnpm db:seed:demo       # every business table, sized for the admin dashboard
+pnpm db:seed:finance    # just the finance tables, rebuilt from existing data
+```
+
+`db:seed:demo` is **destructive**: it deletes and re-creates every business row
+(it leaves the `Role` / `Permission` catalog alone). It also clears the four
+tables `db:backfill:v31` fills — `NfcTag`, `NfcVerification`, `CogsReconciliation`
+and `ExceptionCase` — without re-creating them, so re-run the backfill after it.
+
+`db:seed:finance` is the finance slice on its own. It creates no artist and no
+order; it reads the artists, drops, orders and claims already present and
+derives the royalty rules, accruals, payout batches, corrections and platform
+ledger from them — computing the money with `@hitbox/finance`'s own
+`calculateRoyalty` / `resolveRule` / `splitsOf` rather than a second formula
+that could drift from the one the API runs. `db:seed:demo` calls it at the end.
+What it produces, and the deals it models, are in
+[finance/demo-data.md](finance/demo-data.md).
 
 It is **idempotent**: every run wipes and re-creates the catalog data. Real accounts are safe — only users whose `clerkUserId` starts with `seed_` are touched. The script lives at [packages/shared/database/prisma/seed.ts](../packages/shared/database/prisma/seed.ts); edit the `USERS` / `ARTISTS` / `PRODUCTS` arrays at the top to shape the data.
 
@@ -121,8 +162,8 @@ curl -H "Authorization: Bearer <token>" http://localhost:8080/api/v1/users/me
 | Understand the architecture, module anatomy, DI, events | [hitbox-architecture.md](hitbox-architecture.md) |
 | See every endpoint, params, and error codes | [api-reference.md](api-reference.md) |
 | Understand auth validation + run the auth tests (`pnpm --filter @hitbox/auth test`) | [auth-testing.md](auth-testing.md) |
-| Add a new feature module | [hitbox-architecture.md §10](hitbox-architecture.md#10-adding-a-new-module-checklist) |
-| Change the database schema | [hitbox-architecture.md §8](hitbox-architecture.md#8-hybrid-prisma-architecture) |
+| Add a new feature module | [hitbox-architecture.md 10](hitbox-architecture.md#10-adding-a-new-module-checklist) |
+| Change the database schema | [hitbox-architecture.md 8](hitbox-architecture.md#8-hybrid-prisma-architecture) |
 
 ## Troubleshooting
 

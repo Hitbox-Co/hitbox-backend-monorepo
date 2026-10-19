@@ -11,8 +11,8 @@ import {
     CLAIM_OUTCOME,
     CLAIMS_ERROR_CODES,
     CLAIMS_EVENTS,
-    LEDGER_ORIGIN_OWNER,
 } from '../constants/claims.constant';
+import type { IMediaUrlResolver } from '../domain/interfaces/media-url-resolver.interface';
 import type {
     ClaimBodyDto,
     ClaimFlowResult,
@@ -22,20 +22,24 @@ import type {
     VerifyResult,
 } from '../dto/claims.dto';
 import {
+    basePriceOf,
     ClaimsRepository,
     displayNameOf,
+    readLedgerPayload,
     type LedgerRowFull,
-    type ProductForTag,
+    type SkuForTag,
 } from '../repository/claims.repository';
 
 interface ClaimsServiceDeps {
     claims: ClaimsRepository;
     eventBus: IEventBus;
     logger: Logger;
+    /** Optional: without it, product image URLs come back null. */
+    mediaUrls?: IMediaUrlResolver | undefined;
 }
 
 /** Minimal user shape needed to render an owner. */
-type OwnerLike = Pick<User, 'id' | 'username' | 'firstName' | 'lastName'>;
+type OwnerLike = Pick<User, 'id' | 'handle' | 'fullName'>;
 
 function generateClaimCode(): string {
     let digits = '';
@@ -43,75 +47,100 @@ function generateClaimCode(): string {
     return `${CLAIM_CODE_PREFIX}${digits}`;
 }
 
+/**
+ * The NFC claim flow.
+ *
+ * Every route is keyed by a tag, and a tag now identifies a **SKU** — one
+ * serialized item — rather than a product. That is the whole shape of this
+ * restructure: claim state, ownership and the provenance chain all live per
+ * item, so two buyers holding copies #7 and #8 of the same drop no longer
+ * share one claim record and one ledger.
+ */
 export class ClaimsService {
     constructor(private readonly deps: ClaimsServiceDeps) { }
 
     /** GET /verify/:tagId — read-only authenticity + ownership check. */
     async verify(tagId: string): Promise<VerifyResult> {
-        const product = await this.requireProduct(tagId);
-        const ledger = await this.deps.claims.getLedger(product.id);
+        const sku = await this.requireSku(tagId);
+        const ledger = await this.deps.claims.getLedger(sku.id);
         return {
             valid: true,
-            productId: product.id,
-            productCode: product.productCode,
-            name: product.name,
-            claimed: product.claimedStatus === 'CLAIMED',
-            claimedStatus: product.claimedStatus,
-            state: product.state,
-            owner: this.ownerView(product.owner),
+            skuId: sku.id,
+            skuCode: sku.skuCode,
+            serialNumber: sku.serialNumber,
+            productId: sku.drop.id,
+            groupCode: sku.drop.groupCode,
+            name: sku.drop.name,
+            claimed: sku.claimedStatus === 'CLAIMED',
+            claimedStatus: sku.claimedStatus,
+            status: sku.drop.status,
+            owner: this.ownerView(sku.owner),
             ledgerLength: ledger.length,
             verifiedAt: new Date().toISOString(),
         };
     }
 
-    /** GET /ledger/:tagId — the raw provenance chain for a product. */
+    /** GET /ledger/:tagId — the raw provenance chain for one SKU. */
     async ledger(tagId: string): Promise<LedgerEntryView[]> {
-        const product = await this.requireProduct(tagId);
-        const rows = await this.deps.claims.getLedger(product.id);
+        const sku = await this.requireSku(tagId);
+        const rows = await this.deps.claims.getLedger(sku.id);
         return rows.map((row) => this.ledgerView(row));
     }
 
     /**
-     * Create the "First Time" origin record for a tagged product, so its ledger
-     * shows the HitBox origin before anyone claims. Called by the product-created
-     * event subscriber; a no-op for products without an NFC tag.
+     * Create the "First Time" origin record for a tagged SKU, so its ledger
+     * shows the HitBox origin before anyone claims. A no-op for SKUs without
+     * an NFC tag.
+     *
+     * Previously driven by the `products.product.created` event. That no
+     * longer works: a product carries no tag, and its SKUs do not exist yet
+     * when it is created. The skus module owns tag provisioning and should
+     * call this when it binds a tag — until it publishes an event, the MINT
+     * row is written lazily inside the claim transaction instead, so a chain
+     * is never missing its origin.
      */
-    async ensureOriginForProduct(productId: string): Promise<void> {
-        const product = await this.deps.claims.findProductById(productId);
-        if (!product || !product.tagId) return;
-        await this.deps.claims.ensureOriginRecord(product);
+    async ensureOriginForSku(skuId: string): Promise<void> {
+        const sku = await this.deps.claims.findSkuById(skuId);
+        if (!sku || !sku.tagId) return;
+        await this.deps.claims.ensureOriginRecord(sku);
     }
 
     /**
      * POST /claims/:tagId — validate step. Reads the tag + ownership and tells
      * the app which screen to show. Does NOT claim anything. 404 if the tag is
-     * not registered to any product.
+     * not registered to any SKU.
      */
     async validate(tagId: string, userId: string): Promise<ValidateResult> {
-        const product = await this.requireProduct(tagId);
-        const claimed = product.claimedStatus === 'CLAIMED';
-        const claimedByYou = claimed && product.ownerId === userId;
+        const sku = await this.requireSku(tagId);
+        const claimed = sku.claimedStatus === 'CLAIMED';
+        const claimedByYou = claimed && sku.ownerId === userId;
         const screen: ValidateResult['screen'] = !claimed
             ? 'CLAIMABLE'
             : claimedByYou
                 ? 'ALREADY_CLAIMED_BY_YOU'
                 : 'ALREADY_CLAIMED';
+        const price = basePriceOf(sku);
         return {
             tagId,
             screen,
             claimedByYou,
-            product: {
-                id: product.id,
-                productCode: product.productCode,
-                name: product.name,
-                tagId: product.tagId,
-                priceInDollars: product.priceInDollars.toString(),
-                rewardPoints: product.rewardPoints,
-                state: product.state,
-                imageUrl: product.images[0]?.url ?? null,
+            sku: {
+                id: sku.id,
+                skuCode: sku.skuCode,
+                serialNumber: sku.serialNumber,
+                tagId: sku.tagId,
             },
-            owner: this.ownerView(product.owner),
-            claimedAt: product.claimedAt?.toISOString() ?? null,
+            product: {
+                id: sku.drop.id,
+                groupCode: sku.drop.groupCode,
+                name: sku.drop.name,
+                priceInDollars: price?.amount ?? null,
+                currency: price?.currency ?? null,
+                status: sku.drop.status,
+                imageUrl: this.imageUrlOf(sku),
+            },
+            owner: this.ownerView(sku.owner),
+            claimedAt: this.claimedAtOf(sku),
         };
     }
 
@@ -123,10 +152,10 @@ export class ClaimsService {
      *   app can show "already claimed by <name>" (`ALREADY_CLAIMED`).
      */
     async claim(tagId: string, userId: string, body: ClaimBodyDto): Promise<ClaimFlowResult> {
-        const product = await this.requireProduct(tagId);
+        const sku = await this.requireSku(tagId);
 
-        if (product.claimedStatus === 'CLAIMED') {
-            return this.alreadyClaimed(product, product.owner, userId);
+        if (sku.claimedStatus === 'CLAIMED') {
+            return this.alreadyClaimed(sku, sku.owner, userId);
         }
 
         const now = new Date();
@@ -137,7 +166,7 @@ export class ClaimsService {
         for (let attempt = 1; attempt <= CLAIM_CODE_MAX_ATTEMPTS; attempt += 1) {
             try {
                 const result = await this.deps.claims.claimByTag({
-                    product,
+                    sku,
                     userId,
                     ownerLabel,
                     claimCode: generateClaimCode(),
@@ -147,27 +176,33 @@ export class ClaimsService {
 
                 if (!result) {
                     // Lost the race — re-read and report whoever won.
-                    const fresh = await this.deps.claims.findProductByTagId(tagId);
-                    return this.alreadyClaimed(fresh ?? product, fresh?.owner ?? null, userId);
+                    const fresh = await this.deps.claims.findSkuByTagId(tagId);
+                    return this.alreadyClaimed(fresh ?? sku, fresh?.owner ?? null, userId);
                 }
 
                 await this.deps.eventBus.publish(CLAIMS_EVENTS.PRODUCT_CLAIMED, {
                     claimId: result.claim.id,
-                    productId: product.id,
+                    skuId: sku.id,
+                    productId: sku.drop.id,
                     userId,
                 });
 
                 return {
                     outcome: CLAIM_OUTCOME.CLAIMED,
                     claimedByYou: true,
-                    message: `You claimed "${product.name}". You now own it.`,
-                    owner: this.ownerView(me) ?? { id: userId, username: null, displayName: null },
-                    product: {
-                        id: product.id,
-                        productCode: product.productCode,
-                        name: product.name,
-                        tagId: product.tagId,
+                    message: `You claimed "${sku.drop.name}". You now own it.`,
+                    owner: this.ownerView(me) ?? { id: userId, handle: null, displayName: null },
+                    sku: {
+                        id: sku.id,
+                        skuCode: sku.skuCode,
+                        serialNumber: sku.serialNumber,
+                        tagId: sku.tagId,
                         claimedStatus: 'CLAIMED',
+                    },
+                    product: {
+                        id: sku.drop.id,
+                        groupCode: sku.drop.groupCode,
+                        name: sku.drop.name,
                     },
                     claimedAt: result.claim.claimedAt.toISOString(),
                     claim: {
@@ -193,7 +228,7 @@ export class ClaimsService {
     // ── helpers ───────────────────────────────────────────────────────────
 
     private alreadyClaimed(
-        product: Pick<ProductForTag, 'id' | 'productCode' | 'name' | 'tagId' | 'claimedAt'>,
+        sku: SkuForTag,
         owner: OwnerLike | null,
         callerId: string,
     ): ClaimFlowResult {
@@ -203,49 +238,135 @@ export class ClaimsService {
             outcome: CLAIM_OUTCOME.ALREADY_CLAIMED,
             claimedByYou,
             message: claimedByYou
-                ? `You already own "${product.name}".`
-                : `"${product.name}" is already claimed by ${ownerName}.`,
-            owner: this.ownerView(owner) ?? { id: '', username: null, displayName: null },
-            product: {
-                id: product.id,
-                productCode: product.productCode,
-                name: product.name,
-                tagId: product.tagId,
+                ? `You already own "${sku.drop.name}".`
+                : `"${sku.drop.name}" is already claimed by ${ownerName}.`,
+            owner: this.ownerView(owner) ?? { id: '', handle: null, displayName: null },
+            sku: {
+                id: sku.id,
+                skuCode: sku.skuCode,
+                serialNumber: sku.serialNumber,
+                tagId: sku.tagId,
                 claimedStatus: 'CLAIMED',
             },
-            claimedAt: product.claimedAt?.toISOString() ?? null,
+            product: {
+                id: sku.drop.id,
+                groupCode: sku.drop.groupCode,
+                name: sku.drop.name,
+            },
+            claimedAt: this.claimedAtOf(sku),
             claim: null,
         };
     }
 
-    private async requireProduct(tagId: string): Promise<ProductForTag> {
-        const product = await this.deps.claims.findProductByTagId(tagId);
-        if (!product) {
+    /**
+     * Takes a claim back — the claims side of payments' `IClaimRevocation`.
+     *
+     * The design document's day-21 step: a refunded collectible whose claim
+     * still stands would leave someone holding the certificate of authenticity
+     * for an object they returned, and nothing would stop them listing it for
+     * resale. So the claim is revoked, the owner cleared, and — if the tag came
+     * back damaged, missing or tampered with — the unit is quarantined for the
+     * window the refund workflow computed.
+     *
+     * Nothing is deleted. The claim row keeps its timestamp and gains a
+     * revocation; the hash chain gains a FLAG row rather than losing its CLAIM
+     * row. Provenance that can be edited is not provenance.
+     *
+     * A unit that was never claimed returns `revoked: false` and is not an
+     * error: refunding an order whose buyer never tapped the tag is ordinary.
+     */
+    async revokeClaim(input: {
+        skuId: string;
+        claimId?: string | null;
+        reason: string;
+        actorId: string | null;
+        resaleBlockedUntil: Date | null;
+    }): Promise<{ revoked: boolean; claimId: string | null; ledgerEntryId: string | null }> {
+        const sku = await this.deps.claims.findSkuById(input.skuId);
+        if (!sku) {
             throw AppError.notFound(
-                'No product is registered to this NFC tag',
+                'No serialized unit with that id',
                 CLAIMS_ERROR_CODES.TAG_NOT_FOUND,
             );
         }
-        return product;
+
+        const result = await this.deps.claims.revokeClaim({
+            sku,
+            claimId: input.claimId ?? null,
+            reason: input.reason,
+            resaleBlockedUntil: input.resaleBlockedUntil,
+            now: new Date(),
+        });
+
+        if (!result) {
+            this.deps.logger.info(
+                { skuId: input.skuId },
+                'claim revocation had nothing to revoke — the unit was not claimed',
+            );
+            return { revoked: false, claimId: null, ledgerEntryId: null };
+        }
+
+        this.deps.logger.info(
+            {
+                skuId: input.skuId,
+                claimId: result.claimId,
+                actorId: input.actorId,
+                resaleBlockedUntil: input.resaleBlockedUntil?.toISOString() ?? null,
+            },
+            'claim revoked',
+        );
+
+        await this.deps.eventBus.publish(CLAIMS_EVENTS.CLAIM_REVOKED, {
+            skuId: input.skuId,
+            claimId: result.claimId,
+            reason: input.reason,
+            actorId: input.actorId,
+            resaleBlockedUntil: input.resaleBlockedUntil?.toISOString() ?? null,
+        });
+
+        return { revoked: true, claimId: result.claimId, ledgerEntryId: result.ledgerEntryId };
+    }
+
+    private async requireSku(tagId: string): Promise<SkuForTag> {
+        const sku = await this.deps.claims.findSkuByTagId(tagId);
+        if (!sku) {
+            throw AppError.notFound(
+                'No item is registered to this NFC tag',
+                CLAIMS_ERROR_CODES.TAG_NOT_FOUND,
+            );
+        }
+        return sku;
+    }
+
+    /** `Sku` has no claimedAt column — the most recent claim row is the record. */
+    private claimedAtOf(sku: SkuForTag): string | null {
+        return sku.skuClaims[0]?.claimedAt.toISOString() ?? null;
+    }
+
+    private imageUrlOf(sku: SkuForTag): string | null {
+        const ref = sku.drop.dropImages[0]?.asset.storageRef;
+        if (!ref) return null;
+        return this.deps.mediaUrls?.publicUrl(ref) ?? null;
     }
 
     private ownerView(owner: OwnerLike | null | undefined): OwnerView | null {
         if (!owner) return null;
-        return { id: owner.id, username: owner.username, displayName: displayNameOf(owner) };
+        return { id: owner.id, handle: owner.handle, displayName: displayNameOf(owner) };
     }
 
     private ledgerView(row: LedgerRowFull): LedgerEntryView {
-        // Owner Id: "HitBox" for the origin record, else the recorded owner.
-        const ownerId = row.toUser ? displayNameOf(row.toUser) ?? row.originOwner : row.originOwner;
-        const isClaim = row.claimId !== null;
+        // Participants and the owner label live in `payload` now — the current
+        // BlockchainLedger has no user foreign keys.
+        const payload = readLedgerPayload(row.payload);
+        const isClaim = payload.claimId !== undefined;
         return {
             sequenceNo: row.sequenceNo,
             txType: row.txType,
-            productId: row.originProduct.productCode,
-            tag: row.originProduct.tagId,
-            ownerId,
-            dateTime: row.transactionDateTime.toISOString(),
-            hash: row.productBuyerHash,
+            productId: row.sku.drop.groupCode,
+            tag: row.sku.tagId,
+            ownerId: payload.ownerLabel,
+            dateTime: row.createdAt.toISOString(),
+            hash: row.currentHash,
             previousHash: row.previousHash,
             claimHistory: isClaim,
             peerToPeerTrading: isClaim,

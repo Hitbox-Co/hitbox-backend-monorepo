@@ -10,7 +10,7 @@ const prisma = new PrismaClient();
 const TAG_ID = '534A70C1610001';
 
 async function main() {
-    const product = await prisma.product.findUnique({ where: { tagId: TAG_ID } });
+    const product = await prisma.drop.findUnique({ where: { tagId: TAG_ID } });
     if (!product) {
         console.log(`tag ${TAG_ID} not provisioned — nothing to reset`);
         return;
@@ -18,10 +18,10 @@ async function main() {
     const id = product.id;
     // Order matters for FKs: CLAIM ledger rows (→ claims) first, then claims.
     await prisma.blockchainLedger.deleteMany({ where: { originProductId: id, sequenceNo: { gt: 0 } } });
-    await prisma.productClaim.deleteMany({ where: { productId: id } });
+    await prisma.skuClaim.deleteMany({ where: { productId: id } });
     await prisma.buyerCollection.deleteMany({ where: { productId: id } });
-    await prisma.productHistory.deleteMany({ where: { productId: id } });
-    await prisma.product.update({
+    await prisma.skuHistory.deleteMany({ where: { productId: id } });
+    await prisma.drop.update({
         where: { id },
         data: { claimedStatus: 'UNCLAIMED', ownerId: null, claimedAt: null },
     });

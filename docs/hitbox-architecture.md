@@ -1,5 +1,13 @@
 # HitBox Backend — Architecture
 
+> **Naming (v3.1 / v3.1.1).** `Product` / `ProductVariant` / `ProductPrice` /
+> `ProductImage` / `ProductClaim` / `ProductHistory` are now `Drop` /
+> `DropVariant` / `DropPrice` / `DropImage` / `SkuClaim` / `SkuHistory` — in
+> Prisma **and in the database**, as of v3.1.1. So a `Product…` mentioned below
+> is the old name of a table that has since been renamed; substitute from that
+> list. **No route, request or response changed.** The full mapping is in
+> [schema-v3.1-changes.md](schema-v3.1-changes.md).
+
 > The single document that explains **how the backend is built, why it is built that way, and how every piece talks to every other piece.**
 
 > **This document covers the mobile platform domain only** (`/api/v1/*`). The same `apps/backend`
@@ -71,7 +79,7 @@ hitbox-backend/
 ├── packages/
 │   ├── auth/                     # Clerk auth, webhooks, requireAuth middleware
 │   ├── users/                    # User profiles (local projection of Clerk users)
-│   ├── products/                 # Catalog: Product, ProductImage, ProductHistory
+│   ├── products/                 # Catalog: Drop, DropVariant, DropImage, DropPrice + drop types & variant rules
 │   ├── artist/                   # Owns Artist + ArtistCollection
 │   │   └── src/{profile,collection}/   # profile = reserved; collection = capacity port
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
@@ -206,7 +214,7 @@ export function bootstrap(): Router {
 Order matters and is deliberate:
 
 1. **users** is created first — it needs nothing from other modules.
-2. **auth** receives `usersModule.accountLookup` (the `IAccountLookup` **port** — see §6).
+2. **auth** receives `usersModule.accountLookup` (the `IAccountLookup` **port** — see 6).
 3. **discover** and **marketplace** receive their catalog ports from products.
 4. **artist** is created before **collections**, which receives `artistModule.collectionStats` (the `IArtistCollectionStats` port).
 5. Every router that needs authentication is built with `authModule.requireAuth`.
@@ -278,16 +286,33 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 |---|---|---|
 | `IAccountLookup` (auth) | `UserAccountLookup` (users) | resolve Clerk user → local account on every authenticated request |
 | `IProductDiscovery` (discover) | `ProductDiscoveryAdapter` (products) | lightweight product cards for the Discover feed |
-| `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist, badge) for the Marketplace feed |
+| `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist) for the Marketplace feed |
 | `IArtistCollectionStats` (collections) | `ArtistCollectionStatsAdapter` (artist) | `ArtistCollection` capacity (`Σ maximumLimit`) for the collection-progress stat |
+| `IMediaUrlResolver` (products, collections, claims) | closure over `S3ObjectStorage` (bootstrap) | a renderable URL for a `MediaAsset.storageRef` |
+| `IOrderLedger` (payments) | `OrderLedgerAdapter` (orders) | place / settle / cancel / refund an order; sweep expired stock holds |
+| `IOrderRevenueSource` (finance) | `OrderRevenueAdapter` (orders) | what a serialized unit sold for, and what it cost — the inputs to a royalty accrual |
+| `IFinancePostings`, `IRoyaltyReversal` (payments) | `FinanceLedgerService`, `RoyaltyAccrualService` (finance) | book a sale / refund / chargeback; un-earn a royalty when money goes back |
+| `IClaimRevocation` (payments) | `ClaimsService` (claims) | take ownership back and quarantine the tag on a refund |
+
+`IMediaUrlResolver` is declared **three times**, once per consumer, rather than
+shared. That is the same call discover and marketplace already make: each
+consumer owns its port, so none of the three grows a dependency on another
+feature package for a one-method interface. Bootstrap injects the same adapter
+into all three — a closure that returns a public URL for a key under a publicly
+readable prefix and `null` otherwise. It exists because `DropImage` stores an
+object-storage **key**, not a URL, and only the media module knows the bucket,
+region and which prefixes are public (see
+[media/s3-configuration.md](media/s3-configuration.md)).
 
 Note what this buys discover and marketplace: those modules have **zero database knowledge** — no `@hitbox/database` dependency at all. Each defines its own screen-level vocabulary (`DiscoverSection`: `trending` / `new_releases` / `top_creators`; `MarketplaceCategory`: `cards` / `figures` / `apparel` / …) and the products adapters map that to storage concerns (`MarketplaceStatus`, `ProductCategory` sets, ordering). Extracting either into a service later means swapping one adapter for an HTTP client.
 
-**Collections is the third flavor of module:** it *owns a table* (`BuyerCollection`) like products/users, *and* consumes a port. Its rows embed a product card, read by traversing the `product` relation **declared in its own partial** (`collections.prisma`) — a documented, deliberate shortcut at the database layer. On extraction, that include becomes a products-port call.
+**Collections is the third flavor of module:** it *owns a table* (`BuyerCollection`) like products/users, *and* consumes ports. Its rows embed a product card, read by traversing the `sku` relation **declared in its own partial** (`collections.prisma`) and then `sku.product` — a documented, deliberate shortcut at the database layer. On extraction, both hops become port calls.
+
+A shelf row points at a **SKU**, not a product (`@@unique([userId, skuId])`): a buyer owns serialized item #14 of an edition, and may hold several SKUs of the same drop.
 
 For the **collection-progress stat** the work is split cleanly across the boundary:
 
-- **collections** (owns `BuyerCollection`) aggregates the user's own rows: how many items total, which distinct `ArtistCollection`s they have products from, and how many of their items belong to a collection. This is pure own-table work.
+- **collections** (owns `BuyerCollection`) aggregates the user's own rows: how many items total, which distinct `ArtistCollection`s they have products from, and how many of their items belong to a collection. It reaches `product.collectionId` through `sku.product`.
 - **artist** (owns `ArtistCollection`) answers one question through the `IArtistCollectionStats` port: given those collection ids, what is each one's `maximumLimit`? Collections sums them for the denominator.
 
 Neither module reaches into the other's table. `progress = ownedInCollections / Σ maximumLimit`, computed in the collections service from the two halves. This is why `artist` exists as its own package rather than a folder under products: the artist domain (profile + collections) is a distinct future service, and the progress feature already treats it as one across a port.
@@ -309,9 +334,20 @@ Current event catalog:
 | `auth.user.registered` | auth (webhook) | users (upsert) | `UserRegisteredPayload` |
 | `auth.user.updated` | auth (webhook) | users (upsert) | `UserUpdatedPayload` |
 | `auth.user.deleted` | auth (webhook) | users (soft delete) | `UserDeletedPayload` |
-| `products.product.created` | products | — (future: notifications, search index) | `{ productId, productCode }` |
+| `products.product.created` | products | — (future: notifications, search index) | `{ productId, groupCode }` |
 | `products.product.updated` | products | — | `{ productId }` |
 | `products.product.archived` | products | — | `{ productId }` |
+| `claims.product.claimed` | claims | **finance** (accrue a royalty), **orders** (link `Order.claimId`), collections | `ProductClaimedPayload` |
+| `claims.claim.revoked` | claims | — | `ClaimRevokedPayload` |
+| `finance.royalty.accrued` / `.reversed` | finance | — | see `@hitbox/finance` |
+| `finance.payout.scheduled` / `.paid` | finance | — (artist notification is the obvious next one) | see `@hitbox/finance` |
+| `payments.payment.succeeded` / `.failed` | payments | — | see `@hitbox/payments` |
+| `payments.refund.*`, `payments.dispute.*` | payments | — | see `@hitbox/payments` |
+
+The claim event is the one worth noticing: it is what makes **payment and
+ownership decoupled** real. A royalty is earned when the physical item reaches
+its buyer and the tag is tapped, not when the card clears — see
+[finance/royalty-lifecycle.md](finance/royalty-lifecycle.md).
 
 **Delivery semantics today:** in-process, at-most-once, no retries. Handlers are written idempotently (upserts, guarded updates) so that upgrading to a broker (at-least-once + retries) requires changing **one line** — the `eventBus` instantiation in shared.
 
@@ -326,10 +362,16 @@ packages/shared/database/prisma/base.prisma    ← generator + datasource (poole
 packages/shared/database/prisma/enums.prisma   ← shared enums (used across modules)
 packages/auth/prisma/auth.prisma               ← AuthWebhookEvent
 packages/users/prisma/users.prisma             ← User
-packages/products/prisma/products.prisma       ← Product, ProductHistory, ProductImage
+packages/products/prisma/products.prisma       ← Drop, DropVariant, DropVariantOption, DropImage,
+                                                 DropPrice, DropType, DropTypeDimension,
+                                                 DropTypeDimensionValue
+                                                 (docs/admin/drop-types-and-variants.md)
 packages/artist/prisma/artist.prisma           ← Artist, ArtistCollection (has maximumLimit)
-packages/claims/prisma/claims.prisma           ← ProductClaim, BlockchainLedger
+packages/skus/prisma/skus.prisma               ← Sku, NfcVerification (claim state + taps)
+packages/supply/prisma/supply.prisma           ← Vendor, SupplyBatch, NfcTag (the chip itself)
+packages/claims/prisma/claims.prisma           ← SkuClaim, BlockchainLedger, SkuHistory
 packages/collections/prisma/collections.prisma ← BuyerCollection
+packages/media/prisma/media.prisma             ← MediaAsset (the upload registry)
 ```
 
 ### The merge pipeline
@@ -371,7 +413,9 @@ Cross-module relations (e.g. `Product.owner → User`) work because Prisma sees 
 ```text
 1. index.ts        loads root .env (before ANY app import — env.ts validates at import time)
 2. app.ts          cors → helmet → morgan → express.json (captures rawBody) → urlencoded
-3. routes.ts       /api/v1/{health, auth, users, products, discover, marketplace, collections}
+                   then /webhooks/payments (outside /api/v1, own rate-limit budget)
+3. routes.ts       /api/v1/{health, auth, users, products, discover, marketplace, collections,
+                            checkout, refunds, admin/payments, admin/finance, …}
 4. requireAuth     (protected routes only) verifies JWT, attaches req.auth
 5. controller      Zod-parses input → calls service
 6. service         business rules; throws AppError; publishes events
@@ -394,7 +438,7 @@ Error envelope — everything non-2xx has this exact shape:
 
 Using `orders` as the example:
 
-1. `packages/orders/` with the standard folder skeleton (§3) and a `package.json` copied from products (library — no dev/start scripts, `main: ./src/index.ts`).
+1. `packages/orders/` with the standard folder skeleton (3) and a `package.json` copied from products (library — no dev/start scripts, `main: ./src/index.ts`).
 2. Models in `packages/orders/prisma/orders.prisma`; shared enums go in `enums.prisma`.
 3. `pnpm db:migrate` — merge picks the new partial up automatically.
 4. Implement `repository → service → controller`, DTOs in `dto/`, error codes + event names in `constants/`.
@@ -402,6 +446,129 @@ Using `orders` as the example:
 6. Wire it in `apps/backend/src/bootstrap.ts` and mount its router in `routes.ts`.
 7. Needs data from another module? Subscribe to its **events** or define a **port** and have bootstrap inject the adapter. Never import another module's service/repository classes directly.
 8. `pnpm install` (add `@hitbox/orders: workspace:*` to the backend's dependencies).
+
+---
+
+## 10a. The SKU-centric restructure
+
+The catalog and provenance schema was reshaped after the first draft of this
+document. The short version, because it changes how three modules read:
+
+| Concept | Before | Now |
+|---|---|---|
+| Product identity | `Product.productCode` | `Product.groupCode` |
+| Catalog facets | `ProductType` / `ProductCategory` / `ProductGenre` / `ProductRarity` enums | `vertical` / `category` / `rarity` free-form `String?`; genre removed |
+| Lifecycle | `Product.state` (`ProductState`) | `Product.status` (`DropStatus`) + `isActive` + `archivedAt` |
+| Price | `Product.priceInDollars` | `DropPrice` rows, per (drop, variant, market), versioned by `effectiveFrom` |
+| Images | `ProductImage.url` | `DropImage.assetId` → `MediaAsset.storageRef` |
+| NFC tag, claim state, owner | `Product.tagId` / `claimedStatus` / `ownerId` | `Sku.tagId` / `claimedStatus` / `ownerId` |
+| Provenance | `ProductHistory.productId`, one ledger per product | `SkuHistory.skuId`, one ledger chain per **SKU** |
+| Buyer shelf | `BuyerCollection.productId` | `BuyerCollection.skuId` |
+| Ledger participants | `fromUser` / `toUser` FKs, `originProductId` | `skuId` + a `payload` JSON column |
+
+**The through-line is serialization.** A physical tag is glued to one item, so
+claim state, ownership and the hash chain all moved from the catalog entry to
+the `Sku`. Two buyers holding copies #7 and #8 of the same drop previously
+shared one claim record and one ledger; now each has its own.
+
+Three fields had no replacement and were **removed from the API** rather than
+stubbed: `rewardPoints`, the marketplace `badge` (`Product.marketplaceStatus`),
+and price sorting (not expressible against a market-scoped price table without
+a denormalized column or raw SQL). `popular` now orders by minted SKU count, a
+proxy for edition size rather than sales.
+
+### Release approval authority
+
+`ReleaseApproval` carries `authority` — `ARTIST`, `ORGANIZATION` or `PLATFORM`
+— resolved from the drop's owning organization when the review opens and frozen
+on the row. It is the one place in the platform where a capability check is
+deliberately **not** sufficient: holding `release-approval:manage:global` lets
+you reach every review, and still does not let you approve a brand's drop,
+because an approval carries a named person's acceptance of the legal compliance
+terms and an administrator cannot give that on someone else's behalf.
+
+The asymmetry is the design: **consent is narrow, refusal is broad.** An
+administrator may reject and may reopen; they may not approve, and an override
+can reverse a decision only toward `REJECTED`. See
+[admin/admin-write-apis.md 4.0](admin/admin-write-apis.md).
+
+### Invited artists — a worked example of event coupling
+
+`POST /admin/authz/invitations` creating an `Artist` row is the clearest
+example in the codebase of the **event** mechanism doing what ports cannot:
+
+- access-control publishes `access-control.staff.invited` and
+  `…staff.invitation-accepted`. It does not know what an artist is.
+- artist subscribes in its own factory and writes the row.
+- A provisioning failure is logged and swallowed, so an invitation that was
+  genuinely sent never reports an error because another module's table was
+  unhappy. A port would have made that a hard dependency in the wrong
+  direction.
+
+The event carries the role's **permission keys**, so the subscriber decides
+from capabilities (`brand-artist-record:*:own`) rather than from the role name
+— the same rule the rest of the platform follows for authorization, applied to
+a business decision. See
+[authorization/admin-provisioning.md 6a](authorization/admin-provisioning.md).
+
+### The `skus` module and its port
+
+`@hitbox/skus` owns `Sku` and is now a full module rather than a schema
+partial: minting, per-drop reads and single-unit detail at
+`/api/v1/admin/products/:productId/skus` and `/api/v1/admin/skus`.
+
+It illustrates two of the coupling rules cleanly:
+
+- **A port, consumer-defined.** Products declares `ISkuMinting`
+  (`domain/interfaces/sku-minting.interface.ts`) and bootstrap injects the skus
+  service as the implementation, so `POST /admin/products` can create a drop
+  and mint its edition in one transaction while products never writes the `Sku`
+  table. The contract passes a `Prisma.TransactionClient`, which is what makes
+  the two writes atomic across a module boundary.
+- **Visibility resolved from grants, never from role names.**
+  `domain/sku-access.ts` turns the caller's permissions into which blocks of a
+  unit the response may contain — the same pattern as the dashboard's
+  `dashboard-access.ts`. It also refuses `PUBLIC` and `OWN` scopes explicitly,
+  because `PUBLIC` has *ALL* breadth and a bare capability check on an admin
+  route would otherwise admit every signed-in buyer.
+
+The full surface, with the per-role matrix: [admin/sku-api.md](admin/sku-api.md).
+
+Minting writes no provenance. The seq-0 `MINT` row of a unit's hash chain is
+created lazily by `@hitbox/claims` on first use, so the ledger stays
+append-only under one owner.
+
+### The `supply` module — upstream of `skus`
+
+`@hitbox/supply` owns `Vendor`, `SupplyBatch` and `NfcTag`: who manufactures
+chips and merchandise, which cartons arrived, and which chips exist as stock.
+It went from a schema-only partial to a full module when the chip-inventory and
+metrics APIs were built.
+
+The boundary against `skus` is drawn at a physical event: **supply registers a
+chip into inventory, `skus` embeds it in a unit.** `NfcTag` was moved from the
+`skus` partial to the `supply` partial to match — a metadata-only move, since
+`merge-schema.mjs` concatenates partials and the merged schema was byte-for-byte
+equivalent apart from ordering.
+
+Three rules it demonstrates:
+
+- **One resource per secret, not one flag per module.** Consignment headers are
+  gated on `drop:read`, the chip inventory on `nfc-tag-claim:read`, intake
+  writes on `nfc-tag-claim:manage`, and the rollup on
+  `reports-dashboards:read`. A Drop Manager consequently sees every carton and
+  not one chip.
+- **The same `PUBLIC`-scope refusal as `skus`.** `domain/supply-access.ts`
+  discards `PUBLIC` and `OWN` grants before anything else runs, because
+  `BUYER_COLLECTOR` holds `drop:read:public` and `PUBLIC` has *ALL* breadth.
+- **A port for anything the deployment owns.** `ITagCipher` is declared here
+  and implemented in `apps/backend/src/adapters/tag-cipher.ts`, because the
+  chip-UID key belongs to the deployment. A module deriving its own key would
+  have that key in the repository; absent one, chip registration answers 503
+  rather than writing rows no real tap could match.
+
+The full surface, with the per-role matrix:
+[admin/supply-inventory-api.md](admin/supply-inventory-api.md).
 
 ---
 

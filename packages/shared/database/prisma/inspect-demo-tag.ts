@@ -5,16 +5,16 @@ const prisma = new PrismaClient();
 const TAG = '534A70C1610001';
 
 async function main() {
-    const product = await prisma.product.findUnique({
+    const product = await prisma.drop.findUnique({
         where: { tagId: TAG },
         include: { owner: { select: { id: true, username: true, email: true } } },
     });
     if (!product) { console.log('tag not provisioned'); return; }
 
     const [claims, ledger, history, collections] = await Promise.all([
-        prisma.productClaim.findMany({ where: { productId: product.id } }),
+        prisma.skuClaim.findMany({ where: { productId: product.id } }),
         prisma.blockchainLedger.findMany({ where: { originProductId: product.id }, orderBy: { sequenceNo: 'asc' } }),
-        prisma.productHistory.findMany({ where: { productId: product.id } }),
+        prisma.skuHistory.findMany({ where: { productId: product.id } }),
         prisma.buyerCollection.findMany({ where: { productId: product.id } }),
     ]);
 

@@ -30,14 +30,20 @@ export class CollectionController {
         res.json({ data: await this.service.getStats(auth.accountId) });
     });
 
-    /** PATCH /collections/me/:productId 🔒 */
+    /**
+     * PATCH /collections/me/:skuId 🔒
+     *
+     * Was `:productId`. The shelf is keyed by SKU since the restructure —
+     * a buyer can own several serialized SKUs of one product, so a product
+     * id no longer identifies a single shelf row.
+     */
     setVisibility: RequestHandler = asyncHandler(async (req, res) => {
         const auth = req.auth;
         if (!auth) throw AppError.unauthorized();
         const { visibility } = updateVisibilitySchema.parse(req.body);
         const item = await this.service.setVisibility(
             auth.accountId,
-            req.params.productId as string,
+            req.params.skuId as string,
             visibility,
         );
         res.json({ data: item });

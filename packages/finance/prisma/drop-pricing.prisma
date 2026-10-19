@@ -1,0 +1,61 @@
+// ============================================================================
+// DROP PRICING  (packages/finance/prisma/drop-pricing.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: DropPricing
+//
+// Spec name is "DropPrice", but that model already exists (packages/products —
+// one row per drop × market). This table is the *versioned entry record* that
+// sits in front of it: COGS and both sales prices are entered together, once,
+// and each new version is projected onto the per-market DropPrice rows that
+// orders read. See docs/finance/cogs-royalty-payout-gaps.md.
+// ============================================================================
+
+/// One versioned (COGS + USD price + INR price) entry for a drop.
+///
+/// The three money inputs are written together and never edited — a change is
+/// a new row with the next `version`, and the previous row is closed
+/// (`effectiveTo` set, status DISABLED). `grossProfitUsd` / `grossProfitInr`
+/// are Postgres GENERATED columns (see the migration): the database computes
+/// them, so they can never disagree with the inputs. The client never writes
+/// them.
+///
+/// `dropId` and `approvedById` are plain ids with no foreign key, same rule as
+/// the other finance records: the pricing history must outlive both the
+/// approver's account and any later change to the drop row, and it keeps this
+/// table additive (no back-relation on Drop).
+model DropPricing {
+  id             String          @id @db.Uuid
+  /// Human-readable record id (`dpg…`). Unique, never a foreign key.
+  publicCode     String?         @unique @db.VarChar(32)
+  dropId         String          @db.Uuid
+  /// 1 for the first entry, +1 for each successor. Unique per drop.
+  version        Int
+  /// Unit cost in USD; projected onto the USD market row.
+  costOfGoods    Decimal         @db.Decimal(12, 2)
+  /// Unit cost in INR; projected onto the INR market row. Entered together with
+  /// the USD figures (product decision; supersedes the single-global-COGS spec).
+  costOfGoodsInr Decimal         @db.Decimal(12, 2)
+  salesPriceUsd  Decimal         @db.Decimal(12, 2)
+  salesPriceInr  Decimal         @db.Decimal(12, 2)
+  /// GENERATED ALWAYS AS (salesPriceUsd - costOfGoods) STORED. Read-only.
+  grossProfitUsd Decimal?        @default(dbgenerated("(\"salesPriceUsd\" - \"costOfGoods\")")) @db.Decimal(12, 2)
+  /// GENERATED ALWAYS AS (salesPriceInr - costOfGoodsInr) STORED. Read-only.
+  grossProfitInr Decimal?        @default(dbgenerated("(\"salesPriceInr\" - \"costOfGoodsInr\")")) @db.Decimal(12, 2)
+  status         DropPriceStatus @default(ACTIVE)
+  effectiveFrom  DateTime        @default(now())
+  /// Null while this is the current version.
+  effectiveTo    DateTime?
+  /// Where the cost figure came from, e.g. "vendor quote", "monthly reconciliation".
+  costSource     String?
+  /// Why a successor version changed the cost or price.
+  varianceReason String?
+  /// The entering user, who is also the approver at creation (single step).
+  createdById    String?         @db.Uuid
+  approvedById   String?         @db.Uuid
+  approvedAt     DateTime?
+  createdAt      DateTime        @default(now())
+
+  @@unique([dropId, version])
+  @@index([dropId, effectiveFrom])
+}

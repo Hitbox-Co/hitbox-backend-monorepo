@@ -4,6 +4,7 @@ allowBuilds:
   "@prisma/client": true
   "@prisma/engines": true
   "@clerk/shared": true
+  sharp: true
 
 packages:
   - "apps/*"

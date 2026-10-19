@@ -15,7 +15,8 @@ export { createRateLimiter } from './middleware/rate-limit.middleware';
 export type { RateLimiterOptions } from './middleware/rate-limit.middleware';
 
 // Cache
-export { getRedis } from './cache/redis';
+export { createRedisSubscriber, getRedis } from './cache/redis';
+export type { Redis } from './cache/redis';
 
 // Utils
 export { asyncHandler } from './utils/async-handler';

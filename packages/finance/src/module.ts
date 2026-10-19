@@ -1,0 +1,302 @@
+import { Router } from 'express';
+import type { Request, RequestHandler } from 'express';
+import type { PrismaClient } from '@hitbox/database';
+import { createModuleLogger } from '@hitbox/shared';
+import type { IEventBus } from '@hitbox/shared';
+import {
+    FINANCE_MANAGE_CAPABILITY,
+    DROP_PRICING_CAPABILITY,
+    FINANCE_MODULE,
+    FINANCE_READ_CAPABILITY,
+    PAYOUT_APPROVE_CAPABILITY,
+    PAYOUT_TRANSFER_CAPABILITY,
+    ROYALTY_RATE_CAPABILITY,
+} from './constants/finance.constant';
+import { CogsRoyaltyPayoutController } from './controller/cogs-royalty-payout.controller';
+import { FinanceController } from './controller/finance.controller';
+import type { FinanceAccessResolver } from './controller/finance.controller';
+import type { IFinanceAuditRecorder } from './domain/interfaces/audit-recorder.port';
+import { NOOP_FINANCE_AUDIT } from './domain/interfaces/audit-recorder.port';
+import type { IOrderRevenueSource } from './domain/interfaces/order-revenue.interface';
+import { PayoutReportingAdapter } from './domain/payout-reporting.adapter';
+import { FinanceLedgerRepository } from './repository/finance-ledger.repository';
+import { PayoutRepository } from './repository/payout.repository';
+import { PublicCodeResolver } from './domain/public-codes';
+import { DropPricingRepository } from './repository/drop-pricing.repository';
+import { RoyaltyLedgerRepository } from './repository/royalty-ledger.repository';
+import { RoyaltyRuleRepository } from './repository/royalty-rule.repository';
+import { ArtistRoyaltyRateService } from './service/artist-royalty-rate.service';
+import { DropPricingService } from './service/drop-pricing.service';
+import { FinanceLedgerService } from './service/finance-ledger.service';
+import { PayoutDecisionService } from './service/payout-decision.service';
+import { QuarterlyPayoutService } from './service/quarterly-payout.service';
+import { RoyaltyAccrualService } from './service/royalty-accrual.service';
+import { RoyaltyPayoutService } from './service/royalty-payout.service';
+import { RoyaltyRuleService } from './service/royalty-rule.service';
+
+/** Structural guard — the shape of `requirePermission`, not an import. */
+export interface FinancePermissionGuard {
+    requirePermission(
+        capability: string,
+        options?: {
+            /** May be async: resolving the owner can need a database read. */
+            context?: (
+                req: Request,
+            ) =>
+                | { organizationId?: string | null; ownerId?: string | null }
+                | Promise<{ organizationId?: string | null; ownerId?: string | null }>;
+            globalOnly?: boolean;
+        },
+    ): RequestHandler;
+}
+
+/** The claim event this module accrues against. Matches @hitbox/claims. */
+export interface ClaimedEventPayload {
+    claimId: string;
+    skuId: string;
+    productId: string;
+    userId: string;
+}
+
+export interface FinanceModuleDeps {
+    prisma: PrismaClient;
+    eventBus: IEventBus;
+    guard: FinancePermissionGuard;
+    resolveAccess: FinanceAccessResolver;
+    /** Orders answers "what was this unit sold for" — see the port. */
+    orderRevenue: IOrderRevenueSource;
+    /** Defaults to a no-op so unit tests need no audit wiring. */
+    audit?: IFinanceAuditRecorder;
+    /**
+     * The event name to accrue on. Defaults to the claims module's
+     * `claims.product.claimed`; injectable so a test can drive the subscriber
+     * without importing the claims package.
+     */
+    claimEventName?: string;
+}
+
+export interface FinanceModule {
+    /** Consumed by payments: reverse royalties when money goes back. */
+    royaltyReversal: Pick<RoyaltyAccrualService, 'reverseForOrder'>;
+    /** Consumed by payments: book sales, refunds, chargebacks, corrections. */
+    postings: Pick<
+        FinanceLedgerService,
+        'postSaleRevenue' | 'postRefund' | 'postChargeback' | 'postAdjustment'
+    >;
+    /** Exposed for jobs and scripts that run the sweep without HTTP. */
+    payouts: RoyaltyPayoutService;
+    /** The quarterly sweep (manual run or `startScheduler()`). */
+    quarterlyPayouts: QuarterlyPayoutService;
+    accrual: RoyaltyAccrualService;
+    /**
+     * Tax's `IPayoutLookup`: was this payout actually PAID, and who approved
+     * it. Form 16A and 1099-NEC report paid income, so tax asks here rather
+     * than summing the royalty ledger — see docs/tax/compliance-mapping.md.
+     */
+    payoutReporting: PayoutReportingAdapter;
+    createRouter(requireAuth: RequestHandler): Router;
+}
+
+/**
+ * Wires the finance module.
+ *
+ * The one subscription is the important line in this file: royalties accrue on
+ * `claims.product.claimed`, because HitBox has not earned anything until the
+ * physical item is in the buyer's hands. Everything else here is plumbing.
+ */
+export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
+    const logger = createModuleLogger(FINANCE_MODULE);
+    const audit = deps.audit ?? NOOP_FINANCE_AUDIT;
+
+    const ruleRepo = new RoyaltyRuleRepository(deps.prisma);
+    const ledgerRepo = new RoyaltyLedgerRepository(deps.prisma);
+    const payoutRepo = new PayoutRepository(deps.prisma);
+    const financeLedgerRepo = new FinanceLedgerRepository(deps.prisma);
+
+    const codes = new PublicCodeResolver(deps.prisma);
+    const rules = new RoyaltyRuleService({ rules: ruleRepo, codes, logger });
+    const accrual = new RoyaltyAccrualService({
+        prisma: deps.prisma,
+        rules: ruleRepo,
+        ledger: ledgerRepo,
+        financeLedger: financeLedgerRepo,
+        orderRevenue: deps.orderRevenue,
+        eventBus: deps.eventBus,
+        audit,
+        logger,
+    });
+    const payouts = new RoyaltyPayoutService({
+        prisma: deps.prisma,
+        codes,
+        payouts: payoutRepo,
+        ledger: ledgerRepo,
+        financeLedger: financeLedgerRepo,
+        rules: ruleRepo,
+        eventBus: deps.eventBus,
+        audit,
+        logger,
+    });
+    const ledger = new FinanceLedgerService({
+        codes,
+        financeLedger: financeLedgerRepo,
+        ledger: ledgerRepo,
+        eventBus: deps.eventBus,
+        audit,
+        logger,
+    });
+
+    // Accrue at the claim. The handler swallows its own errors on purpose: the
+    // event bus isolates a throwing subscriber already, but a royalty that
+    // could not be posted is an operational problem to alert on, not a lost
+    // claim — so it is logged with everything needed to replay it by hand.
+    deps.eventBus.subscribe<ClaimedEventPayload>(
+        deps.claimEventName ?? 'claims.product.claimed',
+        async (payload) => {
+            try {
+                await accrual.accrueForClaim(payload);
+            } catch (error) {
+                logger.error(
+                    { err: error, claimId: payload.claimId, skuId: payload.skuId },
+                    'royalty accrual failed for claim — replay required',
+                );
+            }
+        },
+    );
+
+    const quarterlyPayouts = new QuarterlyPayoutService({
+        prisma: deps.prisma,
+        payouts: payoutRepo,
+        ledger: ledgerRepo,
+        eventBus: deps.eventBus,
+        audit,
+        logger,
+    });
+    const cogsRoyaltyPayout = new CogsRoyaltyPayoutController({
+        dropPricing: new DropPricingService({
+            prisma: deps.prisma,
+            codes,
+            pricing: new DropPricingRepository(deps.prisma),
+            eventBus: deps.eventBus,
+            audit,
+            logger,
+        }),
+        artistRates: new ArtistRoyaltyRateService({
+            prisma: deps.prisma,
+            codes,
+            rules: ruleRepo,
+            eventBus: deps.eventBus,
+            audit,
+            logger,
+        }),
+        decisions: new PayoutDecisionService({
+            prisma: deps.prisma,
+            payouts: payoutRepo,
+            ledger: ledgerRepo,
+            financeLedger: financeLedgerRepo,
+            payoutReads: payouts,
+            eventBus: deps.eventBus,
+            audit,
+            logger,
+        }),
+        quarterly: quarterlyPayouts,
+        resolveAccess: deps.resolveAccess,
+    });
+
+    const controller = new FinanceController({
+        rules,
+        accrual,
+        payouts,
+        ledger,
+        resolveAccess: deps.resolveAccess,
+    });
+
+    return {
+        royaltyReversal: accrual,
+        postings: ledger,
+        payouts,
+        quarterlyPayouts,
+        accrual,
+        payoutReporting: new PayoutReportingAdapter(deps.prisma),
+
+        createRouter(requireAuth) {
+            const router = Router();
+            router.use(requireAuth);
+            const { requirePermission } = deps.guard;
+
+            // Reads take the plain read capability; the SCOPE of that grant
+            // (own / organization / global) is what narrows the rows, and it is
+            // resolved from the grant inside the service. An artist calling
+            // GET /royalty-entries gets their own accrual and nothing else.
+            //
+            // The owner context is **required**, not decorative. The engine
+            // rejects an `own`-scoped grant outright when `context.ownerId` is
+            // absent ("own-scoped grant requires an owner context"), because it
+            // cannot tell whose record is being asked for. These routes never
+            // name a record in the path — they return the caller's own slice —
+            // so the owner *is* the caller, and saying so is what lets an
+            // artist holding `payment-royalty:read:own` through at all.
+            // Without it the whole FinanceScope.OWN branch below is
+            // unreachable: every artist gets a 403 on their own earnings.
+            const read = requirePermission(FINANCE_READ_CAPABILITY, {
+                context: async (req) => ({ ownerId: (await deps.resolveAccess(req)).userId }),
+            });
+            // Writes are global-only in the catalog; `globalOnly` makes the
+            // guard say so rather than relying on the service alone.
+            const manage = requirePermission(FINANCE_MANAGE_CAPABILITY, { globalOnly: true });
+
+            const approve = requirePermission(PAYOUT_APPROVE_CAPABILITY, { globalOnly: true });
+            const transfer = requirePermission(PAYOUT_TRANSFER_CAPABILITY, { globalOnly: true });
+            const setRate = requirePermission(ROYALTY_RATE_CAPABILITY, { globalOnly: true });
+            const configureDrops = requirePermission(DROP_PRICING_CAPABILITY, { globalOnly: true });
+
+            // COGS + sales price per drop (versioned) and the artist royalty rate
+            router.get('/drops/:dropId/pricing', configureDrops, cogsRoyaltyPayout.listDropPricing);
+            router.get('/drops/:dropId/pricing/active', configureDrops, cogsRoyaltyPayout.getActiveDropPricing);
+            router.post('/drops/:dropId/pricing', configureDrops, cogsRoyaltyPayout.createDropPricing);
+            router.get('/artists/:artistId/royalty-rate', read, cogsRoyaltyPayout.getArtistRoyaltyRate);
+            router.post('/artists/:artistId/royalty-rate', setRate, cogsRoyaltyPayout.setArtistRoyaltyRate);
+
+            // Royalty rules
+            router.get('/royalty-rules', read, controller.listRules);
+            router.post('/royalty-rules', manage, controller.createRule);
+            router.get('/royalty-rules/:ruleId', read, controller.getRule);
+            // No PUT/PATCH and no DELETE: terms are versioned, not edited.
+            router.post('/royalty-rules/:ruleId/close', manage, controller.closeRule);
+
+            // Royalty ledger
+            router.get('/royalty-entries', read, controller.listEntries);
+            router.get('/royalty-entries/:entryId', read, controller.getEntry);
+            router.post(
+                '/royalty-entries/:entryId/reverse',
+                // `manage` on the route, `override` re-checked in the
+                // controller — two different powers, and the second one is
+                // the one that cancels money someone is owed.
+                manage,
+                controller.reverseEntry,
+            );
+
+            // Balances & payouts
+            router.get('/balances', read, controller.balances);
+            router.get('/payouts', read, controller.listPayouts);
+            router.post('/payouts/schedule', manage, controller.schedulePayouts);
+            router.get('/payouts/:payoutId', read, controller.getPayout);
+            // Approve / reject / transfer are three separate permissions
+            // (separation of duties); `/execute` is kept as an alias of
+            // `/transfer` so it can no longer be used with `manage` alone.
+            router.post('/payouts/quarterly-sweep', manage, cogsRoyaltyPayout.quarterlySweep);
+            router.post('/payouts/:payoutId/approve', approve, cogsRoyaltyPayout.approvePayout);
+            router.post('/payouts/:payoutId/reject', approve, cogsRoyaltyPayout.rejectPayout);
+            router.post('/payouts/:payoutId/transfer', transfer, cogsRoyaltyPayout.transferPayout);
+            router.post('/payouts/:payoutId/execute', transfer, cogsRoyaltyPayout.transferPayout);
+            router.post('/payouts/:payoutId/fail', manage, controller.failPayout);
+
+            // Corrections and the platform's own books
+            router.get('/adjustments', read, controller.listAdjustments);
+            router.post('/adjustments', manage, controller.createAdjustment);
+            router.get('/ledger', read, controller.listLedger);
+            router.get('/revenue-summary', read, controller.revenueSummary);
+
+            return router;
+        },
+    };
+}

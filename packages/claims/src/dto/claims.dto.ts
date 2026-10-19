@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ClaimedStatus, LedgerTxType, ProductState } from '@hitbox/database';
+import type { ClaimedStatus, DropStatus, LedgerTxType } from '@hitbox/database';
 
 // ── Path params ─────────────────────────────────────────────────────────
 
@@ -27,22 +27,38 @@ export type ClaimBodyDto = z.infer<typeof claimBodySchema>;
 
 // ── Response shapes ───────────────────────────────────────────────────────
 
-/** Minimal public view of a user attached to a product/ledger row. */
+/**
+ * Minimal public view of a user attached to a SKU/ledger row.
+ *
+ * `username` became `handle` in the users restructure — `User.username`,
+ * `firstName` and `lastName` no longer exist.
+ */
 export interface OwnerView {
     id: string;
-    username: string | null;
+    handle: string | null;
     displayName: string | null;
 }
 
-/** GET /verify/:tagId */
+/**
+ * GET /verify/:tagId
+ *
+ * A tag identifies a SKU, so this now reports the serialized item AND the
+ * catalog entry behind it. `state` became `status` (`DropStatus`), and
+ * `claimedStatus` moved from the product to the SKU.
+ */
 export interface VerifyResult {
     valid: boolean;
+    skuId: string;
+    skuCode: string;
+    /** Position within the edition — "#14 of 500". */
+    serialNumber: number;
     productId: string;
-    productCode: string;
+    /** The product's public code (was `productCode`, now `Product.groupCode`). */
+    groupCode: string;
     name: string;
     claimed: boolean;
     claimedStatus: ClaimedStatus;
-    state: ProductState;
+    status: DropStatus;
     owner: OwnerView | null;
     /** Length of the provenance chain (number of ledger rows). */
     ledgerLength: number;
@@ -58,14 +74,20 @@ export interface ValidateResult {
     /** Screen the app should render. */
     screen: 'CLAIMABLE' | 'ALREADY_CLAIMED_BY_YOU' | 'ALREADY_CLAIMED';
     claimedByYou: boolean;
+    sku: {
+        id: string;
+        skuCode: string;
+        serialNumber: number;
+        tagId: string | null;
+    };
     product: {
         id: string;
-        productCode: string;
+        groupCode: string;
         name: string;
-        tagId: string | null;
-        priceInDollars: string;
-        rewardPoints: number;
-        state: ProductState;
+        /** Base price in the default market; null when none is configured. */
+        priceInDollars: string | null;
+        currency: string | null;
+        status: DropStatus;
         imageUrl: string | null;
     };
     owner: OwnerView | null;
@@ -83,12 +105,17 @@ export interface ClaimFlowResult {
     claimedByYou: boolean;
     message: string;
     owner: OwnerView;
-    product: {
+    sku: {
         id: string;
-        productCode: string;
-        name: string;
+        skuCode: string;
+        serialNumber: number;
         tagId: string | null;
         claimedStatus: ClaimedStatus;
+    };
+    product: {
+        id: string;
+        groupCode: string;
+        name: string;
     };
     claimedAt: string | null;
     /** The claim record — present only when this tap performed the claim. */
@@ -102,7 +129,7 @@ export interface ClaimFlowResult {
 export interface LedgerEntryView {
     sequenceNo: number;
     txType: LedgerTxType;
-    /** Product Id — the human product code, e.g. "A1000000000000". */
+    /** Product Id — the human product code (`Product.groupCode`). */
     productId: string;
     /** Tag # — the NFC tag id. */
     tag: string | null;

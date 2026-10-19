@@ -1,0 +1,63 @@
+// ============================================================================
+// PLATFORM MODULE SCHEMA  (packages/platform/prisma/platform.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: PlatformConfig, ExceptionCase
+// ============================================================================
+
+/// Runtime configuration and feature flags, keyed by a unique `key`. Distinct
+/// from `packages/shared/config/env.ts`, which holds boot-time secrets and
+/// connection strings validated at startup: this table is for values that
+/// change while the process is running and must be editable without a deploy.
+/// `isFeatureFlag` separates on/off toggles from tunables so a flag UI can
+/// filter to just the switches. `updatedById` is FK-free so a config row
+/// outlives the account that last changed it.
+model PlatformConfig {
+  id            String   @id @db.Uuid
+  /// Human-readable record id (`pcf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  key           String   @unique
+  value         Json
+  isFeatureFlag Boolean
+  description   String?
+  updatedById   String?  @db.Uuid
+  updatedAt     DateTime
+  createdAt     DateTime
+}
+
+/// Ops Console exception queue (claim reconciliation, webhook failures,
+/// provenance integrity).
+///
+/// `referenceType` + `referenceId` is a polymorphic pointer with no foreign
+/// key, deliberately: an exception has to be raiseable against a record in any
+/// module, and the queue must survive the archival of whatever it points at.
+/// `attempts` and `slaDeadline` are what make it a queue rather than a log —
+/// the index below is the "what is overdue" query the console opens on.
+model ExceptionCase {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`exc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  exceptionCode String          @unique @db.VarChar(10) // EX
+  caseType      String
+  referenceType String
+  referenceId   String          @db.Uuid
+  status        ExceptionStatus @default(RETRY_QUEUED)
+  slaDeadline   DateTime?
+  attempts      Int             @default(0)
+  resolution    String?
+  resolvedById  String?         @db.Uuid
+  resolvedAt    DateTime?
+  createdAt     DateTime        @default(now())
+
+  @@index([status, slaDeadline])
+}
+
+/// Where an exception is. RETRY_QUEUED is the automatic path; NEEDS_REVIEW is
+/// what a retry budget running out escalates to.
+enum ExceptionStatus {
+  RETRY_QUEUED
+  NEEDS_REVIEW
+  RESOLVED
+}

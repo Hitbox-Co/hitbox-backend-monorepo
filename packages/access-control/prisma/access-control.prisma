@@ -1,0 +1,322 @@
+// ============================================================================
+// ACCESS-CONTROL MODULE SCHEMA  (packages/access-control/prisma/access-control.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Role, Permission, RolePermission, RoleAssignment
+//
+// This is authorisation (what an actor may do), distinct from the auth module
+// which is authentication (who the actor is). A user's UserRole says only that
+// they hold an account; every real privilege is a RoleAssignment here, scoped
+// to GLOBAL, one ORG, or the actor's OWN records.
+// ============================================================================
+
+/// A named bundle of permissions, e.g. `HITBOX_CONTENT_MANAGER`.
+/// `entityGroup` records which persona family the role belongs to (end_user,
+/// brand_artist, hitbox_seller_org) for grouping in admin UIs.
+///
+/// `domain` is the security boundary: a BUSINESS role may hold only BUSINESS
+/// permissions and a TECHNICAL role only TECHNICAL ones. The engine and the
+/// role service both enforce it, so "platform engineer" can never quietly
+/// acquire `order:refund`. A person who genuinely needs both holds two role
+/// assignments.
+///
+/// `isSystem` marks roles seeded from the code-side catalog. They cannot be
+/// renamed or deleted through the admin API — deleting HITBOX_SYSTEM_ADMIN
+/// would lock everyone out of the platform.
+model Role {
+  id          String              @id @db.Uuid
+  /// Human-readable record id (`rol…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name        String              @unique
+  displayName String
+  entityGroup String
+  domain      AuthorizationDomain
+  isSystem    Boolean
+  isActive    Boolean
+  createdAt   DateTime
+
+  rolePermissions  RolePermission[]
+  roleAssignments  RoleAssignment[]
+  staffInvitations StaffInvitation[]
+}
+
+/// One atomic capability: an action on a resource at a scope. The
+/// `key` column is the flat form used in code checks (e.g. `drop:publish:org`);
+/// the (resource, action, scope) triple is the canonical identity.
+model Permission {
+  id          String              @id @db.Uuid
+  /// Human-readable record id (`prm…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  resource    ResourceType
+  action      PermissionAction
+  scope       PermissionScope
+  key         String              @unique
+  /// Which authorization domain this capability belongs to. Derived from the
+  /// resource (see RESOURCE_DOMAIN in the permission catalog), never chosen
+  /// per-row, so a resource cannot be business in one permission and
+  /// technical in another.
+  domain      AuthorizationDomain
+  description String?
+  isActive    Boolean
+  createdAt   DateTime
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action, scope])
+}
+
+/// Grants a permission to a role. `fieldAllowlist` narrows the grant to
+/// specific columns (field-level authorisation for partial-update endpoints).
+/// `isInferred` + `sourceCitation` mark rows derived from the requirements
+/// matrix rather than hand-authored, so they can be re-derived safely.
+model RolePermission {
+  id             String     @id @db.Uuid
+  /// Human-readable record id (`rlp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  roleId         String     @db.Uuid
+  role           Role       @relation(fields: [roleId], references: [id])
+  permissionId   String     @db.Uuid
+  permission     Permission @relation(fields: [permissionId], references: [id])
+  fieldAllowlist String[]
+  isInferred     Boolean
+  sourceCitation String?
+  /// True when exercising this grant must carry a written reason — the
+  /// high-consequence permissions (a refund override, a tag revocation) where
+  /// "who did it" is not enough and "why" has to be on the audit row too.
+  requiresReason Boolean    @default(false)
+  createdAt      DateTime
+
+  @@unique([roleId, permissionId])
+}
+
+/// Binds a user to a role within a scope. For `scopeType = ORG`, `scopeId`
+/// points at an Organization (the relation below); for OWN/GLOBAL it is null.
+/// `revokedAt` is set instead of deleting the row, so the audit trail keeps
+/// the full grant history.
+model RoleAssignment {
+  id           String        @id @db.Uuid
+  /// Human-readable record id (`ras…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  userId       String        @db.Uuid
+  user         User          @relation("User_user", fields: [userId], references: [id])
+  roleId       String        @db.Uuid
+  role         Role          @relation(fields: [roleId], references: [id])
+  scopeType    RoleScopeType
+  scopeId      String?       @db.Uuid
+  organization Organization? @relation(fields: [scopeId], references: [id])
+  grantedById  String        @db.Uuid
+  grantedBy    User          @relation("User_grantedBy", fields: [grantedById], references: [id])
+  grantedAt    DateTime
+  revokedAt    DateTime?
+
+  @@unique([userId, roleId, scopeType, scopeId])
+}
+
+/// A pending invitation for someone to join HitBox staff with a named role.
+///
+/// This table exists because of one gap: a `User` row only comes into existence
+/// when Clerk fires `user.created`, which happens when a person signs up
+/// through the consumer app. Without this, making a colleague an administrator
+/// means asking them to register as a *buyer* first, then finding them and
+/// granting a role — so a system admin cannot provision anyone from the
+/// dashboard.
+///
+/// **The intended role lives here, not in the identity provider.** Clerk
+/// supports attaching arbitrary metadata to an invitation, and putting the role
+/// there would have been less code. It is the wrong place: authorization intent
+/// would sit outside the audit trail, outside this database, unreadable by the
+/// permission engine, and editable by anyone with access to the Clerk
+/// dashboard. The permission catalog is authoritative here, so the invitation
+/// is too. Clerk is told only "invite this email address".
+///
+/// A row is never deleted. A revoked or expired invitation keeps its row: "who
+/// tried to make whom an administrator, and what happened" is exactly the
+/// question an access review asks.
+model StaffInvitation {
+  id          String                @id @db.Uuid
+  /// Human-readable record id (`sti…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  /// Lower-cased at the service boundary, because this is matched against the
+  /// address Clerk reports back and address comparison must not depend on how
+  /// the inviter happened to type it.
+  email       String                @db.VarChar(320)
+  roleId      String                @db.Uuid
+  role        Role                  @relation(fields: [roleId], references: [id])
+  /// The scope the role will be granted at, decided and frozen at invite time
+  /// rather than at acceptance — the inviter's authority is checked against
+  /// these values, and acceptance must not be able to widen them.
+  scopeType   RoleScopeType
+  scopeId     String?               @db.Uuid
+  organization Organization?        @relation(fields: [scopeId], references: [id])
+
+  status      StaffInvitationStatus
+  /// Clerk's invitation id, for revoking it on their side too. Null until the
+  /// provider call succeeds, and null forever on the already-registered path
+  /// where no invitation is sent at all.
+  providerInvitationId String?      @db.VarChar(100)
+  /// Why the provider call failed, when it did. Kept so a FAILED invitation is
+  /// diagnosable without correlating logs.
+  providerError String?
+
+  invitedById String                @db.Uuid
+  invitedBy   User                  @relation("StaffInvitation_invitedBy", fields: [invitedById], references: [id])
+  invitedAt   DateTime
+  expiresAt   DateTime
+
+  /// Set when the invitation is claimed. `acceptedUserId` is the account that
+  /// claimed it, which is NOT knowable at invite time — that is the whole
+  /// reason this table exists.
+  acceptedAt     DateTime?
+  acceptedUserId String?             @db.Uuid
+  acceptedUser   User?               @relation("StaffInvitation_acceptedUser", fields: [acceptedUserId], references: [id])
+  /// The RoleAssignment this invitation produced. Plain id, no foreign key: an
+  /// assignment can be revoked and archived later, and the invitation trail
+  /// must survive that.
+  assignmentId   String?             @db.Uuid
+
+  revokedById String?                @db.Uuid
+  revokedBy   User?                  @relation("StaffInvitation_revokedBy", fields: [revokedById], references: [id])
+  revokedAt   DateTime?
+  revokeReason String?
+
+  createdAt   DateTime
+  updatedAt   DateTime
+
+  /// The claim path: "is anyone waiting to be granted a role for this address".
+  @@index([email, status])
+  /// The dashboard list, newest first, filterable by state.
+  @@index([status, invitedAt])
+  @@index([roleId])
+  @@index([scopeId])
+}
+
+/// Lifecycle of a StaffInvitation.
+///
+/// PENDING exists as a distinct state from SENT on purpose: the row is written
+/// BEFORE the provider is called, so a crash between the two leaves evidence
+/// rather than an invitation nobody knows was attempted. FAILED is the same
+/// idea for a provider call that returned an error.
+enum StaffInvitationStatus {
+  /// Row written; the provider has not been called yet.
+  PENDING
+  /// The provider accepted it and the email is out.
+  SENT
+  /// Claimed — the role has been granted and `assignmentId` is set.
+  ACCEPTED
+  /// Withdrawn by an administrator before it was claimed.
+  REVOKED
+  /// Passed `expiresAt` unclaimed.
+  EXPIRED
+  /// The provider refused to send it. `providerError` says why.
+  FAILED
+}
+
+/// The verbs a permission can grant.
+enum PermissionAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  MANAGE // superset of CREATE+READ+UPDATE+DELETE for the resource
+  APPROVE
+  REJECT
+  PUBLISH
+  REFUND
+  CLAIM // NFC tag / product claim
+  TRANSFER // ownership transfer
+  ASSIGN // assign roles / ownership
+  EXPORT // reports & dashboards
+  CONFIGURE // platform / gateway config
+  OVERRIDE // admin override
+  // ── Technical-domain verbs (APPLICATION / INFRASTRUCTURE resources) ──────
+  DEBUG // read logs, traces, run diagnostics
+  DEPLOY // ship a release / apply infrastructure
+  RESTART // bounce a service or node
+}
+
+/// The protected surfaces a permission can apply to. Deliberately coarser than
+/// the table list: one ResourceType may cover several tables owned by the same
+/// module (e.g. ORDER covers Order + OrderAddress + InventoryReservation).
+enum ResourceType {
+  SELF_PROFILE
+  BUYER_PROFILE
+  DROP
+  RELEASE_APPROVAL
+  COLLECTIBLE_INSTANCE
+  REPORTS_DASHBOARDS
+  MY_COLLECTIONS
+  ORDER
+  PAYMENT_ROYALTY
+  CONTENT_UNLOCK
+  NFC_TAG_CLAIM
+  BRAND_ARTIST_RECORD
+  EMPLOYEE_ROLE_MGMT
+  AUDIT_LOG
+  NOTIFICATION_CONFIG
+  SEARCH_DISCOVER
+  OPS_DASHBOARD_INFRA
+  PLATFORM_CONFIG
+  ASSETS_DOCUMENTS_UPLOAD
+  GENERAL_LOCATION
+  AGE_SPECIFIC_FLAG
+  ADDRESS
+  /// Running THIS application: releases, logs, diagnostics, app config.
+  /// Technical domain — no business role holds these.
+  APPLICATION
+  /// Running the platform it sits on: nodes, networking, provisioning.
+  /// Technical domain — no business role holds these.
+  INFRASTRUCTURE
+  /// Product-type configuration: which variant dimensions, values and rules a
+  /// kind of drop has. Appended last — see migration drop_types_and_variants.
+  DROP_TYPE
+}
+
+/// The two authorization domains. Domain is a hard boundary, not a label: a
+/// role may only be granted permissions of its own domain, so business roles
+/// never acquire deploy rights and technical roles never acquire refund
+/// rights. Cross-domain access is expressed by giving a person two role
+/// assignments, never by widening one role.
+enum AuthorizationDomain {
+  BUSINESS
+  TECHNICAL
+}
+
+/// How far a permission reaches, along two axes at once — *breadth* (whose
+/// records) and *visibility* (how much of each record). The engine resolves
+/// both from this single value (see SCOPE_REACH in the permission catalog):
+///
+///   value          breadth        visibility
+///   ─────────────  ─────────────  ──────────
+///   GLOBAL         all records    full
+///   ORG            one org        full
+///   OWN            actor's own    full
+///   MASKED_PARTIAL all records    partially redacted   (e.g. Order Manager)
+///   MASKED         all records    fully redacted       (e.g. Support)
+///   PUBLIC         all records    public fields only   (e.g. buyer browsing)
+///
+/// Two roles can therefore hold the *same* capability at different
+/// visibilities — `buyer-profile:read:masked` for Support vs
+/// `buyer-profile:read:masked-partial` for the Order Manager — and one
+/// endpoint serves both, shaping its response from the granted scope the
+/// engine returns.
+enum PermissionScope {
+  GLOBAL
+  ORGANIZATION
+  OWN
+  PUBLIC
+  MASKED
+  MASKED_PARTIAL
+}
+
+/// How wide a role assignment reaches: everything (GLOBAL), one organization
+/// (ORG, with scopeId set), or only the actor's own records (OWN).
+enum RoleScopeType {
+  ORGANIZATION
+  OWN
+  GLOBAL
+}

@@ -1,5 +1,19 @@
 # NFC Claim API — End-to-End Test Report
 
+> ⚠ **Historical record — the shapes below are stale.** This report captures a
+> real run against the pre-restructure schema. It is kept as-is because a test
+> report is a record of what happened, not a spec, and editing the recorded
+> responses would be fabricating results.
+>
+> Since this run, NFC tags moved from `Product.tagId` to `Sku.tagId` and the
+> claim/verify/ledger responses became SKU-centric: `productCode` → `groupCode`,
+> `state` → `status`, `username` → `handle`, and `rewardPoints` /
+> `marketplaceStatus` were removed. `GET /products/tag/:tagId` (exercised at
+> step 114 below) no longer exists. For the current contract see
+> [nfc-claim-verify-api.md](nfc-claim-verify-api.md); the runner itself
+> (`apps/backend/scripts/e2e.ts`) still asserts the old shapes and needs
+> updating before it is run again.
+
 **Result: ✅ ALL PASSED** — 60/60 assertions passed across 16 API calls.
 
 - Run at: 2026-07-23 10:43 UTC

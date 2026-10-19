@@ -1,0 +1,204 @@
+// ============================================================================
+// SUPPLY MODULE SCHEMA  (packages/supply/prisma/supply.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Vendor, SupplyBatch, NfcTag
+//
+// The physical side: who manufactures tags and merchandise, what arrived, and
+// which chips exist. This is the upstream of the skus module — a Sku's
+// `vendorId` and `provisioningBatchId` trace an item back to the shipment it
+// came from.
+//
+// NfcTag moved here from packages/skus (it was declared there when it was
+// split off Sku in v3.1). The module that creates chip rows from a vendor
+// manifest, records their QC and holds them as stock is this one; skus only
+// binds an existing chip to a unit. The move changed no SQL — merge-schema.mjs
+// concatenates partials, so which file a model is declared in is metadata.
+// ============================================================================
+
+/// A manufacturer or supplier.
+model Vendor {
+  id           String     @id @db.Uuid
+  /// Human-readable record id (`vnd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name         String
+  /// Registered entity name, where it differs from the trading name we use.
+  legalName    String?
+  /// ISO 3166-1 alpha-2. Two characters, because a tag consignment crossing a
+  /// border is a customs question before it is a supply one.
+  country      String?    @db.VarChar(2)
+  vendorType   VendorType
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+  notes        String?
+  isActive     Boolean
+  archivedAt   DateTime?
+  createdAt    DateTime
+  /// Defaulted rather than required so the column can be added to a table that
+  /// already has rows; @updatedAt keeps it current from here on.
+  updatedAt    DateTime   @default(now()) @updatedAt
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  supplyBatchs SupplyBatch[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skus Sku[]
+}
+
+/// A received shipment of tags or merchandise. `sourceFileRef` points at the
+/// uploaded manifest (a media asset) that the batch was entered from, and
+/// `enteredBy` records who keyed it in — together they make a physical
+/// reconciliation auditable. `batchRef` is the vendor's own batch label, which
+/// is what Sku.provisioningBatchId matches against.
+model SupplyBatch {
+  id            String         @id @db.Uuid
+  /// Human-readable record id (`sbt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  vendorId      String         @db.Uuid
+  vendor        Vendor         @relation(fields: [vendorId], references: [id])
+  itemType      SupplyItemType
+  quantity      Int
+  batchRef      String?
+  receivedAt    DateTime
+  sourceFileRef String?
+  enteredById   String         @db.Uuid
+  enteredBy     User           @relation(fields: [enteredById], references: [id])
+  notes         String?
+  createdAt     DateTime
+
+  // ── Vendor supply per drop (v3.1) ─────────────────────────────────────────
+  // A consignment is ordered *for* a drop, and the upload that creates it is
+  // validated row by row before anyone accepts it — hence the three counts and
+  // the status, which together are the whole of the vendor intake screen.
+  //
+  // TODO: make required after backfill (target: String)
+  dropId              String?           @db.Uuid
+  drop                Drop?             @relation(fields: [dropId], references: [id])
+  /// Defaulted so the column can be added to a table that already has rows.
+  batchDate           DateTime          @default(now()) @db.Date
+  status              SupplyBatchStatus @default(UPLOADED)
+  rowsReceived        Int               @default(0)
+  rowsAccepted        Int               @default(0)
+  rowsRejected        Int               @default(0)
+  vendorInvoiceRef    String?
+  /// Pointer to the stored validation report for the upload.
+  validationReportRef String?
+  updatedAt           DateTime          @default(now()) @updatedAt
+
+  // ── Own- and cross-module back-relations ──────────────────────────────────
+  skus    Sku[]
+  nfcTags NfcTag[]
+}
+
+/// NFC tag master — one row per physical chip, created from the vendor's
+/// manifest upload. A chip has a life of its own: vendor QC before binding, can
+/// be replaced while the old chip keeps its history, UID unique for ever, keys
+/// and tap counter belong to the chip.
+model NfcTag {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`nft…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  nfcTagCode      String            @unique @db.VarChar(10) // NT
+  supplyBatchId   String            @db.Uuid
+  supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
+  /// The item this chip is (or was) embedded in.
+  skuId           String?           @db.Uuid
+  sku             Sku?              @relation("SkuTagHistory", fields: [skuId], references: [id])
+  currentFor      Sku?              @relation("SkuCurrentTag")
+  /// Chip UID stored only hashed + encrypted.
+  tagUidHash      String            @unique @db.Char(64) // HMAC-SHA256 lookup key
+  tagUidEncrypted String            // AES-256-GCM, key in KMS
+  qcStatus        QcStatus          @default(PENDING)
+  qcReportedAt    DateTime?
+  qcNotes         String?
+  lifecycleState  TagLifecycleState @default(UNPROVISIONED)
+  keyReference    String?           // KMS pointer — never a key
+  lastTapCounter  Int               @default(0)
+  tamperStatus    String?
+  personalizedAt  DateTime?
+  boundAt         DateTime?
+  activatedAt     DateTime?
+  retiredAt       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  verifications   NfcVerification[]
+  ledgerEntries   BlockchainLedger[]
+  supportCases    SupportCase[]
+
+  @@index([skuId])
+}
+
+/// Vendor quality control on a chip, recorded before it is bound to anything.
+/// `TagLifecycleState` stays in packages/skus: the deprecated `Sku` tag columns
+/// still use it, so it is shared rather than owned here.
+enum QcStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+/// What kind of goods this supplier makes.
+///
+/// These are **product categories**, not manufacturing capabilities, and that
+/// is the point: an NFC chip arrives already embedded in the item, so nobody
+/// on this platform is "a tag manufacturer" from the supply chain's point of
+/// view — they are the factory that makes the action figure the chip is inside.
+///
+/// The values deliberately mirror `Drop.category`, so "who makes our jerseys"
+/// and "which drops are jerseys" answer with the same word.
+///
+/// Adding a value is a migration (Postgres appends cheaply); REMOVING one is a
+/// type recreation, because Postgres has no `ALTER TYPE ... DROP VALUE`. Prefer
+/// `OTHER` over inventing a value you are not sure of.
+enum VendorType {
+  FIGURE
+  KEYCHAIN
+  JERSEY
+  APPAREL
+  TRADING_CARD
+  POSTER
+  PLUSH
+  /// Mixed or general merchandise that does not fall in one category above.
+  MERCHANDISE
+  OTHER
+}
+
+/// What a supply batch contains — the same product categories as
+/// `VendorType` and `Drop.category`, so "who makes our jerseys", "which drops
+/// are jerseys" and "which cartons held jerseys" answer with the same word.
+///
+/// The chip arrives already embedded in the goods, so a carton is described by
+/// what the goods ARE. The former `NFC_TAG` (a consignment of loose reels this
+/// platform never receives) and `COLLECTIBLE` ("a finished serialized item",
+/// true of every category) are gone — see migration
+/// `20260928120000_supply_item_type_product_categories`.
+///
+/// Adding a value is a migration; REMOVING one recreates the type. Prefer
+/// `OTHER` over inventing a value you are not sure of.
+enum SupplyItemType {
+  FIGURE
+  KEYCHAIN
+  JERSEY
+  APPAREL
+  TRADING_CARD
+  POSTER
+  PLUSH
+  /// Mixed or general merchandise that does not fall in one category above.
+  MERCHANDISE
+  OTHER
+}
+
+/// Where a vendor consignment is in its intake review. UPLOADED is the raw
+/// file; VALIDATED means the rows parsed and passed their checks; ACCEPTED is
+/// a human's decision to take delivery.
+enum SupplyBatchStatus {
+  UPLOADED
+  VALIDATED
+  ACCEPTED
+  REJECTED
+}

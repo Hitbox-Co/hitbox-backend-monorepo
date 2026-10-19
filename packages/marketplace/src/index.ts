@@ -15,7 +15,6 @@ export {
 export { MarketplaceCategory } from './domain/enums/marketplace-category.enum';
 export type {
     IListingCatalog,
-    ListingBadge,
     MarketplaceListingItem,
     MarketplaceListingsQuery,
     MarketplaceListingsResult,

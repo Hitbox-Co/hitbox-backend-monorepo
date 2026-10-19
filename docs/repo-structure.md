@@ -2,7 +2,8 @@
 
 This repository hosts **two independent backends** — the mobile platform and the public website —
 that run as **one Express process on one port**, distinguished by route namespace, each owning its
-own database. There is no gateway, no proxy, no admin app, no RBAC layer. Knowing which routes
+own database. There is no gateway, no proxy and no admin app; authorization lives in-process as
+a permission layer (see [authorization/](authorization/authorization-architecture.md)). Knowing which routes
 belong to which domain — and where their code/data boundary is — is the whole point of this
 document.
 
@@ -31,7 +32,7 @@ document.
 
 | Domain | Route prefix | Owning package(s) | Database | Docs |
 | --- | --- | --- | --- | --- |
-| **Mobile platform** | `/api/v1/*` | `auth`, `users`, `products`, `discover`, `marketplace`, `collections`, `artist`, `claims` | `DATABASE_URL` (Neon) | [hitbox-architecture.md](hitbox-architecture.md) |
+| **Mobile platform** | `/api/v1/*` | `auth`, `users`, `access-control`, `organizations`, `artist`, `products`, `markets`, `releases`, `skus`, `claims`, `collections`, `media`, `content`, `evolution`, `orders`, `payments`, `finance`, `tax`, `notifications`, `social`, `resale`, `search`, `audit`, `support`, `supply`, `platform`, plus the table-less read models `discover`, `marketplace` | `DATABASE_URL` (Neon) | [hitbox-architecture.md](hitbox-architecture.md), [database-architecture.md](database-architecture.md), [authorization/](authorization/authorization-architecture.md), [admin/](admin/admin-api-reference.md), [media/](media/s3-configuration.md), [tax/](tax/README.md) |
 | **Public website** | `/app/web/v1/*` | `leads` | `LEADS_DATABASE_URL` (separate Neon project) | [leads-schema.md](leads-schema.md), [web-api-integration.md](web-api-integration.md) |
 
 ## Why one server, not two (or three)
@@ -67,7 +68,7 @@ app.use('/app/web/v1', createRateLimiter({ prefix: 'web', windowMs: 60_000, max:
 ```
 
 The website's budget is deliberately tighter (20/min vs. the mobile API's 100/min) — these are
-unauthenticated public forms with no CAPTCHA yet (see [leads-schema.md](leads-schema.md) §6.4).
+unauthenticated public forms with no CAPTCHA yet (see [leads-schema.md](leads-schema.md) 6.4).
 `createRateLimiter`'s `prefix` option keeps the two budgets on separate Redis keys so they never
 share or interfere with each other, even though they're now one process.
 
@@ -78,14 +79,16 @@ it belongs to:
 
 ```text
 packages/
-  auth/        ┐
-  users/       │
-  products/    │  mobile platform — depend on @hitbox/database (the ONE
-  discover/    │  shared Neon DB, hybrid multi-partial schema)
-  marketplace/ │
-  collections/ │
-  artist/      │
-  claims/      ┘
+  auth/            ┐
+  users/           │
+  access-control/  │  mobile platform — 25 table-owning modules, all
+  products/        │  depending on @hitbox/database (the ONE shared Neon
+  skus/            │  DB, hybrid multi-partial schema). Full list in the
+  orders/          │  table above; ownership map in database-architecture.md.
+  claims/          │
+  …                │
+  discover/        │  (these two own no tables — read-side feeds)
+  marketplace/     ┘
 
   leads/       ← public website — depends on ITS OWN Prisma client
                  (packages/leads/src/generated/prisma), own database.
@@ -120,7 +123,7 @@ needing its own env vars.
 
 Not built yet — intentionally. An earlier schema draft included `LeadNote`, `LeadActivity`,
 `AdminProfile`, and `ExportLog` for exactly this, but they were **removed** rather than left as
-unused scaffolding (see [leads-schema.md](leads-schema.md) §3) — there was no admin app to write
+unused scaffolding (see [leads-schema.md](leads-schema.md) 3) — there was no admin app to write
 or read them, and speculative tables just rot. Bring them back at the point one is actually being
 built, not before:
 

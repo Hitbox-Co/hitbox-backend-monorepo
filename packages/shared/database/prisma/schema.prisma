@@ -25,231 +25,823 @@ datasource db {
 // ───── source: packages\shared\database\prisma\enums.prisma ────────────────────────
 
 // ============================================================================
-// SOURCE PARTIAL — shared enums used across modules. Owned by shared/database.
+// SOURCE PARTIAL — shared enums. Owned by shared/database.
+//
+// OWNERSHIP RULE: an enum lives here ONLY if two or more module partials
+// reference it. An enum used by a single module belongs in that module's own
+// partial, so the module carries it along when it is extracted into a service.
+// See docs/database-architecture.md §5.
 // ============================================================================
 
-enum ProductType {
-    GROUP
-    INDIVIDUAL
-}
-
-enum ProductCategory {
-    TRADING_CARD
-    FIGURE
-    POSTER
-    BOOK
-    AUTOGRAPH
-    JERSEY
-    DIGITAL_ASSET
-    ACCESSORY
-    GAME_BOX
-    CARD_PACK
-    OTHER
-}
-
-enum ProductGenre {
-    MUSIC
-    SPORTS
-    FILM
-    GAMING
-    PUBLICATION
-    ART
-    ANIME
-    OTHER
-}
-
-enum MarketplaceStatus {
-    TRENDING_NOW
-    NEW_RELEASE
-    TOP_CREATORS
-}
-
-enum ProductRarity {
-    COMMON
-    UNCOMMON
-    RARE
-    EPIC
-    LEGENDARY
-    EXCLUSIVE
-}
-
-enum UserRole {
-    USER
-}
-
-enum UserState {
-    ACTIVE
-    INACTIVE
-    SUSPENDED
-}
-
-enum ProductState {
-    ACTIVE
-    INACTIVE
-    SUSPENDED
-}
-
-enum CollectionVisibility {
+/// Public/private toggle. Used by users (User.profileVisibility) and
+/// collections (BuyerCollection.visibility).
+enum Visibility {
     PUBLIC
     PRIVATE
 }
 
-enum ClaimedStatus {
-    UNCLAIMED
-    CLAIMED
+/// Settlement currency. Used by markets, orders, payments, finance, resale and
+/// claims (ProductHistory.price). Every monetary column pairs an amount with
+/// one of these.
+enum Currency {
+    USD
+    INR
+    GBP
 }
 
-// Kind of ownership event recorded on the provenance ledger. Each product's
-// ledger is an append-only chain: MINT (origin, seller = HitBox) → CLAIM
-// (first buyer) → TRANSFER (0..n subsequent owner changes).
-enum LedgerTxType {
-    MINT
-    CLAIM
-    TRANSFER
+/// Regulatory clearance state. Used by products (Product.complianceStatus) and
+/// releases (ReleaseApproval.complianceStatus) — the release reviewer writes
+/// it, the catalog reflects it.
+enum ComplianceStatus {
+    PENDING
+    CLEARED
+    FLAGGED
+}
+
+/// Address nickname. Used by users (Address) and orders (OrderAddress), which
+/// snapshots the label alongside the address lines at purchase time.
+enum AddressLabel {
+    HOME
+    WORK
+    OTHER
+}
+
+/// Payment provider. Used by orders (Order.gateway) and payments
+/// (PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent).
+enum PaymentGateway {
+    STRIPE
+}
+
+// ───── source: packages\access-control\prisma\access-control.prisma ────────────────
+
+// ============================================================================
+// ACCESS-CONTROL MODULE SCHEMA  (packages/access-control/prisma/access-control.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Role, Permission, RolePermission, RoleAssignment
+//
+// This is authorisation (what an actor may do), distinct from the auth module
+// which is authentication (who the actor is). A user's UserRole says only that
+// they hold an account; every real privilege is a RoleAssignment here, scoped
+// to GLOBAL, one ORG, or the actor's OWN records.
+// ============================================================================
+
+/// A named bundle of permissions, e.g. `HITBOX_CONTENT_MANAGER`.
+/// `entityGroup` records which persona family the role belongs to (end_user,
+/// brand_artist, hitbox_seller_org) for grouping in admin UIs.
+///
+/// `domain` is the security boundary: a BUSINESS role may hold only BUSINESS
+/// permissions and a TECHNICAL role only TECHNICAL ones. The engine and the
+/// role service both enforce it, so "platform engineer" can never quietly
+/// acquire `order:refund`. A person who genuinely needs both holds two role
+/// assignments.
+///
+/// `isSystem` marks roles seeded from the code-side catalog. They cannot be
+/// renamed or deleted through the admin API — deleting HITBOX_SYSTEM_ADMIN
+/// would lock everyone out of the platform.
+model Role {
+  id          String              @id @db.Uuid
+  /// Human-readable record id (`rol…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name        String              @unique
+  displayName String
+  entityGroup String
+  domain      AuthorizationDomain
+  isSystem    Boolean
+  isActive    Boolean
+  createdAt   DateTime
+
+  rolePermissions  RolePermission[]
+  roleAssignments  RoleAssignment[]
+  staffInvitations StaffInvitation[]
+}
+
+/// One atomic capability: an action on a resource at a scope. The
+/// `key` column is the flat form used in code checks (e.g. `drop:publish:org`);
+/// the (resource, action, scope) triple is the canonical identity.
+model Permission {
+  id          String              @id @db.Uuid
+  /// Human-readable record id (`prm…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  resource    ResourceType
+  action      PermissionAction
+  scope       PermissionScope
+  key         String              @unique
+  /// Which authorization domain this capability belongs to. Derived from the
+  /// resource (see RESOURCE_DOMAIN in the permission catalog), never chosen
+  /// per-row, so a resource cannot be business in one permission and
+  /// technical in another.
+  domain      AuthorizationDomain
+  description String?
+  isActive    Boolean
+  createdAt   DateTime
+
+  rolePermissions RolePermission[]
+
+  @@unique([resource, action, scope])
+}
+
+/// Grants a permission to a role. `fieldAllowlist` narrows the grant to
+/// specific columns (field-level authorisation for partial-update endpoints).
+/// `isInferred` + `sourceCitation` mark rows derived from the requirements
+/// matrix rather than hand-authored, so they can be re-derived safely.
+model RolePermission {
+  id             String     @id @db.Uuid
+  /// Human-readable record id (`rlp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  roleId         String     @db.Uuid
+  role           Role       @relation(fields: [roleId], references: [id])
+  permissionId   String     @db.Uuid
+  permission     Permission @relation(fields: [permissionId], references: [id])
+  fieldAllowlist String[]
+  isInferred     Boolean
+  sourceCitation String?
+  /// True when exercising this grant must carry a written reason — the
+  /// high-consequence permissions (a refund override, a tag revocation) where
+  /// "who did it" is not enough and "why" has to be on the audit row too.
+  requiresReason Boolean    @default(false)
+  createdAt      DateTime
+
+  @@unique([roleId, permissionId])
+}
+
+/// Binds a user to a role within a scope. For `scopeType = ORG`, `scopeId`
+/// points at an Organization (the relation below); for OWN/GLOBAL it is null.
+/// `revokedAt` is set instead of deleting the row, so the audit trail keeps
+/// the full grant history.
+model RoleAssignment {
+  id           String        @id @db.Uuid
+  /// Human-readable record id (`ras…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  userId       String        @db.Uuid
+  user         User          @relation("User_user", fields: [userId], references: [id])
+  roleId       String        @db.Uuid
+  role         Role          @relation(fields: [roleId], references: [id])
+  scopeType    RoleScopeType
+  scopeId      String?       @db.Uuid
+  organization Organization? @relation(fields: [scopeId], references: [id])
+  grantedById  String        @db.Uuid
+  grantedBy    User          @relation("User_grantedBy", fields: [grantedById], references: [id])
+  grantedAt    DateTime
+  revokedAt    DateTime?
+
+  @@unique([userId, roleId, scopeType, scopeId])
+}
+
+/// A pending invitation for someone to join HitBox staff with a named role.
+///
+/// This table exists because of one gap: a `User` row only comes into existence
+/// when Clerk fires `user.created`, which happens when a person signs up
+/// through the consumer app. Without this, making a colleague an administrator
+/// means asking them to register as a *buyer* first, then finding them and
+/// granting a role — so a system admin cannot provision anyone from the
+/// dashboard.
+///
+/// **The intended role lives here, not in the identity provider.** Clerk
+/// supports attaching arbitrary metadata to an invitation, and putting the role
+/// there would have been less code. It is the wrong place: authorization intent
+/// would sit outside the audit trail, outside this database, unreadable by the
+/// permission engine, and editable by anyone with access to the Clerk
+/// dashboard. The permission catalog is authoritative here, so the invitation
+/// is too. Clerk is told only "invite this email address".
+///
+/// A row is never deleted. A revoked or expired invitation keeps its row: "who
+/// tried to make whom an administrator, and what happened" is exactly the
+/// question an access review asks.
+model StaffInvitation {
+  id          String                @id @db.Uuid
+  /// Human-readable record id (`sti…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  /// Lower-cased at the service boundary, because this is matched against the
+  /// address Clerk reports back and address comparison must not depend on how
+  /// the inviter happened to type it.
+  email       String                @db.VarChar(320)
+  roleId      String                @db.Uuid
+  role        Role                  @relation(fields: [roleId], references: [id])
+  /// The scope the role will be granted at, decided and frozen at invite time
+  /// rather than at acceptance — the inviter's authority is checked against
+  /// these values, and acceptance must not be able to widen them.
+  scopeType   RoleScopeType
+  scopeId     String?               @db.Uuid
+  organization Organization?        @relation(fields: [scopeId], references: [id])
+
+  status      StaffInvitationStatus
+  /// Clerk's invitation id, for revoking it on their side too. Null until the
+  /// provider call succeeds, and null forever on the already-registered path
+  /// where no invitation is sent at all.
+  providerInvitationId String?      @db.VarChar(100)
+  /// Why the provider call failed, when it did. Kept so a FAILED invitation is
+  /// diagnosable without correlating logs.
+  providerError String?
+
+  invitedById String                @db.Uuid
+  invitedBy   User                  @relation("StaffInvitation_invitedBy", fields: [invitedById], references: [id])
+  invitedAt   DateTime
+  expiresAt   DateTime
+
+  /// Set when the invitation is claimed. `acceptedUserId` is the account that
+  /// claimed it, which is NOT knowable at invite time — that is the whole
+  /// reason this table exists.
+  acceptedAt     DateTime?
+  acceptedUserId String?             @db.Uuid
+  acceptedUser   User?               @relation("StaffInvitation_acceptedUser", fields: [acceptedUserId], references: [id])
+  /// The RoleAssignment this invitation produced. Plain id, no foreign key: an
+  /// assignment can be revoked and archived later, and the invitation trail
+  /// must survive that.
+  assignmentId   String?             @db.Uuid
+
+  revokedById String?                @db.Uuid
+  revokedBy   User?                  @relation("StaffInvitation_revokedBy", fields: [revokedById], references: [id])
+  revokedAt   DateTime?
+  revokeReason String?
+
+  createdAt   DateTime
+  updatedAt   DateTime
+
+  /// The claim path: "is anyone waiting to be granted a role for this address".
+  @@index([email, status])
+  /// The dashboard list, newest first, filterable by state.
+  @@index([status, invitedAt])
+  @@index([roleId])
+  @@index([scopeId])
+}
+
+/// Lifecycle of a StaffInvitation.
+///
+/// PENDING exists as a distinct state from SENT on purpose: the row is written
+/// BEFORE the provider is called, so a crash between the two leaves evidence
+/// rather than an invitation nobody knows was attempted. FAILED is the same
+/// idea for a provider call that returned an error.
+enum StaffInvitationStatus {
+  /// Row written; the provider has not been called yet.
+  PENDING
+  /// The provider accepted it and the email is out.
+  SENT
+  /// Claimed — the role has been granted and `assignmentId` is set.
+  ACCEPTED
+  /// Withdrawn by an administrator before it was claimed.
+  REVOKED
+  /// Passed `expiresAt` unclaimed.
+  EXPIRED
+  /// The provider refused to send it. `providerError` says why.
+  FAILED
+}
+
+/// The verbs a permission can grant.
+enum PermissionAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  MANAGE // superset of CREATE+READ+UPDATE+DELETE for the resource
+  APPROVE
+  REJECT
+  PUBLISH
+  REFUND
+  CLAIM // NFC tag / product claim
+  TRANSFER // ownership transfer
+  ASSIGN // assign roles / ownership
+  EXPORT // reports & dashboards
+  CONFIGURE // platform / gateway config
+  OVERRIDE // admin override
+  // ── Technical-domain verbs (APPLICATION / INFRASTRUCTURE resources) ──────
+  DEBUG // read logs, traces, run diagnostics
+  DEPLOY // ship a release / apply infrastructure
+  RESTART // bounce a service or node
+}
+
+/// The protected surfaces a permission can apply to. Deliberately coarser than
+/// the table list: one ResourceType may cover several tables owned by the same
+/// module (e.g. ORDER covers Order + OrderAddress + InventoryReservation).
+enum ResourceType {
+  SELF_PROFILE
+  BUYER_PROFILE
+  DROP
+  RELEASE_APPROVAL
+  COLLECTIBLE_INSTANCE
+  REPORTS_DASHBOARDS
+  MY_COLLECTIONS
+  ORDER
+  PAYMENT_ROYALTY
+  CONTENT_UNLOCK
+  NFC_TAG_CLAIM
+  BRAND_ARTIST_RECORD
+  EMPLOYEE_ROLE_MGMT
+  AUDIT_LOG
+  NOTIFICATION_CONFIG
+  SEARCH_DISCOVER
+  OPS_DASHBOARD_INFRA
+  PLATFORM_CONFIG
+  ASSETS_DOCUMENTS_UPLOAD
+  GENERAL_LOCATION
+  AGE_SPECIFIC_FLAG
+  ADDRESS
+  /// Running THIS application: releases, logs, diagnostics, app config.
+  /// Technical domain — no business role holds these.
+  APPLICATION
+  /// Running the platform it sits on: nodes, networking, provisioning.
+  /// Technical domain — no business role holds these.
+  INFRASTRUCTURE
+  /// Product-type configuration: which variant dimensions, values and rules a
+  /// kind of drop has. Appended last — see migration drop_types_and_variants.
+  DROP_TYPE
+}
+
+/// The two authorization domains. Domain is a hard boundary, not a label: a
+/// role may only be granted permissions of its own domain, so business roles
+/// never acquire deploy rights and technical roles never acquire refund
+/// rights. Cross-domain access is expressed by giving a person two role
+/// assignments, never by widening one role.
+enum AuthorizationDomain {
+  BUSINESS
+  TECHNICAL
+}
+
+/// How far a permission reaches, along two axes at once — *breadth* (whose
+/// records) and *visibility* (how much of each record). The engine resolves
+/// both from this single value (see SCOPE_REACH in the permission catalog):
+///
+///   value          breadth        visibility
+///   ─────────────  ─────────────  ──────────
+///   GLOBAL         all records    full
+///   ORG            one org        full
+///   OWN            actor's own    full
+///   MASKED_PARTIAL all records    partially redacted   (e.g. Order Manager)
+///   MASKED         all records    fully redacted       (e.g. Support)
+///   PUBLIC         all records    public fields only   (e.g. buyer browsing)
+///
+/// Two roles can therefore hold the *same* capability at different
+/// visibilities — `buyer-profile:read:masked` for Support vs
+/// `buyer-profile:read:masked-partial` for the Order Manager — and one
+/// endpoint serves both, shaping its response from the granted scope the
+/// engine returns.
+enum PermissionScope {
+  GLOBAL
+  ORGANIZATION
+  OWN
+  PUBLIC
+  MASKED
+  MASKED_PARTIAL
+}
+
+/// How wide a role assignment reaches: everything (GLOBAL), one organization
+/// (ORG, with scopeId set), or only the actor's own records (OWN).
+enum RoleScopeType {
+  ORGANIZATION
+  OWN
+  GLOBAL
 }
 
 // ───── source: packages\artist\prisma\artist.prisma ────────────────────────────────
 
 // ============================================================================
 // ARTIST MODULE SCHEMA  (packages/artist/prisma/artist.prisma)
-// Artists and their collections. Owned by the artist module.
-// Product / ProductClaim relation fields point here across partials — Prisma
-// resolves them because the merge script produces one schema.
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Artist, ArtistCollection, ArtistBrandLink
 // ============================================================================
 
+/// A creator's public identity. Optionally linked to a platform User (a
+/// claimed, self-managed artist profile) and/or to an Organization (a brand
+/// that manages the artist). Both are nullable so an artist can be catalogued
+/// before either link exists.
 model Artist {
-    id         String        @id @default(cuid())
-    name       String        @db.VarChar(255)
-    slug       String        @unique @db.VarChar(255)
-    bio        String?
-    imageUrl   String?       @map("image_url")
-    genre      ProductGenre?
-    isVerified Boolean       @default(false) @map("is_verified")
-    createdAt  DateTime      @default(now()) @map("created_at")
-    updatedAt  DateTime      @updatedAt @map("updated_at")
+  id                   String        @id @db.Uuid
+  /// Human-readable record id (`art…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name                 String
+  slug                 String        @unique
+  bio                  String?
+  avatarUrl            String?
+  coverUrl             String?
+  genre                String?
+  isPublic             Boolean
+  organizationId       String?       @db.Uuid
+  organization         Organization? @relation(fields: [organizationId], references: [id])
+  /// Unique — one User can back at most one Artist profile.
+  userId               String?       @unique @db.Uuid
+  user                 User?         @relation(fields: [userId], references: [id])
+  /// The staff invitation this profile was created from, if any.
+  ///
+  /// An artist is invited before they have an account, so the profile is
+  /// created with `userId` null and this id is the only thing connecting it to
+  /// the person who was invited. When they accept, `userId` is filled in by
+  /// matching on this. Unique, so replaying the invitation event cannot
+  /// produce a second profile.
+  ///
+  /// Deliberately NOT a foreign key: StaffInvitation belongs to the
+  /// access-control module, and a profile must survive that row being swept
+  /// once the invitation has expired. Same reasoning as
+  /// `Sku.provisioningBatchId`.
+  invitationId         String?       @unique @db.Uuid
+  complianceAttestedAt DateTime?
+  /// User id of the staff member who attested compliance. Intentionally NOT a
+  /// foreign key — an attestation must survive that account being removed.
+  complianceAttestedBy String?       @db.Uuid
+  isActive             Boolean
+  archivedAt           DateTime?
+  createdAt            DateTime
+  updatedAt            DateTime
 
-    collections ArtistCollection[]
-    claims      ProductClaim[]
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  artistCollections ArtistCollection[]
+  artistBrandLinks  ArtistBrandLink[]
+  releaseApprovals  ReleaseApproval[]
 
-    @@map("artists")
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  drops         Drop[]
+  skuClaims     SkuClaim[]
+  mediaAssets   MediaAsset[]
+  royaltyRules  RoyaltyRule[]
+  follows       Follow[]
+  /// Royalties owed TO this artist, and the batches that paid them. Named
+  /// relation on the entries because an artist is both a rule scope and a
+  /// payee, and Prisma needs the two links disambiguated.
+  royaltyLedgerEntrys RoyaltyLedgerEntry[] @relation("RoyaltyLedgerEntry_payeeArtist")
+  royaltyPayouts      RoyaltyPayout[]
+  /// W-9 / PAN / GST registration and the information returns issued to this
+  /// artist — see packages/tax.
+  artistTaxDocuments  ArtistTaxDocument[]
+  taxReturnFilings    TaxReturnFiling[]
 }
 
+/// A curated series of products by one artist — the unit buyers try to
+/// complete. `position` orders collections on the artist's page.
 model ArtistCollection {
-    id            String    @id @default(cuid())
-    name          String    @db.VarChar(255)
-    description   String?
-    coverImageUrl String?   @map("cover_image_url")
-    releaseDate   DateTime? @map("release_date") @db.Date
-    // Cap of collectibles this collection can hold. Denominator of a buyer's
-    // "collection progress" (see @hitbox/collections stats).
-    maximumLimit  Int       @default(10) @map("maximum_limit")
-    createdAt     DateTime  @default(now()) @map("created_at")
-    updatedAt     DateTime  @updatedAt @map("updated_at")
+  id             String        @id @db.Uuid
+  /// Human-readable record id (`acl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name           String
+  slug           String        @unique
+  description    String?
+  heroImageUrl   String?
+  position       Int
+  artistId       String        @db.Uuid
+  artist         Artist        @relation(fields: [artistId], references: [id])
+  organizationId String?       @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+  isPublic       Boolean
+  isActive       Boolean
+  archivedAt     DateTime?
+  createdAt      DateTime
+  updatedAt      DateTime
 
-    artistId String @map("artist_id")
-    artist   Artist @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  drops          Drop[]
+  skuClaims      SkuClaim[]
+  mediaAssets    MediaAsset[]
+  contentBundles ContentBundle[]
+  evolutionRules EvolutionRule[]
+  royaltyRules   RoyaltyRule[]
+}
 
-    products Product[]
-    claims   ProductClaim[]
+/// A time-bounded commercial relationship between an artist and a brand.
+/// The composite unique lets the same pair hold several link types at once
+/// (e.g. PRIMARY plus MERCHANDISE) but never duplicate one.
+model ArtistBrandLink {
+  id             String              @id @db.Uuid
+  /// Human-readable record id (`abl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  artistId       String              @db.Uuid
+  artist         Artist              @relation(fields: [artistId], references: [id])
+  organizationId String              @db.Uuid
+  organization   Organization        @relation(fields: [organizationId], references: [id])
+  linkType       ArtistBrandLinkType
+  startDate      DateTime
+  endDate        DateTime?
+  isActive       Boolean
+  createdAt      DateTime
 
-    @@index([artistId])
-    @@map("artist_collections")
+  @@unique([artistId, organizationId, linkType])
+}
+
+/// What an artist ↔ brand link covers.
+enum ArtistBrandLinkType {
+  PRIMARY
+  MERCHANDISE
+  DISTRIBUTION
+}
+
+// ───── source: packages\audit\prisma\audit.prisma ──────────────────────────────────
+
+// ============================================================================
+// AUDIT MODULE SCHEMA  (packages/audit/prisma/audit.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: AuditEventType, AuditEvent, AuditRetentionPolicy
+//
+// The compliance trail. Every actor id, resource id and organization id here is
+// stored WITHOUT a foreign key on purpose: the audit log must remain readable
+// and complete after the records it describes are archived or deleted, and it
+// must never be the reason a delete fails.
+// ============================================================================
+
+/// Catalog of auditable event names — a real table rather than an enum, so new
+/// events can be registered without a migration. `defaultSeverity` feeds the
+/// retention policy; `sourceStories` cites the requirement each event came
+/// from, which is what makes the trail defensible in a review.
+model AuditEventType {
+  eventType       String        @id
+  /// Human-readable record id (`aet…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  personaGroup    String
+  description     String
+  defaultSeverity AuditSeverity
+  sourceStories   String[]
+  isActive        Boolean
+  createdAt       DateTime
+
+  auditEvents AuditEvent[]
+}
+
+/// One append-only audit record. The primary key is (eventId, occurredAt) —
+/// composite so the table can be range-partitioned by time for retention and
+/// pruning without losing per-event uniqueness. `beforeState`/`afterState`
+/// capture the diff; `correlationId` stitches one request's events together;
+/// `ledgerReferenceId` links a provenance-affecting action to its
+/// BlockchainLedger row. `insertedAt` is recorded separately from `occurredAt`
+/// so clock skew and late writes are visible.
+model AuditEvent {
+  eventId           String             @db.Uuid
+  occurredAt        DateTime
+  eventType         String
+  type              AuditEventType     @relation(fields: [eventType], references: [eventType])
+  actorType         AuditActorType
+  actorId           String?            @db.Uuid
+  /// The actor's roles at the time of the action — a snapshot, because a later
+  /// role change must not rewrite what their authority was.
+  actorRoleSnapshot String?
+  organizationId    String?            @db.Uuid
+  resourceType      String?
+  resourceId        String?            @db.Uuid
+  actionResult      AuditActionResult
+  severity          AuditSeverity
+  beforeState       Json?
+  afterState        Json?
+  ipAddress         String?
+  userAgent         String?
+  deviceId          String?
+  correlationId     String             @db.Uuid
+  ledgerReferenceId String?            @db.Uuid
+  metadata          Json
+  insertedAt        DateTime
+
+  @@id([eventId, occurredAt])
+  /// Human-readable record id (`aud…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+
+  // Read patterns, in the order the query API and the alerting rules hit
+  // them. All non-unique: uniqueness is the primary key's job, and a unique
+  // index here would reject the second event of a burst that legitimately
+  // shares an actor or a correlation id.
+
+  /// "Everything this person did" — the first question an incident asks.
+  @@index([actorId, occurredAt])
+  /// Tenant-scoped reads: an ORG-scoped reader only ever sees its own rows.
+  @@index([organizationId, occurredAt])
+  /// "Everything that happened to this row" — provenance for one record.
+  @@index([resourceType, resourceId])
+  /// Unqualified time-range scans, and the pruner's cutoff sweep.
+  @@index([occurredAt])
+  /// Denial alerting and per-severity retention queries.
+  @@index([actionResult, occurredAt])
+  /// Reassembling one request — a refund approval plus the ledger write it
+  /// caused. No occurredAt: a correlation covers a handful of rows, so the
+  /// planner sorts them for free.
+  @@index([correlationId])
+  /// Every alerting rule filters on eventType (`LIKE 'role.%'`,
+  /// `IN ('order.refund', ...)`) and Postgres does not index a foreign key
+  /// on its own. Leading column, so prefix matches can use it.
+  @@index([eventType, occurredAt])
+}
+
+/// How long events of each severity are kept. Keyed by severity itself, so
+/// there is exactly one policy per level and no ambiguity for the pruner.
+model AuditRetentionPolicy {
+  severity      AuditSeverity @id
+  /// Human-readable record id (`arp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  retentionDays Int
+  notes         String
+}
+
+/// Which persona performed the action. SYSTEM covers scheduled jobs and
+/// webhook-driven changes with no human actor.
+enum AuditActorType {
+  BUYER
+  BRAND_EMPLOYEE
+  ARTIST
+  HITBOX_EMPLOYEE
+  HITBOX_ADMIN
+  SYSTEM
+}
+
+/// Outcome. DENIED (authorisation refused) is kept distinct from FAILURE
+/// (attempted but errored) — they mean very different things in a review.
+enum AuditActionResult {
+  SUCCESS
+  FAILURE
+  DENIED
+}
+
+/// Event importance; drives retention via AuditRetentionPolicy.
+enum AuditSeverity {
+  INFO
+  WARNING
+  CRITICAL
 }
 
 // ───── source: packages\auth\prisma\auth.prisma ────────────────────────────────────
 
 // ============================================================================
 // AUTH MODULE SCHEMA  (packages/auth/prisma/auth.prisma)
-// Merged by the shared build script into shared/database/prisma/schema.prisma.
-// Datasource + generator + shared enums live in shared/database/prisma.
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: AuthWebhookEvent
 // ============================================================================
 
-/// Clerk webhook deliveries, keyed by the svix-id header.
-/// Presence of a row = the delivery has been processed (idempotency guard).
+/// Clerk webhook deliveries, keyed by the `svix-id` header.
+/// Presence of a row = the delivery has already been processed (idempotency
+/// guard against replays). No relation to User on purpose: the payload arrives
+/// before the local projection exists, and auth must never depend on users.
 model AuthWebhookEvent {
-    id          String   @id // svix-id header — unique per delivery
-    type        String
-    payload     Json
-    processedAt DateTime @default(now()) @map("processed_at")
-
-    @@index([processedAt])
-    @@map("auth_webhook_events")
+  id          String    @id
+  /// Human-readable record id (`awh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  eventType   String
+  payload     Json
+  processedAt DateTime?
+  receivedAt  DateTime
 }
 
 // ───── source: packages\claims\prisma\claims.prisma ────────────────────────────────
 
 // ============================================================================
 // CLAIMS MODULE SCHEMA  (packages/claims/prisma/claims.prisma)
-// NFC claims + provenance ledger (ledger lives here: authenticity domain).
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: SkuClaim, BlockchainLedger, SkuHistory
+//
+// Provenance. Three append-only views of the same truth:
+//   SkuClaim         — the act of claiming (who tapped, when, which drop)
+//   SkuHistory       — the ownership timeline (queryable "who held it when")
+//   BlockchainLedger — the tamper-evident hash chain (verifiable, not queried)
+// Nothing here is ever updated in place except the two revocation columns and
+// SkuHistory.isCurrent/endedAt when a period closes.
 // ============================================================================
 
-/// NFC claim events: which user claimed which product, when.
-model ProductClaim {
-    id        String   @id @default(cuid())
-    claimCode String   @unique @db.VarChar(10) // old hb_pc_claimid (CHAR(10))
-    claimedNo Int      @default(1) @map("claimed_no")
-    claimedAt DateTime @default(now()) @map("claimed_at")
+/// A successful claim of one SKU by one user. `claimedNo` counts claims on that
+/// SKU (1 = first owner, 2 = second, …), so the composite unique makes a
+/// duplicate claim at the same position impossible. artistId/collectionId are
+/// denormalised snapshots so the claim reads correctly even if the drop is
+/// later re-filed.
+model SkuClaim {
+  id            String            @id @db.Uuid
+  /// Human-readable record id (`clm…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  claimCode     String            @unique
+  claimedNo     Int
+  claimedAt     DateTime
+  userId        String            @db.Uuid
+  user          User              @relation(fields: [userId], references: [id])
+  skuId         String            @db.Uuid
+  sku           Sku               @relation(fields: [skuId], references: [id])
+  productId     String            @db.Uuid
+  drop          Drop              @relation(fields: [productId], references: [id])
+  artistId      String?           @db.Uuid
+  artist        Artist?           @relation(fields: [artistId], references: [id])
+  collectionId  String?           @db.Uuid
+  collection    ArtistCollection? @relation(fields: [collectionId], references: [id])
+  revokedAt     DateTime?
+  revokedReason String?
 
-    userId String @map("user_id")
-    user   User   @relation(fields: [userId], references: [id])
-
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id])
-
-    artistId String? @map("artist_id")
-    artist   Artist? @relation(fields: [artistId], references: [id])
-
-    collectionId String?           @map("collection_id")
-    collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
-
-    ledgerEntries BlockchainLedger[]
-
-    @@index([userId])
-    @@index([productId])
-    @@map("product_claims")
+  @@unique([skuId, claimedNo])
 }
 
-/// Provenance ledger: origin data + cryptographic signatures + hash per
-/// transaction. Append-only per product — rows form a chain ordered by
-/// `sequenceNo`, each linking to the prior row's hash via `previousHash`.
-/// The seq-0 MINT row's seller signature is HitBox.
+/// Append-only hash chain per SKU. Each row commits to the previous one
+/// (`previousHash` → `currentHash`), so any retroactive edit breaks the chain
+/// and is detectable. `sequenceNo` is unique per SKU, which prevents forks.
+/// Signatures are captured on transfers to prove both parties consented.
 model BlockchainLedger {
-    id                     String       @id @default(cuid())
-    txType                 LedgerTxType @default(MINT) @map("tx_type")
-    // 0-based position in this product's chain. seq 0 = MINT (origin).
-    sequenceNo             Int          @map("sequence_no")
-    originDateTime         DateTime     @map("origin_date_time")
-    originOwner            String       @map("origin_owner") @db.VarChar(255)
-    sellerDigitalSignature String       @map("seller_digital_signature")
-    buyerDigitalSignature  String?      @map("buyer_digital_signature")
-    receiverPublicKey      String?      @map("receiver_public_key")
-    productBuyerHash       String       @map("product_buyer_hash")
-    // Hash of the immediately preceding chain row (null for seq 0). Tampering
-    // with any earlier row breaks every subsequent link.
-    previousHash           String?      @map("previous_hash")
-    transactionDateTime    DateTime     @default(now()) @map("transaction_date_time")
-    transactionAmount      Decimal      @default(0) @map("transaction_amount") @db.Decimal(12, 2)
+  id                     String       @id @db.Uuid
+  /// Human-readable record id (`bcl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  skuId                  String       @db.Uuid
+  sku                    Sku          @relation(fields: [skuId], references: [id])
+  sequenceNo             Int
+  previousHash           String?
+  currentHash            String
+  txType                 LedgerTxType
+  sellerDigitalSignature String?
+  buyerDigitalSignature  String?
+  receiverPublicKey      String?
+  payload                Json?
+  createdAt              DateTime
 
-    originProductId String  @map("origin_product_id")
-    originProduct   Product @relation(fields: [originProductId], references: [id])
+  // ── Platform signing (v3.1) ───────────────────────────────────────────────
+  // The party signatures above prove the *counterparties* consented. These
+  // prove the *platform* wrote the row: without them a chain is only as
+  // trustworthy as the database it sits in, and "the hash matches" says
+  // nothing about who computed it.
+  //
+  // `hashVersion` defaults to 1 so every existing row reads as "computed by
+  // the original algorithm". The ledger writer is unchanged and still emits
+  // version 1 — a later algorithm bumps this, and verification dispatches on
+  // it rather than assuming.
+  /// Which hash algorithm produced `currentHash`. 1 = the original.
+  hashVersion       Int       @default(1) @db.SmallInt
+  /// Detached platform signature over the row. Null on rows written before
+  /// signing existed, and on any row the signer was unavailable for.
+  platformSignature String?
+  /// Which signing key produced it, so a rotated key can still be verified.
+  signingKeyVersion String?
+  /// Who caused this entry. SYSTEM for the ordinary claim/transfer path.
+  actorType         ActorType @default(SYSTEM)
+  /// The acting user or admin, when there was one. No FK — the chain must
+  /// outlive the account, same rule as the rest of the provenance tables.
+  actorRef          String?   @db.Uuid
+  /// Why, for the entries where that is not obvious from `txType` — a REVOKE
+  /// or a REISSUE is a decision somebody has to be able to account for.
+  reason            String?
+  /// When the event happened, as distinct from when the row was written.
+  occurredAt        DateTime  @default(now())
+  /// The physical chip involved, once tags are rows of their own (SD-7).
+  nfcTagId          String?   @db.Uuid
+  nfcTag            NfcTag?   @relation(fields: [nfcTagId], references: [id])
 
-    claimId String?       @map("claim_id")
-    claim   ProductClaim? @relation(fields: [claimId], references: [id])
+  @@unique([skuId, sequenceNo])
+}
 
-    // Ownership delta captured by this row. `fromUser` is null on MINT/CLAIM
-    // (origin is HitBox, not a local user); `toUser` is null only on MINT.
-    fromUserId String? @map("from_user_id")
-    fromUser   User?   @relation("LedgerFromUser", fields: [fromUserId], references: [id])
+/// One ownership period for a SKU. Exactly one row per SKU should carry
+/// `isCurrent = true`, with `endedAt` null; closing a period sets both. `price`
+/// + `currency` record what the holder paid, which is what makes resale and
+/// royalty analytics possible.
+model SkuHistory {
+  id          String            @id @db.Uuid
+  /// Human-readable record id (`skh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  skuId       String            @db.Uuid
+  sku         Sku               @relation(fields: [skuId], references: [id])
+  ownerId     String?           @db.Uuid
+  owner       User?             @relation(fields: [ownerId], references: [id])
+  acquiredVia AcquisitionMethod
+  price       Decimal?          @db.Decimal(12, 2)
+  currency    Currency?
+  startedAt   DateTime
+  endedAt     DateTime?
+  isCurrent   Boolean
+}
 
-    toUserId String? @map("to_user_id")
-    toUser   User?   @relation("LedgerToUser", fields: [toUserId], references: [id])
+/// Kind of ownership event on the provenance chain. Each SKU's ledger runs
+/// MINT (origin) → CLAIM (first buyer) → TRANSFER (0..n owner changes), with
+/// FLAG / UNFLAG recording fraud holds without rewriting history.
+/// REVOKE and REISSUE are appended, never inserted among the others: an enum
+/// value's position is part of the physical type in Postgres, and reordering
+/// is the one edit to an enum that is not additive.
+enum LedgerTxType {
+  MINT
+  CLAIM
+  TRANSFER
+  FLAG
+  UNFLAG
+  /// A claim was withdrawn — counterfeit finding, support resolution. The
+  /// original entries stay; this records the withdrawal as its own event.
+  REVOKE
+  /// The item was re-tagged or re-issued to the same holder, so the chain
+  /// continues across a physical chip replacement.
+  REISSUE
+}
 
-    @@unique([originProductId, sequenceNo])
-    @@index([originProductId])
-    @@index([claimId])
-    @@map("blockchain_ledger")
+/// Who a ledger entry is attributable to. SYSTEM is the ordinary path — a
+/// buyer tapping a tag produces an entry the platform wrote on their behalf,
+/// not one they signed.
+enum ActorType {
+  USER
+  SYSTEM
+  ADMIN
+}
+
+/// How a holder came to own the item: a first-party CLAIM, a peer TRANSFER, or
+/// an ADMIN correction (support resolution, mis-ship recovery).
+enum AcquisitionMethod {
+  CLAIM
+  TRANSFER
+  ADMIN
 }
 
 // ───── source: packages\collections\prisma\collections.prisma ──────────────────────
@@ -257,26 +849,1458 @@ model BlockchainLedger {
 // ============================================================================
 // COLLECTIONS MODULE SCHEMA  (packages/collections/prisma/collections.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: BuyerCollection
+//
+// The buyer's shelf. Distinct from ArtistCollection (artist module), which is
+// the curated series a buyer is trying to complete.
 // ============================================================================
 
-/// A buyer's owned/claimed collectibles; buyer chooses public/private showcase.
+/// One item on a buyer's shelf. Unique per (user, sku), so an item appears
+/// once. `shareToken` is a capability URL for showing a private shelf to
+/// someone without making it PUBLIC — unique so tokens are unguessable and
+/// individually revocable by nulling the column.
 model BuyerCollection {
-    id             String               @id @default(cuid())
-    totalClaimedNo Int                  @default(0) @map("total_claimed_no")
-    genre          ProductGenre?
-    visibility     CollectionVisibility @default(PRIVATE)
-    createdAt      DateTime             @default(now()) @map("created_at")
+  id         String     @id @db.Uuid
+  /// Human-readable record id (`bcn…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  userId     String     @db.Uuid
+  user       User       @relation(fields: [userId], references: [id])
+  skuId      String     @db.Uuid
+  sku        Sku        @relation(fields: [skuId], references: [id])
+  visibility Visibility
+  shareToken String?    @unique
+  acquiredAt DateTime
+  archivedAt DateTime?
 
-    userId String @map("user_id")
-    user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  @@unique([userId, skuId])
+}
 
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id])
+// ───── source: packages\content\prisma\content.prisma ──────────────────────────────
 
-    @@unique([userId, productId])
-    @@index([userId])
-    @@index([productId])
-    @@map("buyer_collections")
+// ============================================================================
+// CONTENT MODULE SCHEMA  (packages/content/prisma/content.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ContentBundle, ContentBundleItem, ContentUnlock
+//
+// The reward layer: exclusive content attached to a drop or collection, and
+// the per-user grants that open it. Files themselves belong to the media
+// module — a bundle is only a curated list plus an access policy.
+// ============================================================================
+
+/// A named set of exclusive assets, attached to a product or a collection
+/// (both nullable — a bundle can hang off either). `accessType` states how it
+/// is earned rather than who has it; the grants are ContentUnlock rows.
+model ContentBundle {
+  id           String            @id @db.Uuid
+  /// Human-readable record id (`cbd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name         String
+  description  String?
+  productId    String?           @db.Uuid
+  drop         Drop?             @relation(fields: [productId], references: [id])
+  collectionId String?           @db.Uuid
+  collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
+  accessType   ContentAccessType
+  isActive     Boolean
+  archivedAt   DateTime?
+  createdAt    DateTime
+  updatedAt    DateTime
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  contentBundleItems ContentBundleItem[]
+  contentUnlocks     ContentUnlock[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  evolutionRules EvolutionRule[]
+}
+
+/// Places one media asset in one bundle at a position. Unique per
+/// (bundle, asset) so an asset cannot be listed twice in the same bundle.
+model ContentBundleItem {
+  id       String        @id @db.Uuid
+  /// Human-readable record id (`cbi…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  bundleId String        @db.Uuid
+  bundle   ContentBundle @relation(fields: [bundleId], references: [id])
+  assetId  String        @db.Uuid
+  asset    MediaAsset    @relation(fields: [assetId], references: [id])
+  position Int
+
+  @@unique([bundleId, assetId])
+}
+
+/// A user's grant to one bundle, optionally tied to the specific SKU that
+/// earned it (`skuId` in the unique key — owning two copies grants two rows).
+/// `accessExpiresAt` supports time-limited drops; the notified/acknowledged/
+/// lastAccessed/accessCount columns are engagement telemetry, not access
+/// control.
+model ContentUnlock {
+  id              String        @id @db.Uuid
+  /// Human-readable record id (`cul…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  userId          String        @db.Uuid
+  user            User          @relation(fields: [userId], references: [id])
+  bundleId        String        @db.Uuid
+  bundle          ContentBundle @relation(fields: [bundleId], references: [id])
+  skuId           String?       @db.Uuid
+  sku             Sku?          @relation(fields: [skuId], references: [id])
+  grantedAt       DateTime
+  notifiedAt      DateTime?
+  acknowledgedAt  DateTime?
+  accessExpiresAt DateTime?
+  lastAccessedAt  DateTime?
+  accessCount     Int
+
+  @@unique([userId, bundleId, skuId])
+}
+
+/// How a bundle is earned: simply by owning the item (OWNER_ONLY), by hitting
+/// an evolution threshold (EVOLUTION_GRANT), or by a campaign/reward
+/// (REWARD_GRANT).
+enum ContentAccessType {
+  OWNER_ONLY
+  EVOLUTION_GRANT
+  REWARD_GRANT
+}
+
+// ───── source: packages\evolution\prisma\evolution.prisma ──────────────────────────
+
+// ============================================================================
+// EVOLUTION MODULE SCHEMA  (packages/evolution/prisma/evolution.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: EvolutionRule, EvolutionEvent
+//
+// "Collectibles that change over time": a rule watches a threshold, and when a
+// SKU crosses it an event fires once and (optionally) grants a content bundle.
+// ============================================================================
+
+/// A condition that upgrades a SKU. Scoped to a product or a collection (both
+/// nullable). `thresholdType` + `thresholdValue` cover the simple numeric
+/// cases; `thresholdConfig` carries the structured extras for LOCATION and
+/// EVENT_SPECIFIC rules that a single integer cannot express.
+model EvolutionRule {
+  id              String                 @id @db.Uuid
+  /// Human-readable record id (`evr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name            String
+  collectionId    String?                @db.Uuid
+  collection      ArtistCollection?      @relation(fields: [collectionId], references: [id])
+  productId       String?                @db.Uuid
+  drop            Drop?                  @relation(fields: [productId], references: [id])
+  thresholdType   EvolutionThresholdType
+  thresholdValue  Int
+  thresholdConfig Json?
+  grantsBundleId  String?                @db.Uuid
+  grantsBundle    ContentBundle?         @relation(fields: [grantsBundleId], references: [id])
+  isActive        Boolean
+  archivedAt      DateTime?
+  createdAt       DateTime
+
+  evolutionEvents EvolutionEvent[]
+}
+
+/// Records that a rule fired for a SKU. Unique per (rule, sku) — this row IS
+/// the idempotency guard, so the evaluator can run as often as it likes and a
+/// reward is never granted twice.
+model EvolutionEvent {
+  id          String        @id @db.Uuid
+  /// Human-readable record id (`eve…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  ruleId      String        @db.Uuid
+  rule        EvolutionRule @relation(fields: [ruleId], references: [id])
+  skuId       String        @db.Uuid
+  sku         Sku           @relation(fields: [skuId], references: [id])
+  triggeredAt DateTime
+
+  @@unique([ruleId, skuId])
+}
+
+/// What the rule measures. OWNED_DURATION is held-time in days; the COUNT
+/// variants are tallies; LOCATION and EVENT_SPECIFIC read thresholdConfig.
+enum EvolutionThresholdType {
+  OWNED_DURATION
+  CLAIM_COUNT
+  PURCHASE_COUNT
+  TRADE_COUNT
+  LOCATION
+  EVENT_SPECIFIC
+}
+
+// ───── source: packages\finance\prisma\drop-pricing.prisma ─────────────────────────
+
+// ============================================================================
+// DROP PRICING  (packages/finance/prisma/drop-pricing.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: DropPricing
+//
+// Spec name is "DropPrice", but that model already exists (packages/products —
+// one row per drop × market). This table is the *versioned entry record* that
+// sits in front of it: COGS and both sales prices are entered together, once,
+// and each new version is projected onto the per-market DropPrice rows that
+// orders read. See docs/finance/cogs-royalty-payout-gaps.md.
+// ============================================================================
+
+/// One versioned (COGS + USD price + INR price) entry for a drop.
+///
+/// The three money inputs are written together and never edited — a change is
+/// a new row with the next `version`, and the previous row is closed
+/// (`effectiveTo` set, status DISABLED). `grossProfitUsd` / `grossProfitInr`
+/// are Postgres GENERATED columns (see the migration): the database computes
+/// them, so they can never disagree with the inputs. The client never writes
+/// them.
+///
+/// `dropId` and `approvedById` are plain ids with no foreign key, same rule as
+/// the other finance records: the pricing history must outlive both the
+/// approver's account and any later change to the drop row, and it keeps this
+/// table additive (no back-relation on Drop).
+model DropPricing {
+  id             String          @id @db.Uuid
+  /// Human-readable record id (`dpg…`). Unique, never a foreign key.
+  publicCode     String?         @unique @db.VarChar(32)
+  dropId         String          @db.Uuid
+  /// 1 for the first entry, +1 for each successor. Unique per drop.
+  version        Int
+  /// Unit cost in USD; projected onto the USD market row.
+  costOfGoods    Decimal         @db.Decimal(12, 2)
+  /// Unit cost in INR; projected onto the INR market row. Entered together with
+  /// the USD figures (product decision; supersedes the single-global-COGS spec).
+  costOfGoodsInr Decimal         @db.Decimal(12, 2)
+  salesPriceUsd  Decimal         @db.Decimal(12, 2)
+  salesPriceInr  Decimal         @db.Decimal(12, 2)
+  /// GENERATED ALWAYS AS (salesPriceUsd - costOfGoods) STORED. Read-only.
+  grossProfitUsd Decimal?        @default(dbgenerated("(\"salesPriceUsd\" - \"costOfGoods\")")) @db.Decimal(12, 2)
+  /// GENERATED ALWAYS AS (salesPriceInr - costOfGoodsInr) STORED. Read-only.
+  grossProfitInr Decimal?        @default(dbgenerated("(\"salesPriceInr\" - \"costOfGoodsInr\")")) @db.Decimal(12, 2)
+  status         DropPriceStatus @default(ACTIVE)
+  effectiveFrom  DateTime        @default(now())
+  /// Null while this is the current version.
+  effectiveTo    DateTime?
+  /// Where the cost figure came from, e.g. "vendor quote", "monthly reconciliation".
+  costSource     String?
+  /// Why a successor version changed the cost or price.
+  varianceReason String?
+  /// The entering user, who is also the approver at creation (single step).
+  createdById    String?         @db.Uuid
+  approvedById   String?         @db.Uuid
+  approvedAt     DateTime?
+  createdAt      DateTime        @default(now())
+
+  @@unique([dropId, version])
+  @@index([dropId, effectiveFrom])
+}
+
+// ───── source: packages\finance\prisma\finance.prisma ──────────────────────────────
+
+// ============================================================================
+// FINANCE MODULE SCHEMA  (packages/finance/prisma/finance.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: RoyaltyRule, RoyaltyLedgerEntry, RoyaltyPayout, AdjustmentEntry,
+//       FinanceLedgerEntry, CogsReconciliation
+//
+// Accounting. Every ledger here is append-only: a mistake is corrected by
+// posting an ADJUSTMENT entry that references the original, never by editing a
+// row. See docs/finance/finance-revenue-ledger.md for the design and
+// docs/finance/royalty-lifecycle.md for the states these columns move through.
+// ============================================================================
+
+/// A royalty split, resolved most-specific-first: drop → collection →
+/// artist → organization (all four scope columns nullable). `basis` decides
+/// whether the split applies to gross revenue or net profit; `percentage` is
+/// the simple case and `splitConfig` carries multi-party breakdowns.
+/// `effectiveFrom`/`effectiveTo` make rules versioned rather than mutable, so
+/// re-running an old order's royalties reproduces the original numbers.
+///
+/// `payoutThreshold` + `payoutFrequency` live here rather than in a global
+/// settings row because "accrue until $500, then pay monthly" is a term of the
+/// artist's deal, not a platform constant — and a deal that changes has to
+/// change without rewriting the entries already accrued under the old one,
+/// which versioning by `effectiveFrom` is exactly what gives us.
+model RoyaltyRule {
+  id             String            @id @db.Uuid
+  /// Human-readable record id (`ryr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  organizationId String?           @db.Uuid
+  organization   Organization?     @relation(fields: [organizationId], references: [id])
+  artistId       String?           @db.Uuid
+  artist         Artist?           @relation(fields: [artistId], references: [id])
+  collectionId   String?           @db.Uuid
+  collection     ArtistCollection? @relation(fields: [collectionId], references: [id])
+  productId      String?           @db.Uuid
+  drop           Drop?             @relation(fields: [productId], references: [id])
+  basis          RoyaltyBasis
+  splitType      String
+  splitConfig    Json
+  percentage     Decimal?          @db.Decimal(6, 3)
+  /// Minimum accrued balance before a payout is scheduled. Null falls back to
+  /// the module default (see ROYALTY_DEFAULT_PAYOUT_THRESHOLD).
+  payoutThreshold Decimal?         @db.Decimal(12, 2)
+  /// How often an above-threshold balance is swept. Null = module default.
+  payoutFrequency PayoutFrequency?
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  createdAt      DateTime
+
+  royaltyLedgerEntrys RoyaltyLedgerEntry[]
+
+  /// Rule resolution walks the four scope columns most-specific-first and
+  /// filters on the effective window, every time an accrual is computed.
+  @@index([productId, effectiveFrom])
+  @@index([collectionId, effectiveFrom])
+  @@index([artistId, effectiveFrom])
+  @@index([organizationId, effectiveFrom])
+}
+
+/// What one order owes under one royalty rule.
+///
+/// Three things make this table the spine of the royalty system:
+///
+///   **It is accrued at claim, not at payment.** `claimId` / `skuId` record
+///   which physical item's claim triggered it; an order that is paid but never
+///   claimed owes nothing. Those two are plain ids with no foreign key — the
+///   ledger must stay readable and summable after a claim is revoked, and a
+///   revocation that failed on an FK check would leave money unaccounted for.
+///
+///   **It carries its own arithmetic.** `grossRevenue`, `costOfGoods`,
+///   `netProfit`, `basis` and `percentage` are snapshots taken at accrual, so
+///   an entry can be re-checked years later without re-reading a price table
+///   that has since changed. `amount` is the posted figure and the only one
+///   summed.
+///
+///   **It is never edited.** `entryType = ADJUSTMENT` with `adjustsEntryId`
+///   set is how a correction is posted; the original keeps its own row and its
+///   own status. A payee's balance is the sum of its rows.
+///
+/// `accrualKey` is the idempotency guard: one entry per (trigger, rule), so a
+/// replayed claim event or a re-run job cannot double-credit an artist.
+model RoyaltyLedgerEntry {
+  id             String          @id @db.Uuid
+  /// Human-readable record id (`rle…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  orderId        String          @db.Uuid
+  order          Order           @relation(fields: [orderId], references: [id])
+  ruleId         String          @db.Uuid
+  rule           RoyaltyRule     @relation(fields: [ruleId], references: [id])
+
+  // ── What triggered it ─────────────────────────────────────────────────────
+  /// The serialized unit whose claim accrued this. No FK — see the note above.
+  skuId          String?         @db.Uuid
+  /// The SkuClaim that triggered accrual. No FK, same reason.
+  claimId        String?         @db.Uuid
+  /// `claim:<claimId>:rule:<ruleId>` for an accrual, `reversal:<entryId>` for a
+  /// reversal. Unique, which is what makes accrual safe to retry.
+  accrualKey     String          @unique
+
+  // ── Who is owed ───────────────────────────────────────────────────────────
+  payeeType           RoyaltyPayeeType
+  payeeArtistId       String?       @db.Uuid
+  payeeArtist         Artist?       @relation("RoyaltyLedgerEntry_payeeArtist", fields: [payeeArtistId], references: [id])
+  payeeOrganizationId String?       @db.Uuid
+  payeeOrganization   Organization? @relation("RoyaltyLedgerEntry_payeeOrganization", fields: [payeeOrganizationId], references: [id])
+
+  // ── The arithmetic, snapshotted ───────────────────────────────────────────
+  basis          RoyaltyBasis
+  percentage     Decimal?        @db.Decimal(6, 3)
+  grossRevenue   Decimal?        @db.Decimal(12, 2)
+  costOfGoods    Decimal?        @db.Decimal(12, 2)
+  netProfit      Decimal?        @db.Decimal(12, 2)
+
+  // ── The posting ───────────────────────────────────────────────────────────
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       Currency
+  entryType      LedgerEntryType
+  status         RoyaltyEntryStatus
+  adjustsEntryId String?         @db.Uuid
+  /// Set when the entry joins a payout batch; cleared only by a failed payout.
+  payoutId       String?         @db.Uuid
+  payout         RoyaltyPayout?  @relation(fields: [payoutId], references: [id])
+  accruedAt      DateTime
+  paidAt         DateTime?
+  createdAt      DateTime
+  /// The BlockchainLedger entry this accrual was triggered by. A plain id with
+  /// no relation, exactly like `skuId` and `claimId` above and for the same
+  /// reason: the money trail has to stay readable and summable after a
+  /// provenance row is revoked.
+  provenanceLedgerId String?      @db.Uuid
+
+  /// The balance query: "everything ACCRUED for this payee in this currency".
+  @@index([payeeArtistId, status, currency])
+  @@index([payeeOrganizationId, status, currency])
+  /// Order and claim drill-downs from the admin order detail.
+  @@index([orderId])
+  @@index([claimId])
+  /// Batch membership, for the payout statement.
+  @@index([payoutId])
+}
+
+/// One payout batch: the money that actually leaves the platform for one
+/// payee, in one currency, covering N accrued entries.
+///
+/// The doc's lifecycle is "45 orders accrue $506.25, threshold met, finance
+/// approves, gateway pays". That is three distinct facts — which entries,
+/// who approved, what the provider did — and they belong on a row of their own
+/// rather than smeared across 45 entry rows. The entries still carry
+/// `status`; this carries the batch.
+model RoyaltyPayout {
+  id                  String        @id @db.Uuid
+  /// Human-readable record id (`pyo…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  payeeType           RoyaltyPayeeType
+  payeeArtistId       String?       @db.Uuid
+  payeeArtist         Artist?       @relation(fields: [payeeArtistId], references: [id])
+  payeeOrganizationId String?       @db.Uuid
+  payeeOrganization   Organization? @relation(fields: [payeeOrganizationId], references: [id])
+  amount              Decimal       @db.Decimal(12, 2)
+  currency            Currency
+  /// How many ledger entries this batch settles — denormalised so a statement
+  /// list does not need a count per row.
+  entryCount          Int
+  /// The threshold in force when the batch was scheduled, snapshotted so a
+  /// later change to the rule does not rewrite why this batch existed.
+  thresholdApplied    Decimal?      @db.Decimal(12, 2)
+  status              PayoutStatus
+  scheduledAt         DateTime
+  /// Approver's user id. Intentionally not a foreign key — a payout record
+  /// must outlive the approver's account.
+  approvedById        String?       @db.Uuid
+  approvedAt          DateTime?
+  /// The provider's own payout object id, for reconciliation.
+  gatewayPayoutRef    String?
+  paidAt              DateTime?
+  failureReason       String?
+  createdAt           DateTime
+  updatedAt           DateTime
+
+  // ── Approval trail (v3.1) ─────────────────────────────────────────────────
+  /// The accrual window this batch settles. Recorded on the batch rather than
+  /// derived from its entries, because "which period did we pay for" is a
+  /// question a statement has to answer without re-reading 45 rows.
+  payoutPeriodStart     DateTime? @db.Date
+  payoutPeriodEnd       DateTime? @db.Date
+  /// Why it was approved, alongside the existing `approvedById`/`approvedAt`.
+  approvalReason        String?
+  /// Approving a payout and instructing the transfer are two acts, often by
+  /// two people. No FK — the record outlives the account, as above.
+  transferInitiatedById String?   @db.Uuid
+  transferInitiatedAt   DateTime?
+
+  // ── Rejection trail ───────────────────────────────────────────────────────
+  /// A rejected batch is status CANCELLED with these set (the enum has no
+  /// REJECTED value and is left as built). `rejectionReason` is mandatory at
+  /// the API, mirroring `approvalReason`. No FK — the record outlives the user.
+  rejectedById          String?   @db.Uuid
+  rejectedAt            DateTime?
+  rejectionReason       String?
+
+  royaltyLedgerEntrys RoyaltyLedgerEntry[]
+  /// Form 16A / 1099-NEC filings substantiated by this payout. Both report
+  /// *paid* royalty income, so a filing points at the executed payout rather
+  /// than at the accrual — see packages/tax and docs/tax/compliance-mapping.md.
+  taxReturnFilings    TaxReturnFiling[]
+
+  @@index([payeeArtistId, status])
+  @@index([payeeOrganizationId, status])
+  @@index([status, scheduledAt])
+}
+
+/// A correction to a financial record. The immutability principle in one
+/// table: nothing above is ever edited or deleted, so every reversal, fee
+/// correction and write-off is a row here pointing at what it corrects.
+///
+/// `targetType` + `targetId` is a polymorphic pointer with **no** foreign key,
+/// deliberately: an adjustment must be postable against a record in any
+/// module, and the correction trail must survive the archival of what it
+/// corrects. `amountAdjustment` is signed — negative reverses, positive adds.
+model AdjustmentEntry {
+  id               String              @id @db.Uuid
+  /// Human-readable record id (`adj…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  targetType       AdjustmentTargetType
+  targetId         String              @db.Uuid
+  /// The order the correction ultimately belongs to, when there is one, so
+  /// order-level reporting does not need a join per target type.
+  orderId          String?             @db.Uuid
+  order            Order?              @relation(fields: [orderId], references: [id])
+  /// Signed. -11.25 reverses an $11.25 royalty; +5.00 posts a make-good.
+  amountAdjustment Decimal             @db.Decimal(12, 2)
+  currency         Currency
+  reasonCode       AdjustmentReason
+  reason           String
+  /// Actor's user id. No foreign key: a correction outlives the person.
+  actorId          String?             @db.Uuid
+  /// The refund or dispute that caused it, when it was not a manual posting.
+  refundRequestId  String?             @db.Uuid
+  disputeCaseId    String?             @db.Uuid
+  /// The royalty or finance entry this correction produced, if it posted one.
+  resultingEntryId String?             @db.Uuid
+  metadata         Json?
+  createdAt        DateTime
+
+  // ── Approval workflow (v3.1) ──────────────────────────────────────────────
+  // ⚠️ Existing rows default to PENDING_APPROVAL, which is almost certainly
+  // wrong for them — they were posted before an approval step existed and are
+  // in fact executed. No backfill is written here on purpose; see the open
+  // question in docs/finance/finance-revenue-ledger.md.
+  status       AdjustmentStatus @default(PENDING_APPROVAL)
+  /// No foreign key: a correction outlives the approver, same as `actorId`.
+  approvedById String?          @db.Uuid
+  approvedAt   DateTime?
+
+  /// "Show me everything that corrected this record" — the traceability test.
+  @@index([targetType, targetId])
+  @@index([orderId])
+  @@index([createdAt])
+}
+
+/// Platform-side double-entry line. `direction` (CREDIT/DEBIT) plus `amount`
+/// is the posting; `costOfGoods` and `gatewayFee` are carried alongside so
+/// margin is reportable without re-reading the catalog or the gateway.
+/// `orderId` is nullable for entries with no order behind them (platform fees,
+/// manual adjustments, payouts).
+///
+/// `postingKey` is the same idempotency guard the royalty ledger uses: a
+/// settlement webhook that is delivered twice posts revenue once.
+model FinanceLedgerEntry {
+  id          String           @id @db.Uuid
+  /// Human-readable record id (`fle…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  orderId     String?          @db.Uuid
+  order       Order?           @relation(fields: [orderId], references: [id])
+  entryType   LedgerEntryType
+  direction   FinanceDirection
+  category    FinanceCategory
+  amount      Decimal          @db.Decimal(12, 2)
+  currency    Currency
+  costOfGoods Decimal?         @db.Decimal(12, 2)
+  gatewayFee  Decimal?         @db.Decimal(12, 2)
+  /// Correction chain, mirroring RoyaltyLedgerEntry. Plain id, no FK.
+  adjustsEntryId String?       @db.Uuid
+  postingKey  String?          @unique
+  description String?
+  createdAt   DateTime
+
+  @@index([orderId])
+  @@index([category, createdAt])
+  @@index([createdAt])
+}
+
+/// Monthly COGS variance reconciliation per drop.
+///
+/// `recordedCost` is what the catalog said a unit cost when its margin was
+/// posted; `actualCost` is what the invoices turned out to say. The gap is
+/// real money that has already been reported, so closing it is a reviewed
+/// decision with an approver on it — and `newCost` + `effectiveFromDate`
+/// record the correction going forward rather than rewriting the past, which
+/// is the same immutability rule the ledgers above follow.
+model CogsReconciliation {
+  id                   String               @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`cgr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  reconciliationNumber String               @unique @db.VarChar(10) // CR
+  reconciliationMonth  DateTime             @db.Date
+  dropId               String               @db.Uuid
+  drop                 Drop                 @relation(fields: [dropId], references: [id])
+  recordedCost         Decimal              @db.Decimal(12, 2)
+  actualCost           Decimal              @db.Decimal(12, 2)
+  varianceAmount       Decimal?             @db.Decimal(12, 2)
+  variancePercentage   Decimal?             @db.Decimal(5, 2)
+  varianceReason       String?
+  status               ReconciliationStatus @default(PENDING_REVIEW)
+  reviewedById         String?              @db.Uuid
+  reviewedAt           DateTime?
+  approvedById         String?              @db.Uuid
+  approvedAt           DateTime?
+  approvalReason       String?
+  newCost              Decimal?             @db.Decimal(12, 2)
+  effectiveFromDate    DateTime?            @db.Date
+  supportingDocuments  String?
+  notes                String?
+  createdById          String?              @db.Uuid
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+}
+
+/// What a royalty percentage is taken from.
+enum RoyaltyBasis {
+  NET_PROFIT
+  GROSS_REVENUE
+}
+
+/// Whether a ledger row is the first posting for its event (ORIGINAL) or a
+/// correction to an earlier one (ADJUSTMENT).
+enum LedgerEntryType {
+  ORIGINAL
+  ADJUSTMENT
+}
+
+/// Direction of a finance posting from the platform's point of view.
+enum FinanceDirection {
+  CREDIT
+  DEBIT
+}
+
+/// Where a royalty entry is in its journey to the payee's bank account.
+/// REVERSED is terminal and set only on an entry an adjustment has cancelled —
+/// the row itself still exists and still carries its original amount.
+enum RoyaltyEntryStatus {
+  ACCRUED
+  PENDING_PAYOUT
+  PAID
+  REVERSED
+}
+
+/// Who a royalty is owed to. An artist deal and a brand deal settle to
+/// different parties, and the distinction has to survive into reporting.
+enum RoyaltyPayeeType {
+  ARTIST
+  ORGANIZATION
+}
+
+/// How often an above-threshold balance is swept into a payout batch.
+enum PayoutFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+  QUARTERLY
+}
+
+/// Payout batch lifecycle. SCHEDULED is "threshold met, entries locked";
+/// APPROVED is a human's decision; PAID is the provider's confirmation.
+enum PayoutStatus {
+  SCHEDULED
+  APPROVED
+  PAID
+  FAILED
+  CANCELLED
+}
+
+/// What an adjustment entry corrects. Polymorphic by design — see the model.
+enum AdjustmentTargetType {
+  ROYALTY_LEDGER_ENTRY
+  FINANCE_LEDGER_ENTRY
+  ORDER
+  PAYMENT_TRANSACTION
+  ROYALTY_PAYOUT
+}
+
+/// Why a correction was posted. A free-text `reason` always accompanies it;
+/// this is the machine-readable half, for reporting on correction causes.
+enum AdjustmentReason {
+  REFUND_REVERSAL
+  DISPUTE_LOSS
+  CHARGEBACK_FEE
+  CALCULATION_ERROR
+  RULE_CORRECTION
+  GOODWILL
+  MANUAL_CORRECTION
+}
+
+/// Where an adjustment is in its approval. EXECUTED is distinct from APPROVED
+/// on purpose: approving a correction and posting it are two acts, and a
+/// review needs to be able to tell which ones are still only intended.
+enum AdjustmentStatus {
+  PENDING_APPROVAL
+  APPROVED
+  EXECUTED
+  REJECTED
+}
+
+/// Where a COGS variance review is. DEFERRED means "real, but not this month".
+enum ReconciliationStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  DEFERRED
+}
+
+/// What a platform finance line represents. Keeps "revenue" separable from
+/// "the fee the gateway took" without a second table.
+enum FinanceCategory {
+  SALE_REVENUE
+  COST_OF_GOODS
+  GATEWAY_FEE
+  REFUND
+  CHARGEBACK
+  ROYALTY_EXPENSE
+  ROYALTY_PAYOUT
+  ADJUSTMENT
+}
+
+// ───── source: packages\markets\prisma\markets.prisma ──────────────────────────────
+
+// ============================================================================
+// MARKETS MODULE SCHEMA  (packages/markets/prisma/markets.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Market, MarketCountry
+//
+// A market is the pricing/currency region a buyer shops in. Drops carry one
+// DropPrice row per market; orders record which market they were placed in.
+// ============================================================================
+
+/// A selling region with a single settlement currency. Exactly one row should
+/// carry `isDefault = true` — the fallback when a buyer's country maps nowhere.
+model Market {
+  id         String    @id @db.Uuid
+  /// Human-readable record id (`mkt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  code       String    @unique
+  name       String
+  currency   Currency
+  isActive   Boolean
+  isDefault  Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  marketCountrys MarketCountry[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  users         User[]
+  dropPrices DropPrice[]
+  orders        Order[]
+}
+
+/// Maps an ISO country code to its market. `countryCode` is globally unique, so
+/// a country belongs to exactly one market and resolution is unambiguous.
+model MarketCountry {
+  id          String   @id @db.Uuid
+  /// Human-readable record id (`mkc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  marketId    String   @db.Uuid
+  market      Market   @relation(fields: [marketId], references: [id])
+  countryCode String   @unique
+  createdAt   DateTime
+}
+
+// ───── source: packages\media\prisma\media.prisma ──────────────────────────────────
+
+// ============================================================================
+// MEDIA MODULE SCHEMA  (packages/media/prisma/media.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: MediaAsset
+//
+// The single upload registry for the whole platform. Nothing else stores a
+// storage path: drops reference assets via DropImage, content bundles via
+// ContentBundleItem. One place to enforce virus scanning and one place to
+// revoke a file.
+// ============================================================================
+
+/// An uploaded file. `storageRef` is the object-store key — never a public URL,
+/// so signed-URL policy stays a runtime decision. `checksum` deduplicates and
+/// detects corruption; `virusScanStatus` gates serving (only CLEAN is
+/// servable). The four nullable owner columns scope the asset to whichever
+/// entity it belongs to; `uploadedBy` always records the actor.
+model MediaAsset {
+  id              String          @id @db.Uuid
+  /// Human-readable record id (`mda…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  assetType       AssetType
+  storageRef      String
+  fileName        String
+  mimeType        String
+  sizeBytes       Int?
+  checksum        String?
+  virusScanStatus VirusScanStatus
+  uploadedById    String          @db.Uuid
+  uploadedBy      User            @relation(fields: [uploadedById], references: [id])
+
+  // ── Optional ownership scoping — at most one is normally set ──────────────
+  organizationId String?           @db.Uuid
+  organization   Organization?     @relation(fields: [organizationId], references: [id])
+  artistId       String?           @db.Uuid
+  artist         Artist?           @relation(fields: [artistId], references: [id])
+  productId      String?           @db.Uuid
+  drop           Drop?             @relation(fields: [productId], references: [id])
+  collectionId   String?           @db.Uuid
+  collection     ArtistCollection? @relation(fields: [collectionId], references: [id])
+
+  archivedAt DateTime?
+  createdAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  dropImages         DropImage[]
+  contentBundleItems ContentBundleItem[]
+}
+
+/// What the file is for. Drives storage tier, retention and who may read it —
+/// EXCLUSIVE_CONTENT and LEGAL_DOCUMENT are never publicly servable.
+enum AssetType {
+  DROP_IMAGE
+  PROFILE_IMAGE
+  EXCLUSIVE_CONTENT
+  LEGAL_DOCUMENT
+  SUPPLY_SPREADSHEET
+  OTHER
+}
+
+/// Malware scan outcome. Only CLEAN may be served; SKIPPED covers trusted
+/// internal uploads that bypassed the scanner.
+enum VirusScanStatus {
+  PENDING
+  CLEAN
+  INFECTED
+  SKIPPED
+}
+
+// ───── source: packages\notifications\prisma\notifications.prisma ──────────────────
+
+// ============================================================================
+// NOTIFICATIONS MODULE SCHEMA  (packages/notifications/prisma/notifications.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: NotificationTemplate, Notification, NotificationPreference
+// ============================================================================
+
+/// The message body for one event type on one channel. `eventType` is unique,
+/// so the domain event name is the lookup key and publishers never hard-code
+/// copy. `parameters` lists the placeholders the template expects, which lets
+/// the sender validate its payload before dispatch.
+model NotificationTemplate {
+  id           String              @id @db.Uuid
+  /// Human-readable record id (`ntt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  eventType    String              @unique
+  channel      NotificationChannel
+  subject      String?
+  bodyTemplate String
+  parameters   String[]
+  isActive     Boolean
+  createdAt    DateTime
+  updatedAt    DateTime
+
+  notifications Notification[]
+}
+
+/// One rendered delivery to one user. `payload` keeps the values the template
+/// was filled with, so the message can be re-rendered or audited later.
+/// `failureReason` is retained on FAILED rows for retry triage.
+model Notification {
+  id            String               @id @db.Uuid
+  /// Human-readable record id (`ntf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  userId        String               @db.Uuid
+  user          User                 @relation(fields: [userId], references: [id])
+  templateId    String               @db.Uuid
+  template      NotificationTemplate @relation(fields: [templateId], references: [id])
+  channel       NotificationChannel
+  payload       Json?
+  status        NotificationStatus
+  sentAt        DateTime?
+  readAt        DateTime?
+  failureReason String?
+  createdAt     DateTime
+}
+
+/// A user's opt-in per channel. Unique per (user, channel); a missing row means
+/// the channel default applies.
+model NotificationPreference {
+  id      String              @id @db.Uuid
+  /// Human-readable record id (`ntp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  userId  String              @db.Uuid
+  user    User                @relation(fields: [userId], references: [id])
+  channel NotificationChannel
+  enabled Boolean
+
+  @@unique([userId, channel])
+}
+
+/// Delivery channel. Push/SMS join this enum when those transports ship.
+enum NotificationChannel {
+  EMAIL
+  IN_APP
+}
+
+/// Delivery state. READ only applies to IN_APP.
+enum NotificationStatus {
+  QUEUED
+  SENT
+  FAILED
+  READ
+}
+
+// ───── source: packages\orders\prisma\orders.prisma ────────────────────────────────
+
+// ============================================================================
+// ORDERS MODULE SCHEMA  (packages/orders/prisma/orders.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Order, OrderAddress, InventoryReservation
+//
+// The purchase record. Money movement is the payments module; margin and
+// royalty postings are the finance module. This module owns only the order's
+// own lifecycle and the stock it is holding.
+// ============================================================================
+
+/// A purchase. `skuId` is nullable because a serialized unit is only assigned
+/// once payment settles — before that the order holds an InventoryReservation.
+/// `unitPrice`, `amount`, `currency` and `gateway` are snapshotted at purchase
+/// time so later catalog or market edits never rewrite an order's totals.
+model Order {
+  id             String          @id @db.Uuid
+  /// Human-readable record id (`odr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  buyerId        String          @db.Uuid
+  buyer          User            @relation(fields: [buyerId], references: [id])
+  productId      String          @db.Uuid
+  drop           Drop            @relation(fields: [productId], references: [id])
+  variantId      String?         @db.Uuid
+  variant        DropVariant?    @relation(fields: [variantId], references: [id])
+  skuId          String?         @db.Uuid
+  sku            Sku?            @relation(fields: [skuId], references: [id])
+  quantity       Int
+  organizationId String?         @db.Uuid
+  organization   Organization?   @relation(fields: [organizationId], references: [id])
+  marketId       String?         @db.Uuid
+  market         Market?         @relation(fields: [marketId], references: [id])
+  status         OrderStatus
+  unitPrice      Decimal         @db.Decimal(12, 2)
+  amount         Decimal         @db.Decimal(12, 2)
+  currency       Currency
+  gateway        PaymentGateway
+  /// When the buyer accepted the drop's terms — evidence for disputes.
+  termsAcceptedAt DateTime?
+  /// The SkuClaim that took ownership of this order's unit, and when.
+  /// Payment and ownership are decoupled: an order is PAID on day 1 and may be
+  /// claimed on day 6, or never. Royalty accrues at the claim, so this is the
+  /// column that says whether this order has earned anyone anything yet.
+  /// Deliberately NOT a foreign key — claims owns that record and a revocation
+  /// must never be blocked by an order row pointing at it.
+  claimId         String?   @db.Uuid
+  claimedAt       DateTime?
+  /// When payment settled. Distinct from `placedAt`: an order can sit
+  /// PENDING_PAYMENT, and revenue is recognised on this column, not that one.
+  paidAt          DateTime?
+  shippedAt       DateTime?
+  deliveredAt     DateTime?
+  trackingNote    String?
+  /// When a packer scanned the physical unit going into this parcel and it was
+  /// confirmed as the order's unit. Null = the unit is still PROVISIONAL (held
+  /// at checkout, not yet matched to a physical item). An order cannot ship
+  /// until this is set. See docs/orders/order-unit-assignment-api.md.
+  unitAssignedAt   DateTime?
+  /// The user who scanned it. No foreign key — like other actor ids, the record
+  /// must outlive the staff account.
+  unitAssignedById String?   @db.Uuid
+  placedAt        DateTime
+  updatedAt       DateTime
+  archivedAt      DateTime?
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  orderAddresss         OrderAddress[]
+  inventoryReservations InventoryReservation[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  paymentTransactions PaymentTransaction[]
+  refundRequests      RefundRequest[]
+  disputeCases        DisputeCase[]
+  royaltyLedgerEntrys RoyaltyLedgerEntry[]
+  financeLedgerEntrys FinanceLedgerEntry[]
+  adjustmentEntrys    AdjustmentEntry[]
+  /// The statutory customer invoice. One per order, written once payment
+  /// settles — see packages/tax.
+  invoice             Invoice?
+
+  /// The admin order list is "newest first, filtered by org/status"; the claim
+  /// lookup is how an accrual finds the order behind a claimed unit.
+  @@index([organizationId, placedAt])
+  @@index([status, placedAt])
+  @@index([skuId])
+  @@index([claimId])
+}
+
+/// A frozen copy of the shipping or billing address for one order. The address
+/// lines are duplicated (not read through `sourceAddressId`) on purpose: an
+/// order must always show where it was actually sent, even after the user edits
+/// or deletes the address book entry. Unique per (order, usage).
+model OrderAddress {
+  id              String       @id @db.Uuid
+  /// Human-readable record id (`oda…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  orderId         String       @db.Uuid
+  order           Order        @relation(fields: [orderId], references: [id])
+  usage           AddressUsage
+  /// Provenance pointer to the Address it was copied from; nullable because the
+  /// source may be gone and the snapshot must remain valid regardless.
+  sourceAddressId String?      @db.Uuid
+  sourceAddress   Address?     @relation(fields: [sourceAddressId], references: [id])
+  label           AddressLabel
+  labelCustom     String?
+  recipientName   String
+  line1           String
+  line2           String?
+  city            String
+  state           String?
+  postalCode      String
+  countryCode     String
+  phone           String?
+  createdAt       DateTime
+
+  @@unique([orderId, usage])
+}
+
+/// A temporary hold on a specific SKU while an order is paying. HELD expires at
+/// `expiresAt` (a sweeper RELEASEs it); COMMITTED means payment settled and the
+/// SKU is now the order's. This is what stops two buyers claiming one unit.
+model InventoryReservation {
+  id        String            @id @db.Uuid
+  /// Human-readable record id (`ivr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  orderId   String            @db.Uuid
+  order     Order             @relation(fields: [orderId], references: [id])
+  skuId     String            @db.Uuid
+  sku       Sku               @relation(fields: [skuId], references: [id])
+  status    ReservationStatus
+  expiresAt DateTime
+  createdAt DateTime
+
+  /// One live hold per unit: the partial index cannot be expressed in Prisma,
+  /// so the sweeper and the reserve path both filter on (skuId, status).
+  @@index([skuId, status])
+  /// The expiry sweeper's scan.
+  @@index([status, expiresAt])
+}
+
+/// Order lifecycle. Fulfilment states (SHIPPED/DELIVERED) apply to physical
+/// items; REFUNDED is set once the payments module completes a refund.
+enum OrderStatus {
+  PENDING_PAYMENT
+  PAID
+  PROCESSING
+  SHIPPED
+  DELIVERED
+  CANCELLED
+  REFUNDED
+}
+
+/// Which role an OrderAddress snapshot plays for its order.
+enum AddressUsage {
+  SHIPPING
+  BILLING
+}
+
+/// State of a stock hold: HELD (pending payment), COMMITTED (payment settled),
+/// RELEASED (expired or cancelled — the SKU is available again).
+enum ReservationStatus {
+  HELD
+  COMMITTED
+  RELEASED
+}
+
+// ───── source: packages\organizations\prisma\organizations.prisma ──────────────────
+
+// ============================================================================
+// ORGANIZATIONS MODULE SCHEMA  (packages/organizations/prisma/organizations.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Organization
+//
+// The tenant root. Almost every commercial record (drop, order, media,
+// royalty rule, gateway config) carries an optional organizationId, and
+// RoleAssignment uses an Organization id as its ORG scope.
+// ============================================================================
+
+/// A commercial entity on the platform: the HITBOX organization itself, a
+/// BRAND, or a solo artist operating as their own org (ARTIST_INDIVIDUAL).
+model Organization {
+  id         String           @id @db.Uuid
+  /// Human-readable record id (`org…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name       String
+  type       OrganizationType
+  slug       String           @unique
+  isActive   Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  artists               Artist[]
+  releaseApprovals      ReleaseApproval[]
+  artistCollections     ArtistCollection[]
+  drops                 Drop[]
+  artistBrandLinks      ArtistBrandLink[]
+  roleAssignments       RoleAssignment[]
+  mediaAssets           MediaAsset[]
+  orders                Order[]
+  paymentGatewayConfigs PaymentGatewayConfig[]
+  royaltyRules          RoyaltyRule[]
+  /// Royalties owed TO this organization (a brand deal), as distinct from the
+  /// rules that define them — named relations because an org can be both the
+  /// scope a rule applies to and the party it pays.
+  royaltyLedgerEntrys   RoyaltyLedgerEntry[] @relation("RoyaltyLedgerEntry_payeeOrganization")
+  royaltyPayouts        RoyaltyPayout[]
+  /// Invoices issued for this organization's drops — see packages/tax.
+  invoices              Invoice[]
+  /// Pending staff invitations scoped to this organization.
+  staffInvitations      StaffInvitation[]
+}
+
+/// Which kind of entity an Organization represents. HITBOX is the platform's
+/// own org (there is exactly one); ARTIST_INDIVIDUAL lets a solo artist hold
+/// commercial records without a separate brand behind them.
+enum OrganizationType {
+  HITBOX
+  BRAND
+  ARTIST_INDIVIDUAL
+}
+
+// ───── source: packages\payments\prisma\payments.prisma ────────────────────────────
+
+// ============================================================================
+// PAYMENTS MODULE SCHEMA  (packages/payments/prisma/payments.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent,
+//       RefundRequest, DisputeCase
+//
+// Everything that talks to a payment provider. No card data or credentials are
+// ever stored — only opaque gateway references and a secrets-manager pointer.
+// ============================================================================
+
+/// One charge attempt against a gateway for an order. `idempotencyKey` is
+/// globally unique, which is what makes a retried charge safe. `needsReview`
+/// plus the reviewer columns support manual settlement review; `gatewayRef` is
+/// the provider's own id for reconciliation.
+model PaymentTransaction {
+  id             String                   @id @db.Uuid
+  /// Human-readable record id (`pmt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  orderId        String                   @db.Uuid
+  order          Order                    @relation(fields: [orderId], references: [id])
+  gateway        PaymentGateway
+  gatewayRef     String?
+  status         PaymentTransactionStatus
+  idempotencyKey String                   @unique
+  amount         Decimal                  @db.Decimal(12, 2)
+  currency       Currency
+  needsReview    Boolean
+  /// Reviewer's user id. Intentionally not a foreign key — a financial review
+  /// record must outlive the reviewer's account.
+  reviewedById   String?                  @db.Uuid
+  reviewedAt     DateTime?
+  reviewNote     String?
+  failureReason  String?
+  /// When the gateway confirmed settlement. Distinct from `updatedAt`, which
+  /// moves for a review note too.
+  settledAt      DateTime?
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  disputeCases DisputeCase[]
+
+  @@index([orderId])
+  @@index([status, createdAt])
+  @@index([gatewayRef])
+}
+
+/// Gateway credentials binding at one scope: PLATFORM-wide, per ORGANIZATION,
+/// or per DROP. `credentialsRef` is a pointer into the secrets manager — the
+/// actual keys are never in this database.
+model PaymentGatewayConfig {
+  id             String             @id @db.Uuid
+  /// Human-readable record id (`pgc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  scope          GatewayConfigScope
+  organizationId String?            @db.Uuid
+  organization   Organization?      @relation(fields: [organizationId], references: [id])
+  gateway        PaymentGateway
+  isDefault      Boolean
+  credentialsRef String
+  status         ConfigStatus
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+/// Raw gateway webhook deliveries, keyed by the provider's event id (`id`), so
+/// a row's existence is the replay guard. `signatureVerified` is recorded
+/// rather than assumed, and `processingError` keeps failed deliveries around
+/// for replay instead of dropping them.
+model PaymentWebhookEvent {
+  id                String         @id
+  /// Human-readable record id (`pwh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  provider          PaymentGateway
+  eventType         String
+  payload           Json
+  signatureVerified Boolean
+  processedAt        DateTime?
+  processingError    String?
+  receivedAt         DateTime
+}
+
+/// A refund through its approval chain. `physicalReturnConfirmedAt` gates
+/// refunds on physical goods — money moves only once the item is back.
+/// `gatewayRefundId` links to the provider's refund object.
+///
+/// The columns after the return gate exist because a HitBox refund is not only
+/// a money movement: the item carries an NFC tag that may already have been
+/// claimed. `nfcTagCondition` is what the warehouse found, `claimRevokedAt`
+/// records that ownership was taken back, and `resaleBlockedUntil` is the
+/// quarantine window on a tag that came back damaged — a tag that stops
+/// responding must not reappear on the resale market the next day.
+model RefundRequest {
+  id                        String       @id @db.Uuid
+  /// Human-readable record id (`rfd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  orderId                   String       @db.Uuid
+  order                     Order        @relation(fields: [orderId], references: [id])
+  requestedById             String       @db.Uuid
+  requestedBy               User         @relation("User_requestedBy", fields: [requestedById], references: [id])
+  reason                    String
+  reasonCode                RefundReason
+  status                    RefundStatus
+  amount                    Decimal      @db.Decimal(12, 2)
+  currency                  Currency
+  /// False for a digital-only order, which skips the AWAITING_RETURN hold.
+  physicalReturnRequired    Boolean
+  physicalReturnConfirmedAt DateTime?
+  /// What the returned tag looked like. Null until the return is inspected.
+  nfcTagCondition           NfcTagCondition?
+  approvedById              String?      @db.Uuid
+  approvedBy                User?        @relation("User_approvedBy", fields: [approvedById], references: [id])
+  approvedAt                DateTime?
+  rejectionReason           String?
+  gatewayRefundId           String?
+  /// When the gateway confirmed the money moved.
+  processedAt               DateTime?
+  /// Set when the buyer's claim on the item was taken back as part of this
+  /// refund. Plain timestamp — the claim itself is the claims module's record.
+  claimRevokedAt            DateTime?
+  /// Quarantine window on the returned tag (default 90 days on a damaged or
+  /// missing tag). Null means the unit is free to re-enter circulation.
+  resaleBlockedUntil        DateTime?
+  createdAt                 DateTime
+  updatedAt                 DateTime
+
+  @@index([orderId])
+  @@index([status, createdAt])
+}
+
+/// A chargeback or payment dispute raised at the provider.
+///
+/// Separate from RefundRequest on purpose: a refund is something HitBox
+/// decides to do, a dispute is something a card network does to HitBox. They
+/// have different clocks (`evidenceDueBy` is the network's deadline, and
+/// missing it loses the case by default), different actors, and different
+/// financial consequences — a lost dispute costs the sale AND a fee, which is
+/// posted as two adjustment entries rather than one refund.
+model DisputeCase {
+  id                   String             @id @db.Uuid
+  /// Human-readable record id (`dsp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  orderId              String             @db.Uuid
+  order                Order              @relation(fields: [orderId], references: [id])
+  paymentTransactionId String?            @db.Uuid
+  paymentTransaction   PaymentTransaction? @relation(fields: [paymentTransactionId], references: [id])
+  gateway              PaymentGateway
+  /// The provider's dispute id. Unique, so a redelivered dispute webhook
+  /// updates the case instead of opening a second one.
+  gatewayCaseRef       String?            @unique
+  reasonCode           DisputeReason
+  reason               String?
+  status               DisputeStatus
+  amount               Decimal            @db.Decimal(12, 2)
+  currency             Currency
+  /// Fee the network charges regardless of outcome, when one applies.
+  feeAmount            Decimal?           @db.Decimal(12, 2)
+  /// The network's evidence deadline. Missing it is a loss by default, which
+  /// is why it is a column and not a note.
+  evidenceDueBy        DateTime?
+  evidenceSubmittedAt  DateTime?
+  evidence             Json?
+  /// Resolver's user id. Not a foreign key — the case outlives the account.
+  resolvedById         String?            @db.Uuid
+  resolvedAt           DateTime?
+  resolutionNote       String?
+  openedAt             DateTime
+  createdAt            DateTime
+  updatedAt            DateTime
+
+  @@index([orderId])
+  @@index([status, evidenceDueBy])
+}
+
+/// Charge attempt state. NEEDS_REVIEW parks a transaction for a human instead
+/// of failing it outright.
+enum PaymentTransactionStatus {
+  INITIATED
+  PENDING
+  SUCCEEDED
+  FAILED
+  NEEDS_REVIEW
+}
+
+/// How widely a gateway config applies. More specific scopes win: DROP over
+/// ORGANIZATION over PLATFORM.
+enum GatewayConfigScope {
+  PLATFORM
+  ORGANIZATION
+  DROP
+}
+
+/// Whether a gateway config is live.
+enum ConfigStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Refund lifecycle. AWAITING_RETURN is the physical-goods hold before
+/// approval; PROCESSED means the gateway confirmed the money moved.
+enum RefundStatus {
+  REQUESTED
+  AWAITING_RETURN
+  APPROVED
+  PROCESSED
+  REJECTED
+}
+
+/// Why a refund was asked for. The free-text `reason` carries the detail; this
+/// is what reporting groups by — "defective tag" is a manufacturing signal,
+/// "changed mind" is not.
+enum RefundReason {
+  DEFECTIVE_ITEM
+  DEFECTIVE_TAG
+  NOT_AS_DESCRIBED
+  NOT_DELIVERED
+  DUPLICATE_CHARGE
+  BUYER_CHANGED_MIND
+  FRAUDULENT_CHARGE
+  OTHER
+}
+
+/// Condition of the NFC tag on a returned item. DAMAGED / MISSING / TAMPERED
+/// all quarantine the unit from resale; INTACT lets it go back into stock.
+enum NfcTagCondition {
+  INTACT
+  DAMAGED
+  MISSING
+  TAMPERED
+}
+
+/// Dispute lifecycle, mirroring how card networks actually run one: it opens,
+/// HitBox either submits evidence or accepts, and the network decides. WON /
+/// LOST / ACCEPTED are terminal.
+enum DisputeStatus {
+  OPEN
+  UNDER_REVIEW
+  EVIDENCE_SUBMITTED
+  WON
+  LOST
+  ACCEPTED
+  WITHDRAWN
+}
+
+/// The network's stated reason for the dispute.
+enum DisputeReason {
+  FRAUDULENT
+  PRODUCT_NOT_RECEIVED
+  PRODUCT_UNACCEPTABLE
+  DUPLICATE
+  SUBSCRIPTION_CANCELED
+  CREDIT_NOT_PROCESSED
+  UNRECOGNIZED
+  OTHER
+}
+
+// ───── source: packages\platform\prisma\platform.prisma ────────────────────────────
+
+// ============================================================================
+// PLATFORM MODULE SCHEMA  (packages/platform/prisma/platform.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: PlatformConfig, ExceptionCase
+// ============================================================================
+
+/// Runtime configuration and feature flags, keyed by a unique `key`. Distinct
+/// from `packages/shared/config/env.ts`, which holds boot-time secrets and
+/// connection strings validated at startup: this table is for values that
+/// change while the process is running and must be editable without a deploy.
+/// `isFeatureFlag` separates on/off toggles from tunables so a flag UI can
+/// filter to just the switches. `updatedById` is FK-free so a config row
+/// outlives the account that last changed it.
+model PlatformConfig {
+  id            String   @id @db.Uuid
+  /// Human-readable record id (`pcf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  key           String   @unique
+  value         Json
+  isFeatureFlag Boolean
+  description   String?
+  updatedById   String?  @db.Uuid
+  updatedAt     DateTime
+  createdAt     DateTime
+}
+
+/// Ops Console exception queue (claim reconciliation, webhook failures,
+/// provenance integrity).
+///
+/// `referenceType` + `referenceId` is a polymorphic pointer with no foreign
+/// key, deliberately: an exception has to be raiseable against a record in any
+/// module, and the queue must survive the archival of whatever it points at.
+/// `attempts` and `slaDeadline` are what make it a queue rather than a log —
+/// the index below is the "what is overdue" query the console opens on.
+model ExceptionCase {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`exc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  exceptionCode String          @unique @db.VarChar(10) // EX
+  caseType      String
+  referenceType String
+  referenceId   String          @db.Uuid
+  status        ExceptionStatus @default(RETRY_QUEUED)
+  slaDeadline   DateTime?
+  attempts      Int             @default(0)
+  resolution    String?
+  resolvedById  String?         @db.Uuid
+  resolvedAt    DateTime?
+  createdAt     DateTime        @default(now())
+
+  @@index([status, slaDeadline])
+}
+
+/// Where an exception is. RETRY_QUEUED is the automatic path; NEEDS_REVIEW is
+/// what a retry budget running out escalates to.
+enum ExceptionStatus {
+  RETRY_QUEUED
+  NEEDS_REVIEW
+  RESOLVED
 }
 
 // ───── source: packages\products\prisma\products.prisma ────────────────────────────
@@ -284,79 +2308,1548 @@ model BuyerCollection {
 // ============================================================================
 // PRODUCTS MODULE SCHEMA  (packages/products/prisma/products.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Drop, DropVariant, DropImage, DropPrice,
+//       DropType, DropTypeDimension, DropTypeDimensionValue, DropVariantOption
+//
+// Drop types drive variants: a type declares which dimensions a variant varies
+// along (size, color, edition…), which values each may take, and the rules
+// between them. See docs/admin/drop-types-and-variants.md.
+//
+// This module is the CATALOG — the definition of what is for sale. The
+// serialized physical items are the skus module (Sku); the two are deliberately
+// separate so catalog editing and item/tag custody can scale apart.
+//
+// NAMING (v3.1): these models were called Product / ProductVariant /
+// ProductImage / ProductPrice. "Drop" is what the business calls this record
+// everywhere else, and the old name kept reading as "a physical thing", which
+// is the Sku.
+//
+// The rename initially landed as a Prisma-only rename behind @@map, keeping the
+// physical names. v3.1.1 renamed the tables themselves (ALTER TABLE ... RENAME,
+// metadata-only, no data copied), so there is no @@map here any more and every
+// Prisma name is the database name. Anything reading these tables by their old
+// name — raw SQL, a BI tool, a dashboard query — has to be updated with it.
 // ============================================================================
 
-model Product {
-    id                String             @id @default(cuid())
-    productCode       String             @unique @db.VarChar(12) // 12 digits: 8 unique + 4 group (format CHECK in migration)
-    name              String             @db.VarChar(255)
-    type              ProductType
-    category          ProductCategory
-    genre             ProductGenre
-    description       String?
-    rewardPoints      Int                @default(0) @map("reward_points")
-    state             ProductState       @default(ACTIVE)
-    marketplaceStatus MarketplaceStatus? @map("marketplace_status")
-    rarity            ProductRarity      @default(COMMON)
-    priceInDollars    Decimal            @default(0) @map("price_in_dollars") @db.Decimal(12, 2)
-    inventoryUnit     Int                @default(0) @map("inventory_unit")
-    unitsSold         Int                @default(0) @map("units_sold")
-    tagId             String?            @unique @map("tag_id") @db.VarChar(64) // NFC tag used for claiming
-    claimedStatus     ClaimedStatus      @default(UNCLAIMED) @map("claimed_status")
-    claimedAt         DateTime?          @map("claimed_at")
-    releaseDate       DateTime?          @map("release_date") @db.Date
-    createdAt         DateTime           @default(now()) @map("created_at")
-    updatedAt         DateTime           @updatedAt @map("updated_at") // replaces the old lastupdate trigger
+/// A drop: one sellable product definition. `totalSupply` is the number of
+/// serialized SKUs that will exist. `status` drives the release workflow
+/// (DRAFT → SUBMITTED → IN_REVIEW → APPROVED → PUBLISHED → ACTIVE → ENDED),
+/// with the decisions themselves recorded in the releases module.
+model Drop {
+  id                String            @id @db.Uuid
+  /// Human-readable record id (`drp…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  groupCode         String            @unique
+  name              String
+  description       String?
+  collectionId      String?           @db.Uuid
+  collection        ArtistCollection? @relation(fields: [collectionId], references: [id])
+  artistId          String?           @db.Uuid
+  artist            Artist?           @relation(fields: [artistId], references: [id])
+  organizationId    String?           @db.Uuid
+  organization      Organization?     @relation(fields: [organizationId], references: [id])
+  /// What kind of product this is. Null = a legacy drop created before drop
+  /// types existed: no variant rules apply to it.
+  dropTypeId        String?           @db.Uuid
+  dropType          DropType?         @relation(fields: [dropTypeId], references: [id])
+  /// The DropType.version this drop's variants were last validated against.
+  dropTypeVersion   Int?
+  vertical          String?
+  category          String?
+  rarity            String?
+  /// Max units one buyer may purchase; null = unlimited.
+  purchaseLimit     Int?
+  totalSupply       Int
+  releaseStart      DateTime?
+  releaseEnd        DateTime?
+  status            DropStatus
+  /// When the drop becomes visible. Distinct from `publishedAt`, which records
+  /// when it actually was: this is the scheduled intent, set ahead of time.
+  publishAt         DateTime?
+  publishedAt       DateTime?
+  complianceStatus  ComplianceStatus
+  /// Pointer to the published odds disclosure (required for randomised drops).
+  oddsDisclosureRef String?
+  isAgeSpecific     Boolean
+  minimumAge        Int?
+  isActive          Boolean
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
 
-    ownerId String? @map("owner_id")
-    owner   User?   @relation(fields: [ownerId], references: [id])
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  dropImages   DropImage[]
+  dropVariants DropVariant[]
+  dropPrices   DropPrice[]
 
-    collectionId String?           @map("collection_id")
-    collection   ArtistCollection? @relation(fields: [collectionId], references: [id])
-
-    images           ProductImage[]
-    history          ProductHistory[]
-    claims           ProductClaim[]
-    ledgerEntries    BlockchainLedger[]
-    buyerCollections BuyerCollection[]
-
-    @@index([ownerId])
-    @@index([category])
-    @@index([genre])
-    @@index([marketplaceStatus])
-    @@map("products")
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skus             Sku[]
+  skuClaims        SkuClaim[]
+  releaseApprovals ReleaseApproval[]
+  mediaAssets      MediaAsset[]
+  contentBundles   ContentBundle[]
+  evolutionRules   EvolutionRule[]
+  orders           Order[]
+  royaltyRules     RoyaltyRule[]
+  wishlistItems    WishlistItem[]
+  /// Per-product GST/sales-tax rates and HSN codes — see packages/tax.
+  taxConfigurations TaxConfiguration[]
+  /// Monthly COGS variance reviews for this drop — see packages/finance.
+  cogsReconciliations CogsReconciliation[]
+  /// Vendor consignments received against this drop — see packages/supply.
+  supplyBatches       SupplyBatch[]
 }
 
-/// One row per ownership/price period. (Draft PK was product_id, which forced
-/// one row per product — fixed to a surrogate PK so a product can have many.)
-model ProductHistory {
-    id                 String    @id @default(cuid())
-    price              Decimal?  @db.Decimal(12, 2)
-    ownershipStartDate DateTime? @map("ownership_start_date")
-    ownershipEndDate   DateTime? @map("ownership_end_date") // CHECK end >= start added in migration
+/// A purchasable option of a drop — "M / Black", "Pack of 5", "A3 Limited".
+///
+/// The options themselves live in DropVariantOption, one row per dimension.
+/// `optionName` / `optionValue` are kept for existing readers: for a typed
+/// variant they hold the dimension codes and value codes joined by "/"
+/// ("size/color", "M/BLK"); legacy rows keep their original single pair.
+model DropVariant {
+  id          String    @id @db.Uuid
+  /// Human-readable record id (`dvr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  /// Kept as `productId` rather than renamed to `dropId`: the rename this
+  /// release asks for is of *models* and *relation fields*, and renaming this
+  /// scalar too would churn the compound key `productId_optionName_optionValue`
+  /// through every call site for no behavioural gain. DropPrice is the one
+  /// exception, because its unique key is being changed anyway.
+  productId   String    @db.Uuid
+  drop        Drop      @relation(fields: [productId], references: [id])
+  variantCode String    @unique
+  label       String
+  optionName  String
+  optionValue String
+  /// Canonical, sorted "color=BLK|size=M" — the database-level guard against
+  /// the same combination twice on one drop. Built by the service, never sent
+  /// by a client. Legacy rows hold "legacy:<optionName>=<optionValue>".
+  optionsKey  String
+  position    Int
+  /// Per-variant supply cap; null = drawn from the drop's totalSupply.
+  totalSupply Int?
+  isActive    Boolean
+  archivedAt  DateTime?
+  createdAt   DateTime
+  updatedAt   DateTime
 
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  dropPrices DropPrice[]
+  options    DropVariantOption[]
 
-    ownerId String? @map("owner_id")
-    owner   User?   @relation(fields: [ownerId], references: [id])
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skus          Sku[]
+  orders        Order[]
+  wishlistItems WishlistItem[]
 
-    @@index([productId])
-    @@index([ownerId])
-    @@map("product_history")
+  @@unique([productId, optionName, optionValue])
+  @@unique([productId, optionsKey])
 }
 
-model ProductImage {
-    id          String  @id @default(cuid())
-    title       String? @db.VarChar(255)
-    description String?
-    url         String
+/// One dimension value of one variant. "M / Black" is two rows.
+///
+/// Labels and the hex code are SNAPSHOTS taken when the variant was created:
+/// renaming "Black" to "Jet Black" on the type must not rewrite what an
+/// existing order or invoice says was bought.
+model DropVariantOption {
+  id             String      @id @db.Uuid
+  /// Human-readable record id (`dvo…`). Written by the publicCode extension.
+  publicCode     String?     @unique @db.VarChar(32)
+  variantId      String      @db.Uuid
+  variant        DropVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  dimensionCode  String
+  dimensionLabel String
+  valueCode      String
+  valueLabel     String
+  /// "#RRGGBB" for a COLOR dimension, so a swatch renders without a lookup.
+  hexCode        String?     @db.VarChar(7)
+  position       Int
+  createdAt      DateTime
 
-    productId String  @map("product_id")
-    product   Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  @@unique([variantId, dimensionCode])
+  @@index([dimensionCode, valueCode])
+}
 
-    @@index([productId])
-    @@map("product_images")
+/// What kind of product a drop is — T-shirt, card, poster — and the variant
+/// rules that follow from it. Configuration, not code: a new product type is a
+/// new row, with no change to the Drop, variant or SKU APIs.
+model DropType {
+  id                 String      @id @db.Uuid
+  /// Human-readable record id (`dty…`). Written by the publicCode extension.
+  publicCode         String?     @unique @db.VarChar(32)
+  /// Stable machine key — `T_SHIRT`. Never changes once drops use it.
+  code               String      @unique
+  name               String
+  description        String?
+  variantMode        VariantMode
+  /// Tokens: {groupCode}, {values}. Must contain both.
+  variantCodePattern String      @default("{groupCode}-{values}")
+  /// Cross-dimension rules (require / forbid / exclude), zod-validated on
+  /// write. See packages/products/src/drop-type/rules.ts.
+  rules              Json        @default("[]")
+  /// Bumped on every change to dimensions, values or rules.
+  version            Int         @default(1)
+  isActive           Boolean     @default(true)
+  createdAt          DateTime
+  updatedAt          DateTime
+
+  dimensions DropTypeDimension[]
+  drops      Drop[]
+}
+
+/// One axis a variant varies along — size, color, edition.
+model DropTypeDimension {
+  id                String               @id @db.Uuid
+  /// Human-readable record id (`dtd…`). Written by the publicCode extension.
+  publicCode        String?              @unique @db.VarChar(32)
+  dropTypeId        String               @db.Uuid
+  dropType          DropType             @relation(fields: [dropTypeId], references: [id])
+  /// Machine key — `size`. Used in DropVariant.optionsKey.
+  code              String
+  label             String
+  position          Int
+  required          Boolean
+  /// The admin may enter a value not in the list for one drop.
+  allowCustomValues Boolean              @default(false)
+  /// How a screen should render the values. COLOR values may carry a hex code.
+  displayType       DimensionDisplayType @default(TEXT)
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  values DropTypeDimensionValue[]
+
+  @@unique([dropTypeId, code])
+}
+
+/// One allowed value of a dimension — "M", "Black", "Pack".
+model DropTypeDimensionValue {
+  id          String            @id @db.Uuid
+  /// Human-readable record id (`dtv…`). Written by the publicCode extension.
+  publicCode  String?           @unique @db.VarChar(32)
+  dimensionId String            @db.Uuid
+  dimension   DropTypeDimension @relation(fields: [dimensionId], references: [id])
+  /// Short uppercase code used in variantCode — `BLK`. [A-Z0-9], 1–12 chars.
+  code        String
+  label       String
+  /// "#RRGGBB". Only on a COLOR dimension; optional even there.
+  hexCode     String?           @db.VarChar(7)
+  position    Int
+  archivedAt  DateTime?
+  createdAt   DateTime
+  updatedAt   DateTime
+
+  @@unique([dimensionId, code])
+}
+
+/// Joins a drop to a media asset for gallery display. The asset itself is
+/// owned by the media module; this row only carries the placement (position,
+/// primary flag, alt text).
+model DropImage {
+  id         String     @id @db.Uuid
+  /// Human-readable record id (`dim…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  /// See the note on DropVariant.productId.
+  productId  String     @db.Uuid
+  drop       Drop       @relation(fields: [productId], references: [id])
+  assetId    String     @db.Uuid
+  asset      MediaAsset @relation(fields: [assetId], references: [id])
+  position   Int
+  isPrimary  Boolean
+  altText    String?
+  archivedAt DateTime?
+  createdAt  DateTime
+
+  @@unique([productId, assetId])
+}
+
+/// Price of a drop (optionally a specific variant) in one market.
+/// `costOfGoods` is stored here so the finance ledger can compute margin
+/// without re-deriving it.
+///
+/// Prices are **versioned** rather than mutable: `effectiveFrom` /
+/// `effectiveTo` bound the window a row is in force for, and the composite
+/// unique includes `effectiveFrom` so the same drop/variant/market triple can
+/// hold its whole price history. The invariant that used to be enforced by the
+/// three-column unique — one active price per triple — is now a query
+/// condition (`effectiveFrom <= now AND (effectiveTo IS NULL OR effectiveTo >
+/// now)`), because a unique index cannot express "at most one *open* row".
+model DropPrice {
+  id            String          @id @db.Uuid
+  /// Human-readable record id (`dpr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  dropId        String          @db.Uuid
+  drop          Drop            @relation(fields: [dropId], references: [id])
+  variantId     String?         @db.Uuid
+  variant       DropVariant?    @relation(fields: [variantId], references: [id])
+  marketId      String          @db.Uuid
+  market        Market          @relation(fields: [marketId], references: [id])
+  amount        Decimal?        @db.Decimal(12, 2)
+  isFree        Boolean
+  costOfGoods   Decimal?        @db.Decimal(12, 2)
+  status        DropPriceStatus
+  /// Start of this price point's window. Defaults to now so an insert that
+  /// does not care about versioning behaves exactly as it did before.
+  effectiveFrom DateTime        @default(now())
+  /// Null while the price is current; set when a newer row supersedes it.
+  effectiveTo   DateTime?
+  /// Approver's user id. No foreign key — a price record must outlive the
+  /// account that signed it off, same rule as RoyaltyPayout.approvedById.
+  approvedById  String?         @db.Uuid
+  approvedAt    DateTime?
+  createdAt     DateTime
+  updatedAt     DateTime
+
+  @@unique([dropId, variantId, marketId, effectiveFrom])
+}
+
+/// Lifecycle state of a drop. APPROVED means cleared for release; PUBLISHED
+/// means visible; ACTIVE means inside its release window and buyable.
+enum DropStatus {
+  DRAFT
+  SUBMITTED
+  IN_REVIEW
+  APPROVED
+  REJECTED
+  PUBLISHED
+  ACTIVE
+  ENDED
+  ARCHIVED
+}
+
+/// Whether a drop of a type has variants at all.
+enum VariantMode {
+  /// No variants — the drop itself is the one sellable item (a keychain).
+  NONE
+  /// Variants allowed but not needed.
+  OPTIONAL
+  /// At least one active variant before the drop can be submitted for review,
+  /// and every minted unit must belong to one.
+  REQUIRED
+}
+
+/// How a dimension's values are shown.
+enum DimensionDisplayType {
+  TEXT
+  /// Rendered as swatches; values may carry `hexCode`.
+  COLOR
+}
+
+/// Whether a price point is currently in effect.
+enum DropPriceStatus {
+  ACTIVE
+  DISABLED
+}
+
+// ───── source: packages\releases\prisma\releases.prisma ────────────────────────────
+
+// ============================================================================
+// RELEASES MODULE SCHEMA  (packages/releases/prisma/releases.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ReleaseApproval
+//
+// The review workflow that gates Drop.status. Separated from products
+// because it is a different actor's surface (HitBox reviewer / compliance)
+// with its own audit expectations.
+// ============================================================================
+
+/// One approval decision on one version of a drop. `version` increments each
+/// time the drop is resubmitted, so the full review history is preserved rather
+/// than overwritten. The compliance fields are the reviewer's sign-off and are
+/// mirrored onto Product.complianceStatus once decided.
+model ReleaseApproval {
+  id                String           @id @db.Uuid
+  /// Human-readable record id (`rap…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  productId         String           @db.Uuid
+  drop              Drop             @relation(fields: [productId], references: [id])
+  approverId        String           @db.Uuid
+  approver          User             @relation("User_approver", fields: [approverId], references: [id])
+  status            ApprovalStatus
+  comment           String?
+  version           Int
+  decidedAt         DateTime?
+  complianceStatus  ComplianceStatus
+  oddsDisclosureRef String?
+  checkedById       String?          @db.Uuid
+  checkedBy         User?            @relation("User_checkedBy", fields: [checkedById], references: [id])
+  checkedAt         DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  // ── Who is entitled to decide this release ────────────────────────────────
+  /// Resolved from the drop's owner when the review opened, and frozen here.
+  ///
+  /// Stored rather than re-derived at decision time on purpose: a drop that
+  /// moves between a brand and an artist afterwards must not retroactively
+  /// change who was accountable for the sign-off already given.
+  authority         ApprovalAuthority
+  /// The artist whose sign-off is required, when `authority` is ARTIST.
+  requiredArtistId  String?          @db.Uuid
+  requiredArtist    Artist?          @relation(fields: [requiredArtistId], references: [id])
+  /// The organization whose sign-off is required, when `authority` is
+  /// ORGANIZATION. Denormalised from the product for the same freezing reason.
+  requiredOrganizationId String?     @db.Uuid
+  requiredOrganization   Organization? @relation(fields: [requiredOrganizationId], references: [id])
+
+  // ── Legal compliance acceptance ───────────────────────────────────────────
+  /// The approver's explicit acceptance of the legal compliance terms.
+  ///
+  /// An approval cannot be recorded without it. Kept as its own column rather
+  /// than folded into `complianceStatus` because they answer different
+  /// questions: `complianceStatus` is the platform's assessment of the drop,
+  /// this is a named person accepting liability for it.
+  legalComplianceAccepted   Boolean
+  legalComplianceAcceptedAt DateTime?
+  /// Which wording they accepted. Without it the trail says somebody ticked a
+  /// box but not which box, and the terms change over time.
+  legalComplianceVersion    String?
+
+  // ── Reopening ─────────────────────────────────────────────────────────────
+  /// Set on the version created when an administrator sends a rejected drop
+  /// back for another decision, so a reopened review is distinguishable from
+  /// an ordinary resubmission by the owner.
+  reopenedFromVersion Int?
+  reopenedById        String?        @db.Uuid
+  reopenedBy          User?          @relation("User_reopenedBy", fields: [reopenedById], references: [id])
+  reopenedAt          DateTime?
+  reopenReason        String?
+
+  @@unique([productId, version])
+}
+
+/// Who must sign a release off, decided from the drop's owner.
+///
+/// The platform is deliberately NOT a substitute for the other two: a HitBox
+/// administrator cannot approve a brand's or an artist's drop on their behalf,
+/// because the approval carries a legal acceptance that only the owner can
+/// give. PLATFORM applies to HitBox's own drops.
+enum ApprovalAuthority {
+  ARTIST
+  ORGANIZATION
+  PLATFORM
+  /// No owner to ask: the drop names neither an artist nor an organization, so
+  /// it is HitBox's own and there is nobody outside HitBox whose consent the
+  /// review exists to capture. These reviews are opened and decided in the same
+  /// transaction — see docs/admin/drop-approval-lifecycle.md.
+  ///
+  /// Appended, never inserted: an enum value's position is part of the physical
+  /// type in Postgres.
+  NONE
+}
+
+/// Outcome of a release review.
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ───── source: packages\resale\prisma\resale.prisma ────────────────────────────────
+
+// ============================================================================
+// RESALE MODULE SCHEMA  (packages/resale/prisma/resale.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: ResaleListing
+//
+// The secondary market. Distinct from the `marketplace` package, which is a
+// read-side feed over the primary catalog and owns no tables.
+// ============================================================================
+
+/// A holder's offer to sell a SKU they own. BLOCKED is set when the SKU carries
+/// `resaleBlocked` (fraud hold, artist restriction) — the listing is kept
+/// rather than deleted so the seller can see why it stopped. A resale that
+/// completes writes a TRANSFER onto the SKU's provenance chain in the claims
+/// module; nothing about ownership is decided here.
+model ResaleListing {
+  id        String       @id @db.Uuid
+  /// Human-readable record id (`rsl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  sellerId  String       @db.Uuid
+  seller    User         @relation(fields: [sellerId], references: [id])
+  skuId     String       @db.Uuid
+  sku       Sku          @relation(fields: [skuId], references: [id])
+  price     Decimal      @db.Decimal(12, 2)
+  currency  Currency
+  status    ResaleStatus
+  createdAt DateTime
+  updatedAt DateTime
+}
+
+/// Listing state. BLOCKED is platform-imposed; CANCELLED is seller-initiated.
+enum ResaleStatus {
+  ACTIVE
+  SOLD
+  CANCELLED
+  BLOCKED
+}
+
+// ───── source: packages\search\prisma\search.prisma ────────────────────────────────
+
+// ============================================================================
+// SEARCH MODULE SCHEMA  (packages/search/prisma/search.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: SearchIndexJob
+// ============================================================================
+
+/// Outbox row for the search indexer. Writers enqueue a job in the same
+/// transaction as the data change, so an index update can never be lost even
+/// if the indexer is down. `entityType` + `entityId` are a deliberately
+/// FK-free polymorphic pointer — the indexer covers products, artists,
+/// collections and organizations, and must not couple to any of their tables.
+/// `entityId` is null for a FULL_REINDEX. `attempts` + `lastError` drive
+/// bounded retry with a dead-letter threshold.
+model SearchIndexJob {
+  id          String         @id @db.Uuid
+  /// Human-readable record id (`sij…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  entityType  String
+  entityId    String?        @db.Uuid
+  operation   IndexOperation
+  status      IndexJobStatus
+  attempts    Int
+  lastError   String?
+  createdAt   DateTime
+  completedAt DateTime?
+}
+
+/// What the indexer should do with the entity.
+enum IndexOperation {
+  UPSERT
+  DELETE
+  FULL_REINDEX
+}
+
+/// Job state. RUNNING rows left behind by a crashed worker are requeued by age.
+enum IndexJobStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+// ───── source: packages\skus\prisma\skus.prisma ────────────────────────────────────
+
+// ============================================================================
+// SKUS MODULE SCHEMA  (packages/skus/prisma/skus.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Sku, NfcTag, NfcVerification
+//
+// The serialized-item registry: one row per physical collectible, its NFC tag
+// binding, and its current owner. This is the platform's most security-
+// sensitive table — the digital twin of an object in someone's hands — which
+// is why it is its own module rather than a folder inside products.
+//
+// TAG CUSTODY (v3.1): a chip used to be five columns on Sku. It is now a row
+// of its own (NfcTag), because a chip has a life the item does not: it is QC'd
+// before it is bound, it can be replaced while the item keeps its history, and
+// its UID has to stay unique for ever even after it is retired. The old
+// columns are still here, still written, still read — see the @deprecated
+// notes — and nothing is migrated off them by this change.
+// ============================================================================
+
+/// One serialized unit of a drop. `serialNumber` is unique within the drop
+/// ("#014 of 500"). Ownership, NFC tag custody and resale eligibility all live
+/// on this row; the provenance history is append-only in the claims module
+/// (SkuHistory + BlockchainLedger).
+model Sku {
+  id          String  @id @db.Uuid
+  /// Human-readable record id (`sku…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  skuCode     String  @unique
+  productId   String  @db.Uuid
+  drop        Drop    @relation(fields: [productId], references: [id])
+  variantId   String? @db.Uuid
+  variant     DropVariant? @relation(fields: [variantId], references: [id])
+  /// Position within the drop's edition; unique per drop (see @@unique).
+  serialNumber Int
+  /// Current holder. Null until first claimed.
+  ownerId      String?       @db.Uuid
+  owner        User?         @relation(fields: [ownerId], references: [id])
+  claimedStatus ClaimedStatus
+
+  // ── NFC tag custody ───────────────────────────────────────────────────────
+  /// Physical tag UID. Unique platform-wide — two SKUs can never claim the
+  /// same tag, which is the primary defence against cloned tags.
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
+  tagId                 String?           @unique
+  /// Vendor provisioning batch reference. Not a foreign key: batches are
+  /// recorded by the supply module and tags may arrive before that row exists.
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
+  provisioningBatchId   String?
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
+  tagLifecycleState     TagLifecycleState
+  vendorId              String?           @db.Uuid
+  vendor                Vendor?           @relation(fields: [vendorId], references: [id])
+  vendorAuthenticatedAt DateTime?
+
+  /// The chip currently embedded in this item. Unique the other way round
+  /// too: a chip is in at most one item at a time.
+  currentNfcTagId  String?            @unique @db.Uuid
+  currentNfcTag    NfcTag?            @relation("SkuCurrentTag", fields: [currentNfcTagId], references: [id])
+  /// Every chip this item has ever carried, including the current one.
+  nfcTagHistory    NfcTag[]           @relation("SkuTagHistory")
+  nfcVerifications NfcVerification[]
+
+  /// The consignment this unit arrived in — see packages/supply.
+  supplyBatchId String?      @db.Uuid
+  supplyBatch   SupplyBatch? @relation(fields: [supplyBatchId], references: [id])
+
+  // ── One-shot claim token ──────────────────────────────────────────────────
+  /// Single-use token minted on tap and burned on claim. Unique so a token can
+  /// never be replayed against a second SKU. Stays on the item, not the chip:
+  /// it authorises a claim of *this unit*, and survives a chip replacement.
+  claimToken         String?   @unique
+  claimTokenIssuedAt DateTime?
+  claimTokenUsedAt   DateTime?
+
+  // ── Trust / anti-fraud state ──────────────────────────────────────────────
+  resaleBlocked       Boolean
+  resaleBlockedReason String?
+  /// Monotonic NFC tap counter — a counter that goes backwards indicates a
+  /// replayed or cloned tag.
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
+  lastTapCounter      Int
+  /// @deprecated — moving to NfcTag (SD-7); do not use in new code
+  tamperStatus        String?
+
+  isActive   Boolean
+  archivedAt DateTime?
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skuClaims             SkuClaim[]
+  blockchainLedgers     BlockchainLedger[]
+  buyerCollections      BuyerCollection[]
+  skuHistories          SkuHistory[]
+  contentUnlocks        ContentUnlock[]
+  evolutionEvents       EvolutionEvent[]
+  orders                Order[]
+  inventoryReservations InventoryReservation[]
+  resaleListings        ResaleListing[]
+  supportCases          SupportCase[]
+
+  @@unique([productId, serialNumber])
+}
+
+// NOTE: `model NfcTag` and `enum QcStatus` used to be declared here. They now
+// live in packages/supply/prisma/supply.prisma, because the module that
+// creates chip rows, records their QC and holds them as stock is the supply
+// module — this one only binds an existing chip to a unit. The move is a
+// partial-ownership change only: the merged schema and the database are
+// unchanged, since merge-schema.mjs concatenates partials and Prisma does not
+// care which file a model was declared in.
+
+/// Append-only log of every tap verification. The single-use claim token stays on Sku.claimToken.
+model NfcVerification {
+  id               String             @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`nfv…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  verificationCode String             @unique @db.VarChar(10) // NV
+  nfcTagId         String?            @db.Uuid
+  nfcTag           NfcTag?            @relation(fields: [nfcTagId], references: [id])
+  skuId            String?            @db.Uuid
+  sku              Sku?               @relation(fields: [skuId], references: [id])
+  counter          Int?
+  result           VerificationResult
+  reasonCode       String?            // internal only
+  requestId        String
+  createdAt        DateTime           @default(now())
+
+  @@index([skuId, createdAt])
+}
+
+/// Whether the item has been claimed by an owner. IN_TRANSFER blocks
+/// concurrent claims while ownership is moving; FLAGGED freezes the item
+/// pending a support/fraud investigation.
+enum ClaimedStatus {
+  UNCLAIMED
+  CLAIMED
+  IN_TRANSFER
+  FLAGGED
+}
+
+/// Custody state of the physical NFC tag, from manufacture to retirement.
+/// UNPROVISIONED → BOUND (written to a SKU) → ACTIVE (claimed & in use);
+/// LOST / REVOKED / DISPUTED are terminal states that block claims.
+enum TagLifecycleState {
+  UNPROVISIONED
+  BOUND
+  ACTIVE
+  LOST
+  REVOKED
+  DISPUTED
+}
+
+/// Outcome of one tap verification.
+enum VerificationResult {
+  VERIFIED
+  REJECTED
+}
+
+// ───── source: packages\social\prisma\social.prisma ────────────────────────────────
+
+// ============================================================================
+// SOCIAL MODULE SCHEMA  (packages/social/prisma/social.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Follow, WishlistItem
+//
+// Buyer intent signals. Both tables feed the discover/marketplace read-side
+// feeds and the notification triggers ("a drop you wishlisted is live").
+// ============================================================================
+
+/// A follow edge. Polymorphic by nullable target: exactly one of `artistId` or
+/// `followedOrganizationId` is set. The two partial uniques prevent duplicate
+/// follows of the same target while still allowing many rows per follower —
+/// Postgres treats NULLs as distinct, so a row with a null target column never
+/// collides on that key. `followedOrganizationId` is kept FK-free so the
+/// organizations module can be extracted without touching this table.
+model Follow {
+  id                     String   @id @db.Uuid
+  /// Human-readable record id (`flw…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  followerId             String   @db.Uuid
+  follower               User     @relation(fields: [followerId], references: [id])
+  artistId               String?  @db.Uuid
+  artist                 Artist?  @relation(fields: [artistId], references: [id])
+  followedOrganizationId String?  @db.Uuid
+  createdAt              DateTime
+
+  @@unique([followerId, artistId])
+  @@unique([followerId, followedOrganizationId])
+}
+
+/// A saved product, optionally narrowed to a variant. Unique per
+/// (user, product, variant). `notifyOnAvailable` is the hook the notifications
+/// module reads when a drop opens or restocks.
+model WishlistItem {
+  id                String          @id @db.Uuid
+  /// Human-readable record id (`wsh…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  userId            String          @db.Uuid
+  user              User            @relation(fields: [userId], references: [id])
+  productId         String          @db.Uuid
+  drop              Drop            @relation(fields: [productId], references: [id])
+  variantId         String?         @db.Uuid
+  variant           DropVariant?    @relation(fields: [variantId], references: [id])
+  notifyOnAvailable Boolean
+  note              String?
+  createdAt         DateTime
+
+  @@unique([userId, productId, variantId])
+}
+
+// ───── source: packages\supply\prisma\supply.prisma ────────────────────────────────
+
+// ============================================================================
+// SUPPLY MODULE SCHEMA  (packages/supply/prisma/supply.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: Vendor, SupplyBatch, NfcTag
+//
+// The physical side: who manufactures tags and merchandise, what arrived, and
+// which chips exist. This is the upstream of the skus module — a Sku's
+// `vendorId` and `provisioningBatchId` trace an item back to the shipment it
+// came from.
+//
+// NfcTag moved here from packages/skus (it was declared there when it was
+// split off Sku in v3.1). The module that creates chip rows from a vendor
+// manifest, records their QC and holds them as stock is this one; skus only
+// binds an existing chip to a unit. The move changed no SQL — merge-schema.mjs
+// concatenates partials, so which file a model is declared in is metadata.
+// ============================================================================
+
+/// A manufacturer or supplier.
+model Vendor {
+  id           String     @id @db.Uuid
+  /// Human-readable record id (`vnd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  name         String
+  /// Registered entity name, where it differs from the trading name we use.
+  legalName    String?
+  /// ISO 3166-1 alpha-2. Two characters, because a tag consignment crossing a
+  /// border is a customs question before it is a supply one.
+  country      String?    @db.VarChar(2)
+  vendorType   VendorType
+  contactName  String?
+  contactEmail String?
+  contactPhone String?
+  notes        String?
+  isActive     Boolean
+  archivedAt   DateTime?
+  createdAt    DateTime
+  /// Defaulted rather than required so the column can be added to a table that
+  /// already has rows; @updatedAt keeps it current from here on.
+  updatedAt    DateTime   @default(now()) @updatedAt
+
+  // ── Own-module back-relations ─────────────────────────────────────────────
+  supplyBatchs SupplyBatch[]
+
+  // ── Cross-module back-relations ───────────────────────────────────────────
+  skus Sku[]
+}
+
+/// A received shipment of tags or merchandise. `sourceFileRef` points at the
+/// uploaded manifest (a media asset) that the batch was entered from, and
+/// `enteredBy` records who keyed it in — together they make a physical
+/// reconciliation auditable. `batchRef` is the vendor's own batch label, which
+/// is what Sku.provisioningBatchId matches against.
+model SupplyBatch {
+  id            String         @id @db.Uuid
+  /// Human-readable record id (`sbt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  vendorId      String         @db.Uuid
+  vendor        Vendor         @relation(fields: [vendorId], references: [id])
+  itemType      SupplyItemType
+  quantity      Int
+  batchRef      String?
+  receivedAt    DateTime
+  sourceFileRef String?
+  enteredById   String         @db.Uuid
+  enteredBy     User           @relation(fields: [enteredById], references: [id])
+  notes         String?
+  createdAt     DateTime
+
+  // ── Vendor supply per drop (v3.1) ─────────────────────────────────────────
+  // A consignment is ordered *for* a drop, and the upload that creates it is
+  // validated row by row before anyone accepts it — hence the three counts and
+  // the status, which together are the whole of the vendor intake screen.
+  //
+  // TODO: make required after backfill (target: String)
+  dropId              String?           @db.Uuid
+  drop                Drop?             @relation(fields: [dropId], references: [id])
+  /// Defaulted so the column can be added to a table that already has rows.
+  batchDate           DateTime          @default(now()) @db.Date
+  status              SupplyBatchStatus @default(UPLOADED)
+  rowsReceived        Int               @default(0)
+  rowsAccepted        Int               @default(0)
+  rowsRejected        Int               @default(0)
+  vendorInvoiceRef    String?
+  /// Pointer to the stored validation report for the upload.
+  validationReportRef String?
+  updatedAt           DateTime          @default(now()) @updatedAt
+
+  // ── Own- and cross-module back-relations ──────────────────────────────────
+  skus    Sku[]
+  nfcTags NfcTag[]
+}
+
+/// NFC tag master — one row per physical chip, created from the vendor's
+/// manifest upload. A chip has a life of its own: vendor QC before binding, can
+/// be replaced while the old chip keeps its history, UID unique for ever, keys
+/// and tap counter belong to the chip.
+model NfcTag {
+  id              String            @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`nft…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  nfcTagCode      String            @unique @db.VarChar(10) // NT
+  supplyBatchId   String            @db.Uuid
+  supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
+  /// The item this chip is (or was) embedded in.
+  skuId           String?           @db.Uuid
+  sku             Sku?              @relation("SkuTagHistory", fields: [skuId], references: [id])
+  currentFor      Sku?              @relation("SkuCurrentTag")
+  /// Chip UID stored only hashed + encrypted.
+  tagUidHash      String            @unique @db.Char(64) // HMAC-SHA256 lookup key
+  tagUidEncrypted String            // AES-256-GCM, key in KMS
+  qcStatus        QcStatus          @default(PENDING)
+  qcReportedAt    DateTime?
+  qcNotes         String?
+  lifecycleState  TagLifecycleState @default(UNPROVISIONED)
+  keyReference    String?           // KMS pointer — never a key
+  lastTapCounter  Int               @default(0)
+  tamperStatus    String?
+  personalizedAt  DateTime?
+  boundAt         DateTime?
+  activatedAt     DateTime?
+  retiredAt       DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  verifications   NfcVerification[]
+  ledgerEntries   BlockchainLedger[]
+  supportCases    SupportCase[]
+
+  @@index([skuId])
+}
+
+/// Vendor quality control on a chip, recorded before it is bound to anything.
+/// `TagLifecycleState` stays in packages/skus: the deprecated `Sku` tag columns
+/// still use it, so it is shared rather than owned here.
+enum QcStatus {
+  PENDING
+  PASSED
+  FAILED
+}
+
+/// What kind of goods this supplier makes.
+///
+/// These are **product categories**, not manufacturing capabilities, and that
+/// is the point: an NFC chip arrives already embedded in the item, so nobody
+/// on this platform is "a tag manufacturer" from the supply chain's point of
+/// view — they are the factory that makes the action figure the chip is inside.
+///
+/// The values deliberately mirror `Drop.category`, so "who makes our jerseys"
+/// and "which drops are jerseys" answer with the same word.
+///
+/// Adding a value is a migration (Postgres appends cheaply); REMOVING one is a
+/// type recreation, because Postgres has no `ALTER TYPE ... DROP VALUE`. Prefer
+/// `OTHER` over inventing a value you are not sure of.
+enum VendorType {
+  FIGURE
+  KEYCHAIN
+  JERSEY
+  APPAREL
+  TRADING_CARD
+  POSTER
+  PLUSH
+  /// Mixed or general merchandise that does not fall in one category above.
+  MERCHANDISE
+  OTHER
+}
+
+/// What a supply batch contains — the same product categories as
+/// `VendorType` and `Drop.category`, so "who makes our jerseys", "which drops
+/// are jerseys" and "which cartons held jerseys" answer with the same word.
+///
+/// The chip arrives already embedded in the goods, so a carton is described by
+/// what the goods ARE. The former `NFC_TAG` (a consignment of loose reels this
+/// platform never receives) and `COLLECTIBLE` ("a finished serialized item",
+/// true of every category) are gone — see migration
+/// `20260928120000_supply_item_type_product_categories`.
+///
+/// Adding a value is a migration; REMOVING one recreates the type. Prefer
+/// `OTHER` over inventing a value you are not sure of.
+enum SupplyItemType {
+  FIGURE
+  KEYCHAIN
+  JERSEY
+  APPAREL
+  TRADING_CARD
+  POSTER
+  PLUSH
+  /// Mixed or general merchandise that does not fall in one category above.
+  MERCHANDISE
+  OTHER
+}
+
+/// Where a vendor consignment is in its intake review. UPLOADED is the raw
+/// file; VALIDATED means the rows parsed and passed their checks; ACCEPTED is
+/// a human's decision to take delivery.
+enum SupplyBatchStatus {
+  UPLOADED
+  VALIDATED
+  ACCEPTED
+  REJECTED
+}
+
+// ───── source: packages\support\prisma\support.prisma ──────────────────────────────
+
+// ============================================================================
+// SUPPORT MODULE SCHEMA  (packages/support/prisma/support.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: SupportCase
+// ============================================================================
+
+/// A reported problem with a physical item or its tag. Both `skuId` and `tagId`
+/// are nullable and independent: a buyer can report a tag that resolves to no
+/// SKU at all (the CLONED case), which is exactly the report the platform most
+/// needs to capture. `tagId` is a raw string, not a foreign key, for the same
+/// reason. Resolving a case is what flips a SKU to FLAGGED or a tag to
+/// REVOKED/DISPUTED in the skus module.
+model SupportCase {
+  id             String            @id @db.Uuid
+  /// Human-readable record id (`spc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  reporterId     String            @db.Uuid
+  reporter       User              @relation("User_reporter", fields: [reporterId], references: [id])
+  skuId          String?           @db.Uuid
+  sku            Sku?              @relation(fields: [skuId], references: [id])
+  /// @deprecated — use nfcTagId
+  tagId          String?
+  /// The chip the case is about, once tags are rows of their own (SD-7).
+  nfcTagId       String?           @db.Uuid
+  nfcTag         NfcTag?           @relation(fields: [nfcTagId], references: [id])
+  caseType       SupportCaseType
+  status         SupportCaseStatus
+  description    String
+  resolutionNote String?
+  resolvedById   String?           @db.Uuid
+  resolvedBy     User?             @relation("User_resolvedBy", fields: [resolvedById], references: [id])
+  resolvedAt     DateTime?
+  createdAt      DateTime
+  updatedAt      DateTime
+}
+
+/// What is being reported. CLONED is the anti-counterfeit path; DISPUTE covers
+/// contested ownership between two users.
+enum SupportCaseType {
+  LOST
+  DAMAGED
+  STOLEN
+  CLONED
+  DISPUTE
+}
+
+/// Case state.
+enum SupportCaseStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+  REJECTED
+}
+
+// ───── source: packages\tax\prisma\tax.prisma ──────────────────────────────────────
+
+// ============================================================================
+// TAX & INVOICING MODULE SCHEMA  (packages/tax/prisma/tax.prisma)
+// Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: TaxConfiguration, Invoice, InvoiceLineItem, InvoiceNumberSequence,
+//       TaxReturnFiling, ArtistTaxDocument, TaxAdjustmentEntry
+//
+// Statutory records, not accounting. The finance module owns what HitBox
+// *earned* (royalty ledger, payouts, revenue); this module owns what HitBox
+// must be able to *show a tax authority*: the invoice issued to the customer,
+// the rate it was issued at, the PDF that was sent, the artist's tax paperwork
+// and the return it was reported on.
+//
+// Two properties drive nearly every column here, and both come from the fact
+// that a tax authority may ask about a transaction years after it happened:
+//
+//   **Everything is snapshotted.** An Invoice copies the rate, the HSN code,
+//   the unit price and the supplier's own registration numbers onto itself. A
+//   later edit to TaxConfiguration, to the product, or to HitBox's own GSTIN
+//   must never change what an already-issued invoice says — that document has
+//   left the building and been filed on a GSTR-1 return.
+//
+//   **Nothing is deleted or edited.** An issued invoice moves to VOID or is
+//   superseded by a CORRECTED one (`supersedesInvoiceId`); a wrong tax figure
+//   is corrected by a TaxAdjustmentEntry that references the original. Same
+//   append-only rule the finance ledgers follow.
+//
+// See docs/tax/ for the design, the API surface and the compliance mapping
+// back to the HitBox Tax & Invoicing Compliance Guide v1.1.
+// ============================================================================
+
+/// The tax rate + classification code that applies to one product in one
+/// jurisdiction, versioned by an effective window.
+///
+/// Versioned rather than mutable for the same reason RoyaltyRule is: GST rates
+/// change by notification on a date, and re-deriving an old invoice has to
+/// reproduce the rate that was actually charged. `effectiveTo` null means "still
+/// current"; resolution is most-specific-first (product+state → product+country
+/// → country default) inside the service.
+///
+/// `hsnCode` is mandatory for India in practice — an invoice without one is not
+/// GST-compliant and the code is matched against GSTR-1 filings — but it is
+/// nullable at the column level because US rows have no equivalent.
+model TaxConfiguration {
+  id             String     @id @db.Uuid
+  /// Human-readable record id (`txc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  /// Null means "the default for this jurisdiction", used when no
+  /// product-specific row exists. Products are the specific case.
+  productId      String?    @db.Uuid
+  drop           Drop?      @relation(fields: [productId], references: [id])
+  /// ISO 3166-1 alpha-2. 'IN' or 'US' today.
+  countryCode    String     @db.VarChar(2)
+  /// US only: the state whose rate this is ('CA'). Null for country-level rows
+  /// and for India, where GST is centrally rated.
+  stateCode      String?    @db.VarChar(2)
+  taxType        TaxType
+  /// Percentage, e.g. 12.000 for 12%. Zero is a legitimate value (exempt
+  /// supply that still has to appear on the invoice as 0%); use
+  /// `exemptionReason` to say why rather than omitting the row.
+  ///
+  /// Three decimal places, not two: US combined state+county+district rates
+  /// routinely carry three (California's 8.625%, New York's 8.875%), and
+  /// rounding one to 8.63% would print a rate on a statutory document that the
+  /// tax authority's own rate table does not contain.
+  taxRate        Decimal    @db.Decimal(6, 3)
+  /// India: HSN (goods) — '9706' for collectibles and memorabilia.
+  hsnCode        String?    @db.VarChar(20)
+  /// India: SAC (services) — '998361' for marketplace commission.
+  sacCode        String?    @db.VarChar(20)
+  exemptionReason String?   @db.VarChar(200)
+  effectiveFrom  DateTime
+  effectiveTo    DateTime?
+  status         TaxConfigurationStatus
+  createdById    String?    @db.Uuid
+  createdBy      User?      @relation("TaxConfigurationCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  /// One rate per (product, jurisdiction) taking effect on a given date — a
+  /// second row for the same day is a mistake, not a newer version.
+  @@unique([productId, countryCode, stateCode, effectiveFrom])
+  /// Rate resolution: "what applies in IN / US-CA right now".
+  @@index([countryCode, stateCode, effectiveFrom])
+  @@index([productId, effectiveFrom])
+  @@index([status, effectiveTo])
+}
+
+/// A customer invoice — the statutory document, and the row a GSTR-1 or a state
+/// sales-tax return is built from.
+///
+/// One invoice per order. `invoiceNumber` is unique, gap-free and sequential
+/// within a fiscal year (GST law requires exactly that), and is minted from
+/// InvoiceNumberSequence inside the same transaction that writes this row.
+///
+/// The supplier columns (`supplierGstin`, `supplierPan`, `supplierEin`,
+/// `supplierName`, `supplierAddress`) are copied onto every invoice rather than
+/// read from configuration at render time. They change — a registration is
+/// amended, an office moves — and an invoice must keep showing the details that
+/// were on the document the customer received.
+///
+/// `pdfStorageRef` is the S3 **key**, never a URL: signed-URL policy stays a
+/// runtime decision, exactly as `MediaAsset.storageRef` does. `pdfSha256` is
+/// what proves the object in the bucket is still the document that was issued.
+model Invoice {
+  id             String        @id @db.Uuid
+  /// Human-readable record id (`inv…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  /// e.g. 'INV-2026-27-IN-000123'. See domain/invoice-number.ts.
+  invoiceNumber  String        @unique @db.VarChar(50)
+  invoiceDate    DateTime
+  /// Fiscal year label the sequence was drawn from ('2026-27' for India,
+  /// '2026' for the US). Stored so a return can be assembled without
+  /// re-deriving the fiscal calendar from `invoiceDate`.
+  fiscalYear     String        @db.VarChar(10)
+
+  orderId        String        @unique @db.Uuid
+  order          Order         @relation(fields: [orderId], references: [id])
+  buyerId        String        @db.Uuid
+  buyer          User          @relation("InvoiceBuyer", fields: [buyerId], references: [id])
+  organizationId String?       @db.Uuid
+  organization   Organization? @relation(fields: [organizationId], references: [id])
+
+  // ── Jurisdiction & money ──────────────────────────────────────────────────
+  countryCode    String        @db.VarChar(2)
+  stateCode      String?       @db.VarChar(2)
+  currency       Currency
+  /// Sum of line subtotals, before tax.
+  subtotal       Decimal       @db.Decimal(12, 2)
+  taxAmount      Decimal       @db.Decimal(12, 2)
+  totalAmount    Decimal       @db.Decimal(12, 2)
+  taxType        TaxType
+  /// The headline rate. Per-line rates live on InvoiceLineItem; this is the
+  /// single rate when (as today) every line on an invoice shares one.
+  /// Decimal(6,3) — see TaxConfiguration.taxRate.
+  taxRate        Decimal       @db.Decimal(6, 3)
+  /// India: the HSN the whole invoice was filed under, denormalised for the
+  /// HSN-wise summary GSTR-1 requires.
+  hsnCode        String?       @db.VarChar(20)
+
+  // ── Supplier snapshot (HitBox) ────────────────────────────────────────────
+  supplierName    String       @db.VarChar(200)
+  supplierAddress String
+  /// India: HitBox's own GSTIN. Mandatory on an Indian invoice.
+  supplierGstin   String?      @db.VarChar(20)
+  supplierPan     String?      @db.VarChar(20)
+  /// US: HitBox's EIN.
+  supplierEin     String?      @db.VarChar(20)
+
+  // ── Customer snapshot ─────────────────────────────────────────────────────
+  customerName    String       @db.VarChar(200)
+  customerEmail   String       @db.VarChar(320)
+  /// Frozen billing address as printed. Null for a purely digital order with no
+  /// billing address captured.
+  customerAddress String?
+  /// B2B only; optional for B2C, which is the normal case here.
+  customerGstin   String?      @db.VarChar(20)
+
+  // ── Pricing provenance ────────────────────────────────────────────────────
+  /// The unit sale price this invoice was priced at, snapshotted at issue.
+  /// Guide v1.1 §8.1: a later re-versioning of the drop's pricing must never
+  /// retroactively change an already-issued invoice.
+  salesPriceSnapshot Decimal?  @db.Decimal(12, 2)
+  /// Pointer to the priced `DropPrice` version that priced it. Plain id with
+  /// NO foreign key: an invoice must never be blocked from being issued by a
+  /// pricing table it does not own. Renamed from `productCostId` in v3.1, and
+  /// the column itself renamed in v3.1.1.
+  dropPriceId        String?   @db.Uuid
+
+  // ── The document ──────────────────────────────────────────────────────────
+  /// S3 key under `tax-invoices/`, never a URL. Null between the row being
+  /// written and the PDF being rendered — the row is the source of truth, the
+  /// PDF is a projection of it and can always be re-rendered.
+  pdfStorageRef  String?       @db.VarChar(500)
+  /// SHA-256 of the rendered PDF bytes. Integrity evidence in an audit.
+  pdfSha256      String?       @db.VarChar(64)
+  pdfRenderedAt  DateTime?
+  /// When the invoice was e-mailed to the customer. Null = not sent yet.
+  deliveredAt    DateTime?
+
+  // ── Lifecycle ─────────────────────────────────────────────────────────────
+  status         InvoiceStatus
+  /// Set when this invoice replaces an earlier one (status CORRECTED). The
+  /// superseded invoice is never deleted — both stay on the return trail.
+  supersedesInvoiceId String?  @db.Uuid
+  supersedes          Invoice? @relation("InvoiceCorrection", fields: [supersedesInvoiceId], references: [id])
+  supersededBy        Invoice[] @relation("InvoiceCorrection")
+  voidReason     String?
+  issuedAt       DateTime
+  notes          String?
+
+  // ── Audit ─────────────────────────────────────────────────────────────────
+  /// Null when the invoice was generated by the system on order settlement,
+  /// which is the normal path; set when a HitBox operator issued it by hand.
+  createdById    String?       @db.Uuid
+  createdBy      User?         @relation("InvoiceCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  lineItems            InvoiceLineItem[]
+  taxAdjustmentEntrys  TaxAdjustmentEntry[]
+
+  /// The customer's own invoice list, newest first.
+  @@index([buyerId, invoiceDate])
+  /// Return assembly: every invoice issued in a jurisdiction in a period.
+  @@index([countryCode, stateCode, invoiceDate])
+  @@index([fiscalYear, countryCode])
+  @@index([status, invoiceDate])
+  @@index([organizationId, invoiceDate])
+}
+
+/// One line of an invoice. Separate table rather than JSON because GSTR-1 is
+/// filed with an HSN-wise breakdown — the tax authority reads lines, not
+/// invoices, and a JSON blob cannot be summed by HSN in SQL.
+///
+/// Every money column is a snapshot; nothing here is recomputed on read.
+model InvoiceLineItem {
+  id          String   @id @db.Uuid
+  /// Human-readable record id (`ivl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  invoiceId   String   @db.Uuid
+  invoice     Invoice  @relation(fields: [invoiceId], references: [id])
+  /// Display order on the document, 1-based.
+  position    Int
+  /// As printed. Copied from the product at issue time, not joined at render
+  /// time — a renamed product must not rename an issued invoice's line.
+  description String   @db.VarChar(300)
+  /// Plain id, no FK: the line must survive a product being retired.
+  productId   String?  @db.Uuid
+  skuId       String?  @db.Uuid
+  /// India: mandatory per line. US: null.
+  hsnCode     String?  @db.VarChar(20)
+  sacCode     String?  @db.VarChar(20)
+  quantity    Int
+  unitPrice   Decimal  @db.Decimal(12, 2)
+  /// quantity × unitPrice, before tax.
+  lineSubtotal Decimal @db.Decimal(12, 2)
+  taxRate     Decimal  @db.Decimal(6, 3)
+  taxAmount   Decimal  @db.Decimal(12, 2)
+  lineTotal   Decimal  @db.Decimal(12, 2)
+  createdAt   DateTime
+
+  @@unique([invoiceId, position])
+  @@index([invoiceId])
+  /// The HSN-wise summary GSTR-1 asks for.
+  @@index([hsnCode])
+}
+
+/// The counter behind `Invoice.invoiceNumber`.
+///
+/// GST law requires invoice numbers to be unique, sequential and **gap-free**
+/// within a fiscal year, per series. A database sequence cannot provide that —
+/// `nextval` is non-transactional, so a rolled-back invoice burns a number and
+/// leaves a hole an auditor will ask about. This row is instead locked and
+/// incremented inside the same transaction that inserts the invoice: if the
+/// invoice rolls back, so does the number.
+///
+/// The cost is that invoice creation serialises per (series, fiscal year). At
+/// HitBox's volume that is nothing, and it is the correct trade — a gap in the
+/// series is a compliance finding, a few milliseconds of lock contention is not.
+model InvoiceNumberSequence {
+  id          String   @id @db.Uuid
+  /// Human-readable record id (`ins…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  /// Country whose series this is; each jurisdiction numbers independently.
+  countryCode String   @db.VarChar(2)
+  /// '2026-27' (India, Apr–Mar) or '2026' (US, calendar year).
+  fiscalYear  String   @db.VarChar(10)
+  /// Last number issued. The next invoice takes `lastNumber + 1`.
+  lastNumber  Int
+  updatedAt   DateTime
+
+  @@unique([countryCode, fiscalYear])
+}
+
+/// A tax return or statutory information filing, and its status.
+///
+/// Covers both the indirect-tax returns HitBox files on its own sales
+/// (GSTR-1, GSTR-3B, a US state sales-tax return) and the information returns
+/// it files about what it paid artists (Form 16A, 1099-NEC).
+///
+/// `payoutId` is the control that Guide v1.1 §8.3 turns on: Form 16A and
+/// 1099-NEC report *paid* royalty income, so a filing of either type must point
+/// at the payout that was actually approved and executed, never at a ledger
+/// accrual. It is a real FK to RoyaltyPayout — finance owns that table and a
+/// filing that references a payout which does not exist is a filing that cannot
+/// be substantiated.
+model TaxReturnFiling {
+  id             String        @id @db.Uuid
+  /// Human-readable record id (`trf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  filingType     TaxFilingType
+  countryCode    String        @db.VarChar(2)
+  stateCode      String?       @db.VarChar(2)
+  periodStart    DateTime
+  periodEnd      DateTime
+
+  totalTaxableAmount Decimal?  @db.Decimal(14, 2)
+  totalTaxCollected  Decimal?  @db.Decimal(14, 2)
+  totalTaxDue        Decimal?  @db.Decimal(14, 2)
+  /// India: Input Tax Credit claimed against the period's output tax.
+  inputTaxCredit     Decimal?  @db.Decimal(14, 2)
+  currency           Currency?
+
+  /// Information returns only (FORM_16A / FORM_1099_NEC): whose income this
+  /// reports, and which approved payout substantiates it.
+  artistId       String?       @db.Uuid
+  artist         Artist?       @relation(fields: [artistId], references: [id])
+  payoutId       String?       @db.Uuid
+  payout         RoyaltyPayout? @relation(fields: [payoutId], references: [id])
+
+  status         TaxFilingStatus
+  filedAt        DateTime?
+  dueDate        DateTime?
+  /// The government's acknowledgement / ARN, once filed.
+  referenceNumber String?      @db.VarChar(100)
+  /// S3 key of the generated return or certificate PDF, when there is one
+  /// (Form 16A and 1099-NEC produce a document the artist receives).
+  documentStorageRef String?   @db.VarChar(500)
+  notes          String?
+
+  createdById    String?       @db.Uuid
+  createdBy      User?         @relation("TaxFilingCreatedBy", fields: [createdById], references: [id])
+  filedById      String?       @db.Uuid
+  filedBy        User?         @relation("TaxFilingFiledBy", fields: [filedById], references: [id])
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  /// One filing per return per period per jurisdiction. Information returns
+  /// carry an artist, so they are unique per artist as well.
+  @@unique([filingType, countryCode, stateCode, periodStart, artistId])
+  @@index([status, dueDate])
+  @@index([countryCode, filingType, periodStart])
+  @@index([artistId, filingType])
+}
+
+/// An artist's tax paperwork: W-9 (US), PAN and GST registration (India), and
+/// the copies of information returns HitBox has issued them.
+///
+/// `documentStorageRef` points at a **private** S3 key — these are the most
+/// sensitive documents the platform holds (an SSN sits on a W-9), so they never
+/// live under a public prefix and are only ever served through a short-lived
+/// presigned GET after a permission check.
+///
+/// `documentNumber` holds the PAN or GSTIN, which are business identifiers. It
+/// deliberately does **not** hold an SSN or EIN: the number on a W-9 stays
+/// inside the PDF, which is access-controlled as a whole.
+model ArtistTaxDocument {
+  id             String   @id @db.Uuid
+  /// Human-readable record id (`atd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  artistId       String   @db.Uuid
+  artist         Artist   @relation(fields: [artistId], references: [id])
+  countryCode    String   @db.VarChar(2)
+  documentType   ArtistTaxDocumentType
+
+  documentStorageRef String? @db.VarChar(500)
+  /// SHA-256 of the stored file — the same integrity evidence an invoice keeps.
+  documentSha256 String?  @db.VarChar(64)
+  /// PAN / GSTIN / state tax id. Never an SSN — see the note above.
+  documentNumber String?  @db.VarChar(50)
+  /// Legal name as it appears on the form, which is not always the display name.
+  issuerName     String?  @db.VarChar(200)
+  issueDate      DateTime?
+  /// Null when the document does not expire (a W-9 is valid indefinitely).
+  expiresAt      DateTime?
+
+  status         ArtistTaxDocumentStatus
+  verifiedById   String?  @db.Uuid
+  verifiedBy     User?    @relation("ArtistTaxDocumentVerifiedBy", fields: [verifiedById], references: [id])
+  verifiedAt     DateTime?
+  /// US: set when no valid W-9 is on file, which forces 24% backup withholding
+  /// on the next payout. Denormalised onto the document row because the payout
+  /// path asks "is this artist withholding-exempt" and must not have to
+  /// interpret document status itself.
+  backupWithholdingApplied Boolean
+  backupWithholdingRate    Decimal? @db.Decimal(5, 2)
+  notes          String?
+
+  createdById    String?  @db.Uuid
+  createdBy      User?    @relation("ArtistTaxDocumentCreatedBy", fields: [createdById], references: [id])
+  createdAt      DateTime
+  updatedAt      DateTime
+
+  /// One live document of each type per artist per country. A replacement
+  /// supersedes rather than duplicates — status ARCHIVED on the old row.
+  @@unique([artistId, documentType, countryCode, status])
+  @@index([artistId, status])
+  /// The expiry sweep that raises "this artist's GST registration lapses in 30
+  /// days" before a payout is blocked by it.
+  @@index([expiresAt])
+}
+
+/// A correction to an invoice's tax figure, posted rather than edited.
+///
+/// Mirrors the finance module's AdjustmentEntry exactly: the original invoice
+/// keeps its own row and its own numbers, and this table records what changed,
+/// why, and who approved it. A tax authority reading the trail sees both the
+/// document that was issued and the correction that followed.
+model TaxAdjustmentEntry {
+  id                 String   @id @db.Uuid
+  /// Human-readable record id (`tad…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  invoiceId          String   @db.Uuid
+  invoice            Invoice  @relation(fields: [invoiceId], references: [id])
+  adjustmentType     TaxAdjustmentType
+  reason             String
+  /// What the invoice said.
+  originalTaxAmount  Decimal  @db.Decimal(12, 2)
+  /// What it should have said.
+  adjustedTaxAmount  Decimal  @db.Decimal(12, 2)
+  /// adjustedTaxAmount − originalTaxAmount. Signed: negative is a refund of
+  /// tax over-collected. Stored rather than derived so the trail reads as a
+  /// ledger.
+  adjustmentAmount   Decimal  @db.Decimal(12, 2)
+  currency           Currency
+
+  status             TaxAdjustmentStatus
+  approvedById       String?  @db.Uuid
+  approvedBy         User?    @relation("TaxAdjustmentApprovedBy", fields: [approvedById], references: [id])
+  approvedAt         DateTime?
+  rejectionReason    String?
+
+  createdById        String?  @db.Uuid
+  createdBy          User?    @relation("TaxAdjustmentCreatedBy", fields: [createdById], references: [id])
+  createdAt          DateTime
+  updatedAt          DateTime
+
+  @@index([invoiceId])
+  @@index([status, approvedAt])
+}
+
+// ── Enums ───────────────────────────────────────────────────────────────────
+
+/// Which tax regime a rate belongs to. GST is India's single indirect tax;
+/// SALES_TAX is the US state-level tax. EXEMPT is a real classification, not
+/// the absence of one — an exempt supply still appears on the invoice.
+enum TaxType {
+  GST
+  SALES_TAX
+  EXEMPT
+}
+
+enum TaxConfigurationStatus {
+  ACTIVE
+  INACTIVE
+}
+
+/// Invoice lifecycle. There is no DRAFT: an invoice row is written only once
+/// the order is settled, because issuing a number that may never be used would
+/// put a gap in the statutory series.
+enum InvoiceStatus {
+  /// Issued to the customer. The normal terminal state.
+  ISSUED
+  /// Cancelled. The number is retained and reported as void — never reused.
+  VOID
+  /// Replaced by a later invoice, which carries `supersedesInvoiceId`.
+  CORRECTED
+}
+
+/// The returns and certificates this module tracks.
+enum TaxFilingType {
+  /// India, monthly: outward supplies, with HSN-wise summary.
+  GSTR_1
+  /// India, monthly: summary return and tax payment.
+  GSTR_3B
+  /// India, quarterly: TDS certificate issued to an artist.
+  FORM_16A
+  /// US, annual: non-employee compensation reported to the IRS and the artist.
+  FORM_1099_NEC
+  /// US, per state, usually quarterly.
+  STATE_SALES_TAX
+}
+
+enum TaxFilingStatus {
+  PENDING
+  READY
+  FILED
+  ACCEPTED
+  REJECTED
+}
+
+enum ArtistTaxDocumentType {
+  /// US: Request for Taxpayer Identification Number.
+  W9
+  /// India: Permanent Account Number.
+  PAN
+  /// India: GST registration certificate.
+  GST_REGISTRATION
+  /// US: state tax registration.
+  STATE_TAX_ID
+  /// A copy of a 1099-NEC HitBox issued to this artist.
+  FORM_1099_NEC_ISSUED
+  /// A copy of a Form 16A TDS certificate HitBox issued to this artist.
+  FORM_16A_ISSUED
+}
+
+enum ArtistTaxDocumentStatus {
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  EXPIRED
+  /// Superseded by a newer document of the same type.
+  ARCHIVED
+}
+
+enum TaxAdjustmentType {
+  /// The rate or amount charged was wrong.
+  TAX_CORRECTION
+  /// Tax refunded because the sale was refunded.
+  REFUND
+  /// An exemption was established after the invoice was issued.
+  EXEMPTION_GRANTED
+}
+
+enum TaxAdjustmentStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
 }
 
 // ───── source: packages\users\prisma\users.prisma ──────────────────────────────────
@@ -364,38 +3857,113 @@ model ProductImage {
 // ============================================================================
 // USERS MODULE SCHEMA  (packages/users/prisma/users.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
+//
+// Owns: User, Address
 // ============================================================================
 
-/// Platform account. Identity (credentials, sessions) lives in Clerk — this
-/// row is the local projection, created/updated via auth module events.
+/// Platform account. Identity (credentials, sessions) lives in Clerk — this row
+/// is the local projection, created/updated from auth-module webhook events, so
+/// every other module can use a plain `userId` foreign key.
 model User {
-    id           String    @id @default(cuid())
-    clerkUserId  String    @unique @map("clerk_user_id")
-    email        String    @unique @db.VarChar(255)
-    username     String?   @unique @db.VarChar(50)
-    firstName    String?   @map("first_name") @db.VarChar(100)
-    lastName     String?   @map("last_name") @db.VarChar(100)
-    avatarUrl    String?   @map("avatar_url")
-    // Verification status of the primary email, mirrored from Clerk on sync.
-    // requireAuth blocks protected routes when false. Defaults true so rows
-    // created before this column stay usable; the sync path writes the real value.
-    emailVerified Boolean  @default(true) @map("email_verified")
-    role         UserRole  @default(USER)
-    state        UserState @default(ACTIVE)
-    rewardPoints Int       @default(0) @map("reward_points")
-    createdAt    DateTime  @default(now()) @map("created_at")
-    updatedAt    DateTime  @updatedAt @map("updated_at")
-    deletedAt    DateTime? @map("deleted_at") // soft delete — set when Clerk sends user.deleted
+  id                String     @id @db.Uuid
+  /// Human-readable record id (`usr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  clerkId           String     @unique
+  email             String     @unique
+  phone             String?
+  handle            String?    @unique
+  fullName          String?
+  bio               String?
+  avatarUrl         String?
+  role              UserRole
+  profileVisibility Visibility
+  /// Coarse location shown on the public profile — never a precise address.
+  generalLocation   String?
+  preferredMarketId String?    @db.Uuid
+  preferredMarket   Market?    @relation(fields: [preferredMarketId], references: [id])
+  isActive          Boolean
+  deactivatedAt     DateTime?
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
 
-    products         Product[]
-    productHistory   ProductHistory[]
-    claims           ProductClaim[]
-    buyerCollections BuyerCollection[]
-    // Ledger rows where this user is the outgoing / incoming owner (transfers).
-    ledgerFrom       BlockchainLedger[] @relation("LedgerFromUser")
-    ledgerTo         BlockchainLedger[] @relation("LedgerToUser")
+  // ── Own-module back-relations ──────────────────────────────────────────────
+  addresss Address[]
 
-    @@index([state])
-    @@map("users")
+  // ── Cross-module back-relations (see docs/database-architecture.md §6) ─────
+  artists                  Artist?
+  skus                     Sku[]
+  skuClaims                SkuClaim[]
+  buyerCollections         BuyerCollection[]
+  skuHistories             SkuHistory[]
+  roleAssignment_user      RoleAssignment[]        @relation("User_user")
+  roleAssignment_grantedBy RoleAssignment[]        @relation("User_grantedBy")
+  releaseApproval_approver ReleaseApproval[]       @relation("User_approver")
+  releaseApproval_checkedBy ReleaseApproval[]      @relation("User_checkedBy")
+  releaseApproval_reopenedBy ReleaseApproval[]     @relation("User_reopenedBy")
+  mediaAssets              MediaAsset[]
+  contentUnlocks           ContentUnlock[]
+  orders                   Order[]
+  refundRequest_requestedBy RefundRequest[]        @relation("User_requestedBy")
+  refundRequest_approvedBy  RefundRequest[]        @relation("User_approvedBy")
+  notifications            Notification[]
+  notificationPreferences  NotificationPreference[]
+  wishlistItems            WishlistItem[]
+  follows                  Follow[]
+  resaleListings           ResaleListing[]
+  supportCase_reporter     SupportCase[]           @relation("User_reporter")
+  supportCase_resolvedBy   SupportCase[]           @relation("User_resolvedBy")
+  supplyBatchs             SupplyBatch[]
+  invoice_buyer            Invoice[]               @relation("InvoiceBuyer")
+  invoice_createdBy        Invoice[]               @relation("InvoiceCreatedBy")
+  taxConfiguration_createdBy TaxConfiguration[]    @relation("TaxConfigurationCreatedBy")
+  taxReturnFiling_createdBy  TaxReturnFiling[]     @relation("TaxFilingCreatedBy")
+  taxReturnFiling_filedBy    TaxReturnFiling[]     @relation("TaxFilingFiledBy")
+  artistTaxDocument_createdBy  ArtistTaxDocument[] @relation("ArtistTaxDocumentCreatedBy")
+  artistTaxDocument_verifiedBy ArtistTaxDocument[] @relation("ArtistTaxDocumentVerifiedBy")
+  taxAdjustment_createdBy  TaxAdjustmentEntry[]    @relation("TaxAdjustmentCreatedBy")
+  taxAdjustment_approvedBy TaxAdjustmentEntry[]    @relation("TaxAdjustmentApprovedBy")
+  staffInvitation_invitedBy    StaffInvitation[]   @relation("StaffInvitation_invitedBy")
+  staffInvitation_acceptedUser StaffInvitation[]   @relation("StaffInvitation_acceptedUser")
+  staffInvitation_revokedBy    StaffInvitation[]   @relation("StaffInvitation_revokedBy")
+}
+
+/// A user's reusable address book entry. Orders never point at this row for
+/// their shipping/billing detail — they snapshot it into OrderAddress, so
+/// editing or archiving an address never rewrites order history.
+model Address {
+  id                String    @id @db.Uuid
+  /// Human-readable record id (`adr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
+  userId            String    @db.Uuid
+  user              User      @relation(fields: [userId], references: [id])
+  label             AddressLabel
+  labelCustom       String?
+  recipientName     String
+  line1             String
+  line2             String?
+  city              String
+  state             String?
+  postalCode        String
+  countryCode       String
+  phone             String?
+  isDefaultShipping Boolean
+  isDefaultBilling  Boolean
+  isActive          Boolean
+  archivedAt        DateTime?
+  createdAt         DateTime
+  updatedAt         DateTime
+
+  orderAddresss OrderAddress[]
+}
+
+/// Account role on the platform. Single-module enum — only User.role uses it.
+/// Staff/brand/artist privileges are NOT modelled here: they are grants in the
+/// access-control module (RoleAssignment), so a user can hold several scoped
+/// roles at once.
+enum UserRole {
+  USER
 }
 

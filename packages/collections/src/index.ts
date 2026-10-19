@@ -20,11 +20,14 @@ export type {
     UpdateVisibilityDto,
 } from './dto/collection.dto';
 
-// Port implemented by the artist module (consumer defines, provider implements)
+// Ports this module consumes (consumer defines, provider implements,
+// bootstrap connects). artist supplies collection capacity; media supplies
+// the URL for a product image's storage key.
 export type {
     ArtistCollectionCapacity,
     IArtistCollectionStats,
 } from './domain/interfaces/artist-collection-stats.interface';
+export type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
 
 // Service type (for other modules that receive it via DI)
 export type { CollectionService } from './service/collection.service';

@@ -11,6 +11,86 @@ export interface ApiRouters {
     claims: Router;
     verify: Router;
     ledger: Router;
+    /** The caller's own effective permissions — GET /authz/me. */
+    authz: Router;
+    /**
+     * Generic authorization administration: roles, the permission catalog and
+     * user-role assignments. ONE namespace for all of it — there is
+     * deliberately no /content-manager, /order-manager or /finance-admin
+     * route group, because roles are not API namespaces.
+     */
+    adminAuthz: Router;
+    /**
+     * The admin dashboard — ONE permission-driven reporting API. There is no
+     * per-role namespace here either: an Order Manager and a Finance Admin
+     * call the same routes and get different sections back.
+     */
+    adminDashboard: Router;
+    /** Media registry: presigned upload, list, signed serve, soft archive. */
+    adminMedia: Router;
+    /** Market/currency regions. Reads are wide, writes are platform-wide only. */
+    adminMarkets: Router;
+    /** Order list, full detail with SKU units, and status transitions. */
+    adminOrders: Router;
+    /** Release approval queue: review, decide, compliance sign-off. */
+    adminReleases: Router;
+    /** Catalog administration: product detail with performance + SKU units, CRUD. */
+    adminProducts: Router;
+    /** Artist self-service — docs/artist/artist-profile-api.md. */
+    artistSelf: Router;
+    /** Drop types & variant rules — docs/admin/drop-types-and-variants.md. */
+    adminDropTypes: Router;
+    /** Serialized units of one drop: mint, list, summary. */
+    adminProductSkus: Router;
+    /** Serialized units across drops: cross-drop list and single-unit detail. */
+    adminSkus: Router;
+    /**
+     * Owner directories for the drop form's brand and artist pickers, and for
+     * labelling catalog rows. Read-only; both are gated on `drop:read` rather
+     * than `brand-artist-record:read` so a Drop Manager can fill the form.
+     */
+    adminOrganizations: Router;
+    adminArtists: Router;
+    /**
+     * The physical supply chain: vendors, consignments, the NFC chip inventory
+     * and the supply/inventory metrics rollup. ONE namespace — a Drop Manager
+     * reading consignment headers and a System Admin registering a chip
+     * manifest call the same routes and are narrowed by their grants.
+     */
+    adminSupply: Router;
+    /**
+     * Buyer-facing money routes: POST /checkout and POST /refunds. Owned by
+     * the payments module, because a purchase starts with a payment and the
+     * dependency between payments and orders runs one way.
+     */
+    payments: Router;
+    /**
+     * Operator-facing payments: transactions, the refund workflow, disputes,
+     * gateway configuration and the webhook replay queue.
+     */
+    adminPayments: Router;
+    /**
+     * Finance: royalty rules, the royalty ledger, balances, payout batches,
+     * adjustments and the platform's own revenue ledger. ONE namespace —
+     * there is no /artist-royalties or /finance-admin route group, because a
+     * royalty read narrows by the caller's grant, not by the path they call.
+     */
+    adminFinance: Router;
+    /**
+     * A buyer's own invoices: list, detail, and a short-lived download link
+     * for the PDF. Gated on `order:read` rather than the money capability,
+     * because an invoice is a fact about the caller's own order and buyers
+     * hold no payment-royalty grant at all.
+     */
+    tax: Router;
+    /**
+     * Tax administration: rates and HSN/SAC codes, invoice issue/void,
+     * artist tax documents (W-9, PAN, GSTIN), return filings and the report
+     * data behind GSTR-1, state sales tax, Form 16A and 1099-NEC. ONE
+     * namespace — an artist reading their own 1099 figures and an operator
+     * reading everyone's call the same route and are narrowed by their grant.
+     */
+    adminTax: Router;
 }
 
 /** Mounts every module router under the versioned API prefix (see app.ts). */
@@ -30,6 +110,34 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/claims', routers.claims);
     api.use('/verify', routers.verify);
     api.use('/ledger', routers.ledger);
+    api.use('/authz', routers.authz);
+    // Buyer money routes sit beside /orders rather than under /admin: these
+    // are the two things a buyer does with their own wallet.
+    api.use('/', routers.payments);
+    // The buyer's receipts sit beside their orders and their wallet, for the
+    // same reason: these are things a buyer does with their own purchases.
+    api.use('/', routers.tax);
+    api.use('/admin/authz', routers.adminAuthz);
+    api.use('/admin/dashboard', routers.adminDashboard);
+    api.use('/admin/media', routers.adminMedia);
+    api.use('/admin/markets', routers.adminMarkets);
+    api.use('/admin/orders', routers.adminOrders);
+    api.use('/admin/payments', routers.adminPayments);
+    api.use('/admin/finance', routers.adminFinance);
+    api.use('/admin/tax', routers.adminTax);
+    api.use('/admin/releases', routers.adminReleases);
+    // Mounted BEFORE /admin/products so the nested path wins outright. Express
+    // would fall through to it either way (the catalog router has no route
+    // matching two extra segments), but relying on a miss for correct routing
+    // is one refactor away from breaking silently.
+    api.use('/admin/products/:productId/skus', routers.adminProductSkus);
+    api.use('/admin/products', routers.adminProducts);
+    api.use('/artist', routers.artistSelf);
+    api.use('/admin/drop-types', routers.adminDropTypes);
+    api.use('/admin/skus', routers.adminSkus);
+    api.use('/admin/organizations', routers.adminOrganizations);
+    api.use('/admin/artists', routers.adminArtists);
+    api.use('/admin/supply', routers.adminSupply);
 
     return api;
 }

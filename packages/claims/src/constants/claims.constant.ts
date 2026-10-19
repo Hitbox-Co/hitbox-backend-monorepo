@@ -18,6 +18,12 @@ export const CLAIM_OUTCOME = {
 export const CLAIMS_EVENTS = {
     /** Published after a product is claimed for the first time. */
     PRODUCT_CLAIMED: 'claims.product.claimed',
+    /**
+     * Published after ownership is taken back — a refund or a lost dispute.
+     * Subscribers that mirror ownership (collections, search, notifications)
+     * need to hear this as much as they need to hear the claim.
+     */
+    CLAIM_REVOKED: 'claims.claim.revoked',
 } as const;
 
 /** claimCode format: "HBPC" + 6 digits = 10 chars (fits VarChar(10)). */

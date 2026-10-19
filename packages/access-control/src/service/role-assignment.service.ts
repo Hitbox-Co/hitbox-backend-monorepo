@@ -1,0 +1,314 @@
+import { RoleScopeType } from '@hitbox/database';
+import type { AuthorizationDomain } from '@hitbox/database';
+import { AppError } from '@hitbox/shared';
+import type { IEventBus } from '@hitbox/shared';
+import type { Logger } from 'pino';
+import {
+    ACCESS_CONTROL_ERROR_CODES,
+    ACCESS_CONTROL_EVENTS,
+} from '../constants/access-control.constant';
+import { assertCanGrantRole } from '../domain/grantable-roles';
+import type { IGrantsInvalidator } from '../domain/interfaces/grants-invalidator.interface';
+import type { AssignRoleDto, ListTeamQuery } from '../dto/access-control.dto';
+import type { RoleRepository } from '../repository/role.repository';
+import type {
+    AssignmentWithRole,
+    RoleAssignmentRepository,
+} from '../repository/role-assignment.repository';
+
+export interface AssignmentResponse {
+    id: string;
+    userId: string;
+    roleId: string;
+    roleName: string;
+    roleDisplayName: string;
+    domain: AuthorizationDomain;
+    scopeType: RoleScopeType;
+    organizationId: string | null;
+    grantedById: string;
+    grantedAt: Date;
+    revokedAt: Date | null;
+}
+
+/** One person on the Team screen. */
+export interface TeamMemberResponse {
+    userId: string;
+    fullName: string | null;
+    handle: string | null;
+    email: string;
+    avatarUrl: string | null;
+    isActive: boolean;
+    joinedAt: string;
+    roles: {
+        assignmentId: string;
+        roleId: string;
+        name: string;
+        displayName: string | null;
+        domain: string;
+        entityGroup: string;
+        isSystem: boolean;
+        scopeType: RoleScopeType;
+        organizationId: string | null;
+        grantedAt: string;
+    }[];
+}
+
+export interface RoleAssignmentServiceDeps {
+    assignments: RoleAssignmentRepository;
+    roles: RoleRepository;
+    eventBus: IEventBus;
+    /** Evicts the user's cached grants. Awaited, never fire-and-forget. */
+    cache: IGrantsInvalidator;
+    logger: Logger;
+}
+
+/**
+ * Grants and revokes roles. A user may hold any number of assignments (§8) —
+ * ARTIST plus BRAND_EMPLOYEE at brand A plus HITBOX_FULL_STACK_ENGINEER is a
+ * normal state, and their effective permissions are the union. Nothing here
+ * merges roles or creates combined ones.
+ */
+export class RoleAssignmentService {
+    constructor(private readonly deps: RoleAssignmentServiceDeps) { }
+
+    async listForUser(userId: string, includeRevoked = false): Promise<AssignmentResponse[]> {
+        const rows = await this.deps.assignments.findByUserId(userId, includeRevoked);
+        return rows.map(toResponse);
+    }
+
+    /**
+     * The Team screen: one row per person, with the roles they hold now.
+     *
+     * `organizationIds` is the caller's own reach, resolved from their grants
+     * by the controller — never from the request — so an org-scoped
+     * administrator lists their own people and nothing else.
+     */
+    async listTeam(input: {
+        query: ListTeamQuery;
+        organizationIds: string[] | null;
+    }): Promise<{
+        page: number;
+        limit: number;
+        total: number;
+        items: TeamMemberResponse[];
+    }> {
+        const { page, limit, search } = input.query;
+        const { total, items } = await this.deps.assignments.findTeam({
+            ...(search !== undefined ? { search } : {}),
+            internalOnly: input.query.internalOnly,
+            organizationIds: input.organizationIds,
+            skip: (page - 1) * limit,
+            take: limit,
+        });
+
+        return {
+            page,
+            limit,
+            total,
+            items: items.map((user) => ({
+                userId: user.id,
+                fullName: user.fullName,
+                handle: user.handle,
+                email: user.email,
+                avatarUrl: user.avatarUrl,
+                isActive: user.isActive,
+                joinedAt: user.createdAt.toISOString(),
+                roles: user.roleAssignment_user.map((assignment) => ({
+                    assignmentId: assignment.id,
+                    roleId: assignment.role.id,
+                    name: assignment.role.name,
+                    displayName: assignment.role.displayName,
+                    domain: assignment.role.domain,
+                    entityGroup: assignment.role.entityGroup,
+                    isSystem: assignment.role.isSystem,
+                    scopeType: assignment.scopeType,
+                    organizationId: assignment.scopeId,
+                    grantedAt: assignment.grantedAt.toISOString(),
+                })),
+            })),
+        };
+    }
+
+    async assign(input: {
+        userId: string;
+        dto: AssignRoleDto;
+        /** The administrator performing the grant, from req.auth. */
+        grantedById: string;
+        /**
+         * The granter's own effective permission keys, for the no-escalation
+         * check. Supplied by the controller on every operator-initiated grant.
+         *
+         * Omitted only by callers that have already made the check at the point
+         * the decision was taken — today that is the staff-invitation claim,
+         * which verified the inviter's authority when the invitation was
+         * created. Re-checking there would instead test whoever the inviter has
+         * since become, and would fail a legitimate claim because the inviter
+         * changed jobs in the meantime.
+         */
+        granterPermissions?: string[] | undefined;
+    }): Promise<AssignmentResponse> {
+        const role = await this.deps.roles.findById(input.dto.roleId);
+        if (!role) {
+            throw AppError.notFound('Role not found', ACCESS_CONTROL_ERROR_CODES.ROLE_NOT_FOUND);
+        }
+        if (!role.isActive) {
+            throw AppError.badRequest(
+                `${role.name} is deactivated and cannot be assigned`,
+                ACCESS_CONTROL_ERROR_CODES.ROLE_NOT_FOUND,
+            );
+        }
+
+        // No privilege escalation: you cannot grant a permission you do not
+        // hold. The route guard proves the caller may assign roles *somewhere*;
+        // it cannot see which permissions the role being assigned carries, and
+        // that is the difference between "can manage their own team" and "can
+        // mint themselves a platform administrator".
+        if (input.granterPermissions) {
+            assertCanGrantRole({
+                granterPermissions: input.granterPermissions,
+                roleName: role.name,
+                rolePermissions: role.rolePermissions.map((rp) => rp.permission.key),
+            });
+        }
+
+        // Fall back to the role's natural scope so a caller does not have to
+        // know that BRAND_ADMIN is org-scoped and HITBOX_SUPPORT is not.
+        const scopeType = input.dto.scopeType ?? defaultScopeFor(role.entityGroup);
+        const scopeId = scopeType === RoleScopeType.ORGANIZATION ? (input.dto.organizationId ?? null) : null;
+
+        if (scopeType === RoleScopeType.ORGANIZATION && !scopeId) {
+            throw AppError.badRequest(
+                `${role.name} is organization-scoped; an organizationId is required`,
+                ACCESS_CONTROL_ERROR_CODES.MISSING_ORG_SCOPE,
+            );
+        }
+
+        const existing = await this.deps.assignments.findLive({
+            userId: input.userId,
+            roleId: role.id,
+            scopeType,
+            scopeId,
+        });
+        if (existing) {
+            throw AppError.conflict(
+                `User already holds ${role.name} at this scope`,
+                ACCESS_CONTROL_ERROR_CODES.ASSIGNMENT_EXISTS,
+                { assignmentId: existing.id },
+            );
+        }
+
+        const assignment = await this.deps.assignments.create({
+            userId: input.userId,
+            roleId: role.id,
+            scopeType,
+            scopeId,
+            grantedById: input.grantedById,
+        });
+
+        // Before the response, not on the event bus: a caller who just
+        // granted a role must see it take effect on their next request.
+        await this.deps.cache.invalidateUser(input.userId);
+
+        this.deps.logger.info(
+            {
+                assignmentId: assignment.id,
+                userId: input.userId,
+                role: role.name,
+                domain: role.domain,
+                scopeType,
+                organizationId: scopeId,
+                grantedById: input.grantedById,
+            },
+            'role assigned',
+        );
+        await this.deps.eventBus.publish(ACCESS_CONTROL_EVENTS.ROLE_ASSIGNED, {
+            assignmentId: assignment.id,
+            userId: input.userId,
+            roleId: role.id,
+            roleName: role.name,
+            domain: role.domain,
+            scopeType,
+            organizationId: scopeId,
+            grantedById: input.grantedById,
+        });
+        return toResponse(assignment);
+    }
+
+    /**
+     * Revokes by (user, role, optional organization) rather than assignment
+     * id, so the admin panel can revoke straight from the role list.
+     */
+    async revoke(input: {
+        userId: string;
+        roleId: string;
+        organizationId?: string | undefined;
+        revokedById: string;
+    }): Promise<AssignmentResponse> {
+        const live = await this.deps.assignments.findByUserId(input.userId);
+        const match = live.find(
+            (row) =>
+                row.roleId === input.roleId &&
+                (input.organizationId === undefined ||
+                    row.scopeId === input.organizationId),
+        );
+        if (!match) {
+            throw AppError.notFound(
+                'No active assignment of that role for this user',
+                ACCESS_CONTROL_ERROR_CODES.ASSIGNMENT_NOT_FOUND,
+            );
+        }
+
+        const revoked = await this.deps.assignments.revoke(match.id);
+
+        // The security-critical direction. Awaiting this before responding is
+        // what makes a revoke effective by the time the caller sees 204,
+        // rather than up to one L1 TTL later.
+        await this.deps.cache.invalidateUser(input.userId);
+
+        this.deps.logger.info(
+            {
+                assignmentId: match.id,
+                userId: input.userId,
+                role: match.role.name,
+                revokedById: input.revokedById,
+            },
+            'role revoked',
+        );
+        await this.deps.eventBus.publish(ACCESS_CONTROL_EVENTS.ROLE_REVOKED, {
+            assignmentId: match.id,
+            userId: input.userId,
+            roleId: match.roleId,
+            roleName: match.role.name,
+            revokedById: input.revokedById,
+        });
+        return toResponse(revoked);
+    }
+}
+
+/** A role's natural assignment breadth, from its persona family. */
+function defaultScopeFor(entityGroup: string): RoleScopeType {
+    switch (entityGroup) {
+        case 'brand_artist':
+            return RoleScopeType.ORGANIZATION;
+        case 'end_user':
+            return RoleScopeType.OWN;
+        default:
+            return RoleScopeType.GLOBAL;
+    }
+}
+
+function toResponse(assignment: AssignmentWithRole): AssignmentResponse {
+    return {
+        id: assignment.id,
+        userId: assignment.userId,
+        roleId: assignment.roleId,
+        roleName: assignment.role.name,
+        roleDisplayName: assignment.role.displayName,
+        domain: assignment.role.domain,
+        scopeType: assignment.scopeType,
+        organizationId: assignment.scopeId,
+        grantedById: assignment.grantedById,
+        grantedAt: assignment.grantedAt,
+        revokedAt: assignment.revokedAt,
+    };
+}

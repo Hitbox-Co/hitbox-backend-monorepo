@@ -26,8 +26,15 @@ export type {
 
 // Event payload contracts (for subscribers in other modules)
 export type {
+    ClaimRevokedPayload,
     ProductClaimedPayload,
 } from './events/claims-event.payloads';
 
+// Port: bootstrap injects an adapter that turns a MediaAsset storageRef into
+// a renderable URL. This module owns no object-storage knowledge itself.
+export type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
+
 // Service type (for other modules that receive it via DI)
 export type { ClaimsService } from './service/claims.service';
+export { MintLedgerWriter } from './repository/mint-ledger.writer';
+export type { MintLedgerUnit } from './repository/mint-ledger.writer';

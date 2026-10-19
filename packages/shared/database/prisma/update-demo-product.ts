@@ -4,7 +4,7 @@ const prisma = new PrismaClient();
 const TAG = '534A70C1610001';
 
 async function main() {
-    const updated = await prisma.product.update({
+    const updated = await prisma.drop.update({
         where: { tagId: TAG },
         data: {
             name: 'Subratadaschip',

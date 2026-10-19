@@ -1,0 +1,184 @@
+import { AuthorizationDomain, RoleScopeType } from '@hitbox/database';
+import { z } from 'zod';
+import { isCatalogPermission } from '../domain/permission-catalog';
+
+/**
+ * Role names are machine identifiers: SCREAMING_SNAKE_CASE, so they read the
+ * same in code, in the database and in an audit line.
+ */
+const roleNameSchema = z
+    .string()
+    .min(3)
+    .max(64)
+    .regex(
+        /^[A-Z][A-Z0-9_]*$/,
+        'Role name must be SCREAMING_SNAKE_CASE (e.g. BRAND_CONTENT_EDITOR)',
+    );
+
+/**
+ * §10 in one line: a permission is only acceptable if the backend catalog
+ * already contains it. An administrator selects from the catalog; they cannot
+ * invent `delete-everything`.
+ */
+const permissionKeySchema = z.string().refine(isCatalogPermission, {
+    message: 'Unknown permission. Choose from GET /admin/authz/permissions.',
+});
+
+const permissionKeysSchema = z
+    .array(permissionKeySchema)
+    .min(1, 'A role must grant at least one permission')
+    .max(200)
+    .refine((keys) => new Set(keys).size === keys.length, {
+        message: 'Duplicate permissions in the list',
+    });
+
+export const createRoleSchema = z.object({
+    name: roleNameSchema,
+    displayName: z.string().min(1).max(120),
+    entityGroup: z.enum(['end_user', 'brand_artist', 'hitbox_seller_org']),
+    domain: z.nativeEnum(AuthorizationDomain),
+    permissions: permissionKeysSchema,
+});
+export type CreateRoleDto = z.infer<typeof createRoleSchema>;
+
+/**
+ * `domain` is absent by design — a role's domain is immutable. Flipping a
+ * BUSINESS role to TECHNICAL would silently re-authorise everyone already
+ * holding it. Retire the role and create a new one instead.
+ */
+export const updateRoleSchema = z
+    .object({
+        displayName: z.string().min(1).max(120).optional(),
+        entityGroup: z.enum(['end_user', 'brand_artist', 'hitbox_seller_org']).optional(),
+        isActive: z.boolean().optional(),
+        permissions: permissionKeysSchema.optional(),
+    })
+    .refine((patch) => Object.keys(patch).length > 0, {
+        message: 'Provide at least one field to update',
+    });
+export type UpdateRoleDto = z.infer<typeof updateRoleSchema>;
+
+export const listRolesQuerySchema = z.object({
+    domain: z.nativeEnum(AuthorizationDomain).optional(),
+});
+export type ListRolesQuery = z.infer<typeof listRolesQuerySchema>;
+
+/**
+ * The Team screen: everyone holding at least one live role.
+ *
+ * `search` matches full name, email or handle, case-insensitively — the three
+ * things an administrator actually types when looking for a colleague.
+ */
+export const listTeamQuerySchema = z.object({
+    search: z.string().trim().min(1).max(100).optional(),
+    /**
+     * Defaults to HitBox internal staff only — the people who operate the
+     * platform. Set `false` to include brand and artist role-holders too.
+     */
+    internalOnly: z.coerce.boolean().default(true),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type ListTeamQuery = z.infer<typeof listTeamQuerySchema>;
+
+export const listPermissionsQuerySchema = z.object({
+    domain: z.nativeEnum(AuthorizationDomain).optional(),
+    /** `grouped` returns the §12 resource-grouped shape for the admin UI. */
+    shape: z.enum(['flat', 'grouped']).default('grouped'),
+});
+export type ListPermissionsQuery = z.infer<typeof listPermissionsQuerySchema>;
+
+/**
+ * Assigning a role. `organizationId` is required for ORG scope and forbidden
+ * otherwise — enforced here rather than in the service so a malformed grant
+ * never reaches the database.
+ */
+export const assignRoleSchema = z
+    .object({
+        roleId: z.string().uuid(),
+        scopeType: z.nativeEnum(RoleScopeType).optional(),
+        organizationId: z.string().uuid().nullish(),
+    })
+    .superRefine((dto, ctx) => {
+        if (dto.scopeType === RoleScopeType.ORGANIZATION && !dto.organizationId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['organizationId'],
+                message: 'organizationId is required for an ORG-scoped assignment',
+            });
+        }
+        if (dto.scopeType && dto.scopeType !== RoleScopeType.ORGANIZATION && dto.organizationId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['organizationId'],
+                message: `organizationId is only valid for ORG scope, not ${dto.scopeType}`,
+            });
+        }
+    });
+export type AssignRoleDto = z.infer<typeof assignRoleSchema>;
+
+export const revokeRoleQuerySchema = z.object({
+    organizationId: z.string().uuid().optional(),
+});
+export type RevokeRoleQuery = z.infer<typeof revokeRoleQuerySchema>;
+
+// ── Staff invitations ───────────────────────────────────────────────────────
+
+/**
+ * Invite an email address to hold a role.
+ *
+ * Only an address and a role. Deliberately no name, no password, no profile:
+ * the person supplies all of that themselves when they accept, and HitBox never
+ * handles a credential. See docs/authorization/admin-provisioning.md.
+ */
+export const inviteStaffSchema = z
+    .object({
+        email: z.string().email().max(320),
+        roleId: z.string().uuid(),
+        scopeType: z.nativeEnum(RoleScopeType).optional(),
+        organizationId: z.string().uuid().nullish(),
+        /**
+         * The artist's public name, used when the invited role makes them one.
+         *
+         * Optional, and ignored for every other role. Without it the profile
+         * falls back to the email's local part — `jane.doe@label.com` becomes
+         * "Jane Doe" — which is a guess, and a guess that ends up printed on a
+         * product page. Supply it whenever the inviter knows it.
+         */
+        artistName: z.string().trim().min(1).max(120).optional(),
+        /** Free-form genre for the artist profile. Ignored for other roles. */
+        artistGenre: z.string().trim().min(1).max(64).optional(),
+    })
+    .superRefine((dto, ctx) => {
+        if (dto.scopeType === RoleScopeType.ORGANIZATION && !dto.organizationId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['organizationId'],
+                message: 'organizationId is required for an ORG-scoped invitation',
+            });
+        }
+        if (dto.scopeType && dto.scopeType !== RoleScopeType.ORGANIZATION && dto.organizationId) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['organizationId'],
+                message: `organizationId is only valid for ORG scope, not ${dto.scopeType}`,
+            });
+        }
+    });
+export type InviteStaffDto = z.infer<typeof inviteStaffSchema>;
+
+export const listInvitationsQuerySchema = z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(100).default(20),
+    status: z
+        .enum(['PENDING', 'SENT', 'ACCEPTED', 'REVOKED', 'EXPIRED', 'FAILED'])
+        .optional(),
+    email: z.string().email().max(320).optional(),
+    roleId: z.string().uuid().optional(),
+});
+export type ListInvitationsQuery = z.infer<typeof listInvitationsQuerySchema>;
+
+export const revokeInvitationSchema = z.object({
+    reason: z.string().min(1).max(500),
+});
+export type RevokeInvitationDto = z.infer<typeof revokeInvitationSchema>;

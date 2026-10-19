@@ -1,11 +1,17 @@
 import type { DiscoverSection } from '../enums/discover-section.enum';
 
-/** The lightweight card the Discover screen renders — image + title only. */
+/**
+ * The lightweight card the Discover screen renders — image + title only.
+ *
+ * `rewardPoints` was removed when the catalog schema was restructured:
+ * `Product.rewardPoints` no longer exists and nothing replaced it. Dropped
+ * rather than stubbed with `0`, so the card advertises only fields the
+ * database can actually answer for.
+ */
 export interface DiscoverProductItem {
     id: string;
     name: string;
     imageUrl: string | null;
-    rewardPoints: number;
 }
 
 export interface DiscoverProductsQuery {

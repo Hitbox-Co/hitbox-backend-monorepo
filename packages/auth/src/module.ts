@@ -5,6 +5,7 @@ import { createModuleLogger, env } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import { AUTH_MODULE, CLERK_WEBHOOK_PATH } from './constants/auth.constant';
 import { AuthController } from './controller/auth.controller';
+import { ClerkInvitationsAdapter } from './domain/clerk-invitations.adapter';
 import type { IAccountLookup } from './domain/interfaces/account-lookup.interface';
 import { createRequireAuth } from './middleware/require-auth.middleware';
 import { WebhookEventRepository } from './repository/webhook-event.repository';
@@ -22,6 +23,12 @@ export interface AuthModule {
     router: Router;
     /** Mountable on any route in any module that needs an authenticated user. */
     requireAuth: RequestHandler;
+    /**
+     * Access-control's `IIdentityInvitations` port: email someone a sign-up
+     * link so a system admin can provision a colleague who has no account yet.
+     * Auth owns Clerk, so auth owns this adapter.
+     */
+    invitations: ClerkInvitationsAdapter;
 }
 
 export function createAuthModule(deps: AuthModuleDeps): AuthModule {
@@ -57,5 +64,12 @@ export function createAuthModule(deps: AuthModuleDeps): AuthModule {
     router.post('/registration/validate', controller.validateRegistration);
     router.get('/me', requireAuth, controller.me);
 
-    return { router, requireAuth };
+    return {
+        router,
+        requireAuth,
+        invitations: new ClerkInvitationsAdapter({
+            secretKey: clerkSecretKey,
+            redirectUrl: env.ADMIN_INVITATION_REDIRECT_URL,
+        }),
+    };
 }
