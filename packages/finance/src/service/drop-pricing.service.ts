@@ -12,12 +12,14 @@ import {
 } from '../constants/finance.constant';
 import type { FinanceAccess } from '../domain/finance-access';
 import { requireConfigureDropPricing } from '../domain/finance-access';
+import type { PublicCodeResolver } from '../domain/public-codes';
 import type { IFinanceAuditRecorder } from '../domain/interfaces/audit-recorder.port';
 import type { CreateDropPricingDto, DropPricingView } from '../dto/cogs-royalty-payout.dto';
 import type { DropPricingRepository } from '../repository/drop-pricing.repository';
 
 export interface DropPricingServiceDeps {
     prisma: PrismaClient;
+    codes: PublicCodeResolver;
     pricing: DropPricingRepository;
     eventBus: IEventBus;
     audit: IFinanceAuditRecorder;
@@ -48,7 +50,10 @@ export class DropPricingService {
     async list(dropId: string): Promise<DropPricingView[]> {
         await this.requireDrop(dropId);
         const now = new Date();
-        return (await this.deps.pricing.list(dropId)).map((row) => this.toView(row, now));
+        const dropPublicCode = await this.dropCode(dropId);
+        return (await this.deps.pricing.list(dropId)).map((row) =>
+            this.toView(row, now, dropPublicCode),
+        );
     }
 
     async getActive(dropId: string): Promise<DropPricingView> {
@@ -61,7 +66,7 @@ export class DropPricingService {
                 FINANCE_ERROR_CODES.NOT_FOUND,
             );
         }
-        return this.toView(active, now);
+        return this.toView(active, now, await this.dropCode(dropId));
     }
 
     async create(
@@ -205,7 +210,7 @@ export class DropPricingService {
             pricingId: created.id,
             version: created.version,
         });
-        return this.toView(created, now);
+        return this.toView(created, now, await this.dropCode(dropId));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -219,11 +224,16 @@ export class DropPricingService {
         }
     }
 
-    private toView(row: DropPricing, now: Date): DropPricingView {
+    private async dropCode(dropId: string): Promise<string | null> {
+        return (await this.deps.codes.resolve({ drop: [dropId] })).get('drop', dropId);
+    }
+
+    private toView(row: DropPricing, now: Date, dropPublicCode: string | null): DropPricingView {
         return {
             id: row.id,
             publicCode: row.publicCode,
             dropId: row.dropId,
+            dropPublicCode,
             version: row.version,
             costOfGoods: row.costOfGoods.toFixed(2),
             costOfGoodsInr: row.costOfGoodsInr.toFixed(2),

@@ -50,6 +50,7 @@ export interface DropPricingView {
     id: string;
     publicCode: string | null;
     dropId: string;
+    dropPublicCode: string | null;
     version: number;
     costOfGoods: string;
     costOfGoodsInr: string;
@@ -83,6 +84,7 @@ export type SetArtistRoyaltyRateDto = z.infer<typeof setArtistRoyaltyRateSchema>
 export interface ArtistRoyaltyRateView {
     ruleId: string;
     artistId: string;
+    artistPublicCode: string | null;
     basis: string;
     percentage: string | null;
     effectiveFrom: string;

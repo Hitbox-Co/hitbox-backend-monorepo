@@ -1,5 +1,6 @@
 import { Prisma } from '@hitbox/database';
 import type { FinanceLedgerEntry, PrismaClient } from '@hitbox/database';
+import { MVP_CURRENCIES } from '../constants/finance.constant';
 import type {
     ListAdjustmentsQuery,
     ListFinanceEntriesQuery,
@@ -50,7 +51,7 @@ export class FinanceLedgerRepository {
             ...(query.orderId ? { orderId: query.orderId } : {}),
             ...(query.category ? { category: query.category } : {}),
             ...(query.direction ? { direction: query.direction } : {}),
-            ...(query.currency ? { currency: query.currency } : {}),
+            currency: query.currency ?? { in: [...MVP_CURRENCIES] },
             ...(query.from || query.to
                 ? {
                     createdAt: {
@@ -95,6 +96,7 @@ export class FinanceLedgerRepository {
             ...(query.targetId ? { targetId: query.targetId } : {}),
             ...(query.orderId ? { orderId: query.orderId } : {}),
             ...(query.reasonCode ? { reasonCode: query.reasonCode } : {}),
+            currency: { in: [...MVP_CURRENCIES] },
             ...(query.from || query.to
                 ? {
                     createdAt: {
@@ -140,7 +142,7 @@ export class FinanceLedgerRepository {
     ) {
         const where: Prisma.FinanceLedgerEntryWhereInput = {
             ...query.scopeFilter,
-            ...(query.currency ? { currency: query.currency } : {}),
+            currency: query.currency ?? { in: [...MVP_CURRENCIES] },
             ...(query.from || query.to
                 ? {
                     createdAt: {

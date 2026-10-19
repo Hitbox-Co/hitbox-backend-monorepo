@@ -21,6 +21,7 @@ import type { IOrderRevenueSource } from './domain/interfaces/order-revenue.inte
 import { PayoutReportingAdapter } from './domain/payout-reporting.adapter';
 import { FinanceLedgerRepository } from './repository/finance-ledger.repository';
 import { PayoutRepository } from './repository/payout.repository';
+import { PublicCodeResolver } from './domain/public-codes';
 import { DropPricingRepository } from './repository/drop-pricing.repository';
 import { RoyaltyLedgerRepository } from './repository/royalty-ledger.repository';
 import { RoyaltyRuleRepository } from './repository/royalty-rule.repository';
@@ -112,7 +113,8 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
     const payoutRepo = new PayoutRepository(deps.prisma);
     const financeLedgerRepo = new FinanceLedgerRepository(deps.prisma);
 
-    const rules = new RoyaltyRuleService({ rules: ruleRepo, logger });
+    const codes = new PublicCodeResolver(deps.prisma);
+    const rules = new RoyaltyRuleService({ rules: ruleRepo, codes, logger });
     const accrual = new RoyaltyAccrualService({
         prisma: deps.prisma,
         rules: ruleRepo,
@@ -125,6 +127,7 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
     });
     const payouts = new RoyaltyPayoutService({
         prisma: deps.prisma,
+        codes,
         payouts: payoutRepo,
         ledger: ledgerRepo,
         financeLedger: financeLedgerRepo,
@@ -134,6 +137,7 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
         logger,
     });
     const ledger = new FinanceLedgerService({
+        codes,
         financeLedger: financeLedgerRepo,
         ledger: ledgerRepo,
         eventBus: deps.eventBus,
@@ -170,6 +174,7 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
     const cogsRoyaltyPayout = new CogsRoyaltyPayoutController({
         dropPricing: new DropPricingService({
             prisma: deps.prisma,
+            codes,
             pricing: new DropPricingRepository(deps.prisma),
             eventBus: deps.eventBus,
             audit,
@@ -177,6 +182,7 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
         }),
         artistRates: new ArtistRoyaltyRateService({
             prisma: deps.prisma,
+            codes,
             rules: ruleRepo,
             eventBus: deps.eventBus,
             audit,

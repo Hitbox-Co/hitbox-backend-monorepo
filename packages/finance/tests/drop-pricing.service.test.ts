@@ -7,6 +7,7 @@ import {
     ADMIN_PERMISSIONS,
     makeAudit,
     makeBus,
+    makeCodes,
     makePrisma,
     silentLogger,
 } from './cogs-royalty-payout.helpers';
@@ -83,6 +84,7 @@ function setup(opts: { dropExists?: boolean } = {}) {
     const { client } = makePrisma();
     const service = new DropPricingService({
         prisma: client,
+        codes: makeCodes({ 'drop:drop-1': 'drp0001' }),
         pricing: pricing as never,
         eventBus: bus,
         audit,

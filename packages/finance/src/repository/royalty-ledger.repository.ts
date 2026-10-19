@@ -1,9 +1,11 @@
 import { Prisma } from '@hitbox/database';
 import type { PrismaClient, RoyaltyLedgerEntry } from '@hitbox/database';
+import { MVP_CURRENCIES, MVP_PAYEE_TYPE } from '../constants/finance.constant';
 import type { ListRoyaltyEntriesQuery } from '../dto/finance.dto';
 
 const entrySelect = {
     id: true,
+    publicCode: true,
     orderId: true,
     ruleId: true,
     skuId: true,
@@ -103,9 +105,9 @@ export class RoyaltyLedgerRepository {
             ...query.scopeFilter,
             ...(query.status ? { status: query.status } : {}),
             ...(query.entryType ? { entryType: query.entryType } : {}),
-            ...(query.currency ? { currency: query.currency } : {}),
+            currency: query.currency ?? { in: [...MVP_CURRENCIES] },
+            payeeType: MVP_PAYEE_TYPE,
             ...(query.artistId ? { payeeArtistId: query.artistId } : {}),
-            ...(query.organizationId ? { payeeOrganizationId: query.organizationId } : {}),
             ...(query.orderId ? { orderId: query.orderId } : {}),
             ...(query.payoutId ? { payoutId: query.payoutId } : {}),
             ...(query.from || query.to
@@ -144,7 +146,10 @@ export class RoyaltyLedgerRepository {
     ): Promise<PayeeBalanceRow[]> {
         const rows = await this.prisma.royaltyLedgerEntry.groupBy({
             by: ['payeeType', 'payeeArtistId', 'payeeOrganizationId', 'currency', 'status'],
-            where,
+            // MVP scope: USD/INR and artist payees only, whatever else the grant reaches.
+            where: {
+                AND: [where, { currency: { in: [...MVP_CURRENCIES] }, payeeType: MVP_PAYEE_TYPE }],
+            },
             _sum: { amount: true },
             _count: { _all: true },
         });

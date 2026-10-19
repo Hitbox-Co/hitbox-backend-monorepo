@@ -85,7 +85,8 @@ export class PaymentRepository {
             ...(query.orderId ? { orderId: query.orderId } : {}),
             ...(query.status ? { status: query.status } : {}),
             ...(query.gateway ? { gateway: query.gateway } : {}),
-            ...(query.currency ? { currency: query.currency } : {}),
+            // MVP scope is USD and INR; GBP stays in the enum but is not listed.
+            currency: query.currency ?? { in: ['USD', 'INR'] },
             ...(query.needsReview !== undefined ? { needsReview: query.needsReview } : {}),
             ...(query.from || query.to
                 ? {

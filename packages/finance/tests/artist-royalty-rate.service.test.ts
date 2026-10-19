@@ -7,6 +7,7 @@ import {
     ADMIN_PERMISSIONS,
     makeAudit,
     makeBus,
+    makeCodes,
     silentLogger,
 } from './cogs-royalty-payout.helpers';
 
@@ -35,6 +36,7 @@ function setup(opts: { artistExists?: boolean; existing?: Rule[] } = {}) {
         prisma: {
             artist: { count: jest.fn(async () => (opts.artistExists ?? true ? 1 : 0)) },
         } as never,
+        codes: makeCodes({ 'artist:artist-1': 'art0001' }),
         rules: repo as never,
         eventBus: makeBus(),
         audit,

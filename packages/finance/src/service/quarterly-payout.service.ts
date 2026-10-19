@@ -8,6 +8,9 @@ import {
     FINANCE_DECISION_AUDIT_EVENTS,
     FINANCE_ERROR_CODES,
     FINANCE_EVENTS,
+    MVP_CURRENCIES,
+    MVP_PAYEE_TYPE,
+    ORGANIZATION_PAYOUT_SKIP_REASON,
 } from '../constants/finance.constant';
 import type { FinanceAccess } from '../domain/finance-access';
 import { requireManage } from '../domain/finance-access';
@@ -134,6 +137,25 @@ export class QuarterlyPayoutService {
 
         for (const group of groups.values()) {
             const payeeId = group.payeeArtistId ?? group.payeeOrganizationId;
+
+            // MVP scope: artist payees, USD and INR. Anything else is reported,
+            // never batched, and its entries stay ACCRUED untouched.
+            if (group.payeeType !== MVP_PAYEE_TYPE) {
+                result.skipped.push({
+                    payeeId,
+                    currency: group.currency,
+                    reason: ORGANIZATION_PAYOUT_SKIP_REASON,
+                });
+                continue;
+            }
+            if (!(MVP_CURRENCIES as readonly string[]).includes(group.currency)) {
+                result.skipped.push({
+                    payeeId,
+                    currency: group.currency,
+                    reason: `${group.currency} payouts are not in MVP scope`,
+                });
+                continue;
+            }
 
             // A net-zero or negative balance (refund reversals outweighing
             // accruals) has nothing to pay; its entries stay ACCRUED and carry

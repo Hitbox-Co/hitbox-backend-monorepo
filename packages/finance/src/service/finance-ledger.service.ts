@@ -27,6 +27,8 @@ import type {
     RevenueSummaryView,
     RoyaltyEntryView,
 } from '../dto/finance.dto';
+import { ADJUSTMENT_TARGET_MODEL } from '../domain/public-codes';
+import type { PublicCodeResolver } from '../domain/public-codes';
 import type { FinanceLedgerRepository } from '../repository/finance-ledger.repository';
 import type {
     RoyaltyEntryRow,
@@ -34,6 +36,7 @@ import type {
 } from '../repository/royalty-ledger.repository';
 
 export interface FinanceLedgerServiceDeps {
+    codes: PublicCodeResolver;
     financeLedger: FinanceLedgerRepository;
     ledger: RoyaltyLedgerRepository;
     eventBus: IEventBus;
@@ -72,7 +75,7 @@ export class FinanceLedgerService {
             page: query.page,
             limit: query.limit,
             total,
-            items: items.map((row) => this.toEntryView(row)),
+            items: await this.entryViews(items),
         };
     }
 
@@ -86,9 +89,10 @@ export class FinanceLedgerService {
             'ROYALTY_LEDGER_ENTRY',
             id,
         );
+        const [entryView] = await this.entryViews([entry]);
         return {
-            ...this.toEntryView(entry),
-            adjustments: adjustments.map((row) => this.toAdjustmentView(row)),
+            ...(entryView as RoyaltyEntryView),
+            adjustments: await this.adjustmentViews(adjustments),
         };
     }
 
@@ -137,7 +141,7 @@ export class FinanceLedgerService {
             page: query.page,
             limit: query.limit,
             total,
-            items: items.map((row) => this.toAdjustmentView(row)),
+            items: await this.adjustmentViews(items),
         };
     }
 
@@ -217,7 +221,7 @@ export class FinanceLedgerService {
             currency: dto.currency,
         });
 
-        return this.toAdjustmentView(adjustment);
+        return (await this.adjustmentViews([adjustment]))[0] as AdjustmentView;
     }
 
     // ── Platform ledger reads ───────────────────────────────────────────────
@@ -232,13 +236,16 @@ export class FinanceLedgerService {
             skip: (query.page - 1) * query.limit,
             take: query.limit,
         });
+        const codes = await this.deps.codes.resolve({ order: items.map((r) => r.orderId) });
         return {
             page: query.page,
             limit: query.limit,
             total,
             items: items.map((row) => ({
                 id: row.id,
+                publicCode: row.publicCode,
                 orderId: row.orderId,
+                orderPublicCode: codes.get('order', row.orderId),
                 entryType: row.entryType,
                 direction: row.direction,
                 category: row.category,
@@ -500,10 +507,60 @@ export class FinanceLedgerService {
 
     // ── views ───────────────────────────────────────────────────────────────
 
+    /** Entry views with every public code filled in, one query per model per page. */
+    private async entryViews(rows: RoyaltyEntryRow[]): Promise<RoyaltyEntryView[]> {
+        const codes = await this.deps.codes.resolve({
+            order: rows.map((r) => r.orderId),
+            royaltyPayout: rows.map((r) => r.payoutId),
+            royaltyLedgerEntry: rows.map((r) => r.adjustsEntryId),
+            artist: rows.map((r) => r.payeeArtistId),
+            organization: rows.map((r) => r.payeeOrganizationId),
+        });
+        return rows.map((row) => {
+            const view = this.toEntryView(row);
+            return {
+                ...view,
+                orderPublicCode: codes.get('order', row.orderId),
+                payoutPublicCode: codes.get('royaltyPayout', row.payoutId),
+                adjustsEntryPublicCode: codes.get('royaltyLedgerEntry', row.adjustsEntryId),
+                payee: {
+                    ...view.payee,
+                    publicCode:
+                        codes.get('artist', row.payeeArtistId) ??
+                        codes.get('organization', row.payeeOrganizationId),
+                },
+            };
+        });
+    }
+
+    private async adjustmentViews(
+        rows: Parameters<FinanceLedgerService['toAdjustmentView']>[0][],
+    ): Promise<AdjustmentView[]> {
+        const byModel: Record<string, string[]> = {};
+        for (const row of rows) {
+            const model = ADJUSTMENT_TARGET_MODEL[row.targetType];
+            if (model) (byModel[model] ??= []).push(row.targetId);
+        }
+        const codes = await this.deps.codes.resolve({
+            ...byModel,
+            order: [...(byModel.order ?? []), ...rows.map((r) => r.orderId)],
+        });
+        return rows.map((row) => {
+            const model = ADJUSTMENT_TARGET_MODEL[row.targetType];
+            return {
+                ...this.toAdjustmentView(row),
+                orderPublicCode: codes.get('order', row.orderId),
+                targetPublicCode: model ? codes.get(model, row.targetId) : null,
+            };
+        });
+    }
+
     private toEntryView(row: RoyaltyEntryRow): RoyaltyEntryView {
         return {
             id: row.id,
+            publicCode: row.publicCode,
             orderId: row.orderId,
+            orderPublicCode: null,
             ruleId: row.ruleId,
             skuId: row.skuId,
             claimId: row.claimId,
@@ -512,6 +569,7 @@ export class FinanceLedgerService {
                 artistId: row.payeeArtistId,
                 organizationId: row.payeeOrganizationId,
                 name: row.payeeArtist?.name ?? row.payeeOrganization?.name ?? null,
+                publicCode: null,
             },
             calculation: {
                 basis: row.basis,
@@ -525,7 +583,9 @@ export class FinanceLedgerService {
             entryType: row.entryType,
             status: row.status,
             adjustsEntryId: row.adjustsEntryId,
+            adjustsEntryPublicCode: null,
             payoutId: row.payoutId,
+            payoutPublicCode: null,
             accruedAt: row.accruedAt.toISOString(),
             paidAt: row.paidAt?.toISOString() ?? null,
             createdAt: row.createdAt.toISOString(),
@@ -534,6 +594,7 @@ export class FinanceLedgerService {
 
     private toAdjustmentView(row: {
         id: string;
+        publicCode: string | null;
         targetType: string;
         targetId: string;
         orderId: string | null;
@@ -549,9 +610,12 @@ export class FinanceLedgerService {
     }): AdjustmentView {
         return {
             id: row.id,
+            publicCode: row.publicCode,
             targetType: row.targetType,
             targetId: row.targetId,
+            targetPublicCode: null,
             orderId: row.orderId,
+            orderPublicCode: null,
             amountAdjustment: row.amountAdjustment.toFixed(2),
             currency: row.currency,
             reasonCode: row.reasonCode,

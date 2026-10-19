@@ -91,3 +91,20 @@ New: migration `20261019100000_drop_pricing_and_payout_rejection` (one table + 3
 files. One-line additions in shared files: `public-code.ts` prefix, permission/role catalogs
 (+role-catalog test list), audit event catalog (4 entries), `finance.prisma` (3 columns),
 finance `module.ts`/`index.ts`/constants/access, `bootstrap.ts` + `server.ts` (opt-in scheduler).
+
+## 5. MVP scope rules and public codes (added after UI review)
+
+- **Currency: USD and INR only.** Admin finance lists (royalty-entries, payouts, balances, ledger,
+  adjustments, revenue-summary) and the payments transaction list default to `currency IN (USD, INR)`;
+  list/create DTOs reject `GBP` (400). The enum is untouched. Both payout sweeps skip GBP.
+- **Payees: artists only.** royalty-entries, payouts and balances default to `payeeType = ARTIST`
+  (the `organizationId` filter on royalty-entries is ignored). The quarterly sweep skips ORGANIZATION
+  payees with reason `Organization payouts are not in MVP scope`. No org rows are modified.
+- **Rules:** `POST /royalty-rules` rejects `basis != NET_PROFIT` (`FINANCE_BASIS_NOT_SUPPORTED`) and any
+  scope other than `artistId` alone (`FINANCE_RULE_SCOPE_NOT_SUPPORTED`). Resolver and legacy rows untouched.
+- **Public codes** (null when a row has none; ids kept): entries `publicCode, orderPublicCode,
+  payoutPublicCode, adjustsEntryPublicCode, payee.publicCode`; payouts `publicCode, payee.publicCode`;
+  rules `publicCode, scope.{artist,product,collection,organization}PublicCode`; balances
+  `payeePublicCode`; platform ledger `publicCode, orderPublicCode`; adjustments
+  `publicCode, orderPublicCode, targetPublicCode`; drop pricing `dropPublicCode`; artist rate
+  `artistPublicCode`.

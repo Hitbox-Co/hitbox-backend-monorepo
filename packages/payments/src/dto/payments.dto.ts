@@ -53,7 +53,7 @@ export const listPaymentsQuerySchema = z.object({
         .union([z.literal('true'), z.literal('false')])
         .transform((value) => value === 'true')
         .optional(),
-    currency: z.enum(['USD', 'INR', 'GBP']).optional(),
+    currency: z.enum(['USD', 'INR']).optional(),
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
 });

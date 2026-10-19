@@ -12,6 +12,7 @@ import {
 } from '../constants/finance.constant';
 import type { FinanceAccess } from '../domain/finance-access';
 import { requireSetRoyaltyRate } from '../domain/finance-access';
+import type { PublicCodeResolver } from '../domain/public-codes';
 import type { IFinanceAuditRecorder } from '../domain/interfaces/audit-recorder.port';
 import type {
     ArtistRoyaltyRateView,
@@ -21,6 +22,7 @@ import type { RoyaltyRuleRepository } from '../repository/royalty-rule.repositor
 
 export interface ArtistRoyaltyRateServiceDeps {
     prisma: PrismaClient;
+    codes: PublicCodeResolver;
     rules: RoyaltyRuleRepository;
     eventBus: IEventBus;
     audit: IFinanceAuditRecorder;
@@ -48,7 +50,7 @@ export class ArtistRoyaltyRateService {
 
     async getCurrent(artistId: string): Promise<ArtistRoyaltyRateView | null> {
         const rule = await this.findArtistRule(artistId, new Date());
-        return rule ? this.toView(rule, new Date()) : null;
+        return rule ? this.toView(rule, new Date(), await this.artistCode(artistId)) : null;
     }
 
     async set(
@@ -129,7 +131,7 @@ export class ArtistRoyaltyRateService {
             ruleId: created.id,
             percentage: percentage.toString(),
         });
-        return this.toView(created, now);
+        return this.toView(created, now, await this.artistCode(artistId));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -156,10 +158,19 @@ export class ArtistRoyaltyRateService {
         );
     }
 
-    private toView(rule: RoyaltyRule, now: Date): ArtistRoyaltyRateView {
+    private async artistCode(artistId: string): Promise<string | null> {
+        return (await this.deps.codes.resolve({ artist: [artistId] })).get('artist', artistId);
+    }
+
+    private toView(
+        rule: RoyaltyRule,
+        now: Date,
+        artistPublicCode: string | null,
+    ): ArtistRoyaltyRateView {
         return {
             ruleId: rule.id,
             artistId: rule.artistId as string,
+            artistPublicCode,
             basis: rule.basis,
             percentage: rule.percentage?.toString() ?? null,
             effectiveFrom: rule.effectiveFrom.toISOString(),

@@ -98,6 +98,10 @@ export const FINANCE_DECISION_ERROR_CODES = {
     DROP_NOT_FOUND: 'FINANCE_DROP_NOT_FOUND',
     /** The artist the rate was entered for does not exist. */
     ARTIST_NOT_FOUND: 'FINANCE_ARTIST_NOT_FOUND',
+    /** Only NET_PROFIT rules can be created. */
+    BASIS_NOT_SUPPORTED: 'FINANCE_BASIS_NOT_SUPPORTED',
+    /** New rules must be scoped by artist only. */
+    RULE_SCOPE_NOT_SUPPORTED: 'FINANCE_RULE_SCOPE_NOT_SUPPORTED',
 } as const;
 
 export const FINANCE_DECISION_EVENTS = {
@@ -120,3 +124,12 @@ export const FINANCE_DECISION_AUDIT_EVENTS = {
 
 /** Quarter boundaries: Jan 1, Apr 1, Jul 1, Oct 1, 00:00 UTC. */
 export const QUARTER_START_MONTHS = [0, 3, 6, 9] as const;
+
+/**
+ * MVP scope: USD and INR only (GBP stays in the enum for later) and artist
+ * payees only. Admin finance lists default to this, and the payout sweeps skip
+ * everything outside it.
+ */
+export const MVP_CURRENCIES = ['USD', 'INR'] as const;
+export const MVP_PAYEE_TYPE = 'ARTIST' as const;
+export const ORGANIZATION_PAYOUT_SKIP_REASON = 'Organization payouts are not in MVP scope';

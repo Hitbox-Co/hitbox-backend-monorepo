@@ -50,3 +50,14 @@ export function makeAudit() {
 export function makeBus() {
     return { publish: jest.fn(async () => undefined), subscribe: jest.fn() } as never;
 }
+
+/** A public-code resolver stub: `codes` maps `model:id` to a code. */
+export function makeCodes(codes: Record<string, string> = {}) {
+    return {
+        resolve: jest.fn(async (lookup: Record<string, (string | null | undefined)[]>) => ({
+            get: (model: string, id: string | null | undefined) =>
+                id ? (codes[`${model}:${id}`] ?? null) : null,
+            lookup,
+        })),
+    } as never;
+}

@@ -25,12 +25,14 @@ import type {
 } from '../dto/finance.dto';
 import type { FinanceLedgerRepository } from '../repository/finance-ledger.repository';
 import type { PayoutRepository, PayoutRow } from '../repository/payout.repository';
+import type { PublicCodeResolver } from '../domain/public-codes';
 import { approvalStateOf } from '../domain/payout-approval-state';
 import type { RoyaltyLedgerRepository } from '../repository/royalty-ledger.repository';
 import type { RoyaltyRuleRepository } from '../repository/royalty-rule.repository';
 
 export interface RoyaltyPayoutServiceDeps {
     prisma: PrismaClient;
+    codes: PublicCodeResolver;
     payouts: PayoutRepository;
     ledger: RoyaltyLedgerRepository;
     financeLedger: FinanceLedgerRepository;
@@ -89,6 +91,7 @@ export class RoyaltyPayoutService {
                 ({
                     payeeType: row.payeeType,
                     payeeId,
+                    payeePublicCode: null,
                     payeeName: null,
                     currency: row.currency,
                     accrued: '0.00',
@@ -134,6 +137,17 @@ export class RoyaltyPayoutService {
                 thresholdMet: rawAccrued.greaterThanOrEqualTo(threshold),
                 outstanding: outstanding.toFixed(2),
             });
+        }
+
+        const codes = await this.deps.codes.resolve({
+            artist: views.filter((v) => v.payeeType === 'ARTIST').map((v) => v.payeeId),
+            organization: views.filter((v) => v.payeeType === 'ORGANIZATION').map((v) => v.payeeId),
+        });
+        for (const view of views) {
+            view.payeePublicCode = codes.get(
+                view.payeeType === 'ARTIST' ? 'artist' : 'organization',
+                view.payeeId,
+            );
         }
 
         return views.sort((a, b) =>
@@ -213,11 +227,13 @@ export class RoyaltyPayoutService {
             if (dto.dryRun) {
                 scheduled.push({
                     id: 'dry-run',
+                    publicCode: null,
                     payee: {
                         type: balance.payeeType,
                         artistId: payeeArtistId,
                         organizationId: payeeOrganizationId,
                         name: balance.payeeName,
+                        publicCode: balance.payeePublicCode,
                     },
                     amount: total.toFixed(2),
                     currency: balance.currency,
@@ -308,7 +324,7 @@ export class RoyaltyPayoutService {
             }
 
             const created = await this.deps.payouts.findById(payoutId);
-            if (created) scheduled.push(this.toView(created));
+            if (created) scheduled.push(...(await this.decorate([created])));
 
             await this.deps.eventBus.publish(FINANCE_EVENTS.PAYOUT_SCHEDULED, {
                 payoutId,
@@ -524,12 +540,13 @@ export class RoyaltyPayoutService {
             page: query.page,
             limit: query.limit,
             total,
-            items: items.map((row) => this.toView(row)),
+            items: await this.decorate(items),
         };
     }
 
     async getById(id: string, access: FinanceAccess): Promise<PayoutView> {
-        return this.toView(await this.requireInScope(id, access));
+        const [view] = await this.decorate([await this.requireInScope(id, access)]);
+        return view as PayoutView;
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -589,14 +606,36 @@ export class RoyaltyPayoutService {
         return payout;
     }
 
+    /** Fills `payee.publicCode` for a page of payouts in one query per model. */
+    private async decorate(rows: PayoutRow[]): Promise<PayoutView[]> {
+        const codes = await this.deps.codes.resolve({
+            artist: rows.map((r) => r.payeeArtistId),
+            organization: rows.map((r) => r.payeeOrganizationId),
+        });
+        return rows.map((row) => {
+            const view = this.toView(row);
+            return {
+                ...view,
+                payee: {
+                    ...view.payee,
+                    publicCode:
+                        codes.get('artist', row.payeeArtistId) ??
+                        codes.get('organization', row.payeeOrganizationId),
+                },
+            };
+        });
+    }
+
     private toView(row: PayoutRow): PayoutView {
         return {
             id: row.id,
+            publicCode: row.publicCode,
             payee: {
                 type: row.payeeType,
                 artistId: row.payeeArtistId,
                 organizationId: row.payeeOrganizationId,
                 name: row.payeeArtist?.name ?? row.payeeOrganization?.name ?? null,
+                publicCode: null,
             },
             amount: row.amount.toFixed(2),
             currency: row.currency,

@@ -3,7 +3,8 @@ import { Prisma } from '@hitbox/database';
 import type { RoyaltyRule } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import type { Logger } from 'pino';
-import { FINANCE_ERROR_CODES } from '../constants/finance.constant';
+import { FINANCE_DECISION_ERROR_CODES, FINANCE_ERROR_CODES } from '../constants/finance.constant';
+import type { PublicCodeResolver } from '../domain/public-codes';
 import type { FinanceAccess } from '../domain/finance-access';
 import { requireManage } from '../domain/finance-access';
 import type {
@@ -16,6 +17,7 @@ import type { RoyaltyRuleRepository } from '../repository/royalty-rule.repositor
 
 export interface RoyaltyRuleServiceDeps {
     rules: RoyaltyRuleRepository;
+    codes: PublicCodeResolver;
     logger: Logger;
 }
 
@@ -47,13 +49,13 @@ export class RoyaltyRuleService {
             page: query.page,
             limit: query.limit,
             total,
-            items: items.map((rule) => this.toView(rule, now)),
+            items: await this.decorate(items, now),
         };
     }
 
     async getById(id: string, access: FinanceAccess): Promise<RoyaltyRuleView> {
         const rule = await this.requireInScope(id, access);
-        return this.toView(rule, new Date());
+        return (await this.decorate([rule], new Date()))[0] as RoyaltyRuleView;
     }
 
     async create(
@@ -62,6 +64,22 @@ export class RoyaltyRuleService {
         actorId: string,
     ): Promise<RoyaltyRuleView> {
         requireManage(access, 'create royalty rules');
+
+        // MVP: net-profit royalties, set per artist. Legacy rows of any other
+        // basis or scope keep resolving; they just cannot be created any more.
+        if (dto.basis !== 'NET_PROFIT') {
+            throw AppError.badRequest(
+                'Only NET_PROFIT royalty rules can be created.',
+                FINANCE_DECISION_ERROR_CODES.BASIS_NOT_SUPPORTED,
+                { basis: dto.basis },
+            );
+        }
+        if (!dto.artistId || dto.organizationId || dto.collectionId || dto.productId) {
+            throw AppError.badRequest(
+                'Royalty rules can only be scoped to an artist (artistId), not to a product, collection or organization.',
+                FINANCE_DECISION_ERROR_CODES.RULE_SCOPE_NOT_SUPPORTED,
+            );
+        }
 
         const effectiveFrom = dto.effectiveFrom ?? new Date();
         const splitConfig = dto.splits?.length
@@ -116,7 +134,7 @@ export class RoyaltyRuleService {
             { ruleId: created.id, actorId, basis: created.basis },
             'royalty rule created',
         );
-        return this.toView(created, new Date());
+        return (await this.decorate([created], new Date()))[0] as RoyaltyRuleView;
     }
 
     /** Ends a rule's effective window. The row itself is never deleted. */
@@ -156,7 +174,7 @@ export class RoyaltyRuleService {
             'royalty rule closed',
         );
         const reloaded = await this.deps.rules.findById(id);
-        return this.toView(reloaded as RoyaltyRule, new Date());
+        return (await this.decorate([reloaded as RoyaltyRule], new Date()))[0] as RoyaltyRuleView;
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -180,14 +198,42 @@ export class RoyaltyRuleService {
         return rule;
     }
 
+    /** Fills the public codes for a page of rules in one query per model. */
+    private async decorate(rules: RoyaltyRule[], now: Date): Promise<RoyaltyRuleView[]> {
+        const codes = await this.deps.codes.resolve({
+            artist: rules.map((r) => r.artistId),
+            drop: rules.map((r) => r.productId),
+            artistCollection: rules.map((r) => r.collectionId),
+            organization: rules.map((r) => r.organizationId),
+        });
+        return rules.map((rule) => {
+            const view = this.toView(rule, now);
+            return {
+                ...view,
+                scope: {
+                    ...view.scope,
+                    artistPublicCode: codes.get('artist', rule.artistId),
+                    productPublicCode: codes.get('drop', rule.productId),
+                    collectionPublicCode: codes.get('artistCollection', rule.collectionId),
+                    organizationPublicCode: codes.get('organization', rule.organizationId),
+                },
+            };
+        });
+    }
+
     private toView(rule: RoyaltyRule, now: Date): RoyaltyRuleView {
         return {
             id: rule.id,
+            publicCode: rule.publicCode,
             scope: {
                 organizationId: rule.organizationId,
                 artistId: rule.artistId,
                 collectionId: rule.collectionId,
                 productId: rule.productId,
+                organizationPublicCode: null,
+                artistPublicCode: null,
+                collectionPublicCode: null,
+                productPublicCode: null,
             },
             basis: rule.basis,
             splitType: rule.splitType,

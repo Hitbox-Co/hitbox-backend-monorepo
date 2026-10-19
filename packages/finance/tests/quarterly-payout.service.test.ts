@@ -99,8 +99,9 @@ describe('quarterly sweep', () => {
         const result = await service.sweep({ asOf: OCT_1, dryRun: false });
 
         expect(result.quarter).toBe('2026-Q3');
-        expect(result.created).toHaveLength(4);
-        expect(payoutRows).toHaveLength(4);
+        // The organization payee is skipped (MVP: artists only): 3 batches, not 4.
+        expect(result.created).toHaveLength(3);
+        expect(payoutRows).toHaveLength(3);
         const a1usd = payoutRows.find(
             (p) => p.payeeArtistId === 'artist-1' && p.currency === 'USD',
         )!;
@@ -108,7 +109,9 @@ describe('quarterly sweep', () => {
         expect(a1usd.entryCount).toBe(2);
         // SCHEDULED is the pending-approval state; nothing is paid by the sweep.
         expect(payoutRows.every((p) => p.status === 'SCHEDULED')).toBe(true);
-        expect(entries.every((e) => e.status === 'PENDING_PAYOUT')).toBe(true);
+        expect(
+            entries.filter((e) => e.payeeType === 'ARTIST').every((e) => e.status === 'PENDING_PAYOUT'),
+        ).toBe(true);
     });
 
     it('records the quarter it settled on each batch', async () => {

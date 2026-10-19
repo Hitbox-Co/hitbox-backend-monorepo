@@ -106,7 +106,7 @@ export const listRoyaltyEntriesQuerySchema = z.object({
     ...pagination,
     status: z.enum(['ACCRUED', 'PENDING_PAYOUT', 'PAID', 'REVERSED']).optional(),
     entryType: z.enum(['ORIGINAL', 'ADJUSTMENT']).optional(),
-    currency: z.enum(['USD', 'INR', 'GBP']).optional(),
+    currency: z.enum(['USD', 'INR']).optional(),
     artistId: uuid.optional(),
     organizationId: uuid.optional(),
     orderId: uuid.optional(),
@@ -137,7 +137,7 @@ export const listPayoutsQuerySchema = z.object({
     status: z.enum(['SCHEDULED', 'APPROVED', 'PAID', 'FAILED', 'CANCELLED']).optional(),
     artistId: uuid.optional(),
     organizationId: uuid.optional(),
-    currency: z.enum(['USD', 'INR', 'GBP']).optional(),
+    currency: z.enum(['USD', 'INR']).optional(),
 });
 export type ListPayoutsQuery = z.infer<typeof listPayoutsQuerySchema>;
 
@@ -150,7 +150,7 @@ export type ListPayoutsQuery = z.infer<typeof listPayoutsQuerySchema>;
 export const schedulePayoutsSchema = z.object({
     artistId: uuid.optional(),
     organizationId: uuid.optional(),
-    currency: z.enum(['USD', 'INR', 'GBP']).optional(),
+    currency: z.enum(['USD', 'INR']).optional(),
     thresholdOverride: money.optional(),
     /** Preview only: compute the batches without writing anything. */
     dryRun: z.boolean().default(false),
@@ -188,7 +188,7 @@ export const createAdjustmentSchema = z.object({
     orderId: uuid.optional(),
     /** Signed: "-11.25" reverses, "5.00" posts a make-good. */
     amountAdjustment: money,
-    currency: z.enum(['USD', 'INR', 'GBP']),
+    currency: z.enum(['USD', 'INR']),
     reasonCode: z.enum([
         'REFUND_REVERSAL',
         'DISPUTE_LOSS',
@@ -250,7 +250,7 @@ export const listFinanceEntriesQuerySchema = z.object({
         ])
         .optional(),
     direction: z.enum(['CREDIT', 'DEBIT']).optional(),
-    currency: z.enum(['USD', 'INR', 'GBP']).optional(),
+    currency: z.enum(['USD', 'INR']).optional(),
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
 });
@@ -258,7 +258,7 @@ export type ListFinanceEntriesQuery = z.infer<typeof listFinanceEntriesQuerySche
 
 export const revenueSummaryQuerySchema = z.object({
     organizationId: uuid.optional(),
-    currency: z.enum(['USD', 'INR', 'GBP']).optional(),
+    currency: z.enum(['USD', 'INR']).optional(),
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
 });
@@ -268,11 +268,16 @@ export type RevenueSummaryQuery = z.infer<typeof revenueSummaryQuerySchema>;
 
 export interface RoyaltyRuleView {
     id: string;
+    publicCode: string | null;
     scope: {
         organizationId: string | null;
         artistId: string | null;
         collectionId: string | null;
         productId: string | null;
+        organizationPublicCode: string | null;
+        artistPublicCode: string | null;
+        collectionPublicCode: string | null;
+        productPublicCode: string | null;
     };
     basis: string;
     splitType: string;
@@ -288,7 +293,9 @@ export interface RoyaltyRuleView {
 
 export interface RoyaltyEntryView {
     id: string;
+    publicCode: string | null;
     orderId: string;
+    orderPublicCode: string | null;
     ruleId: string;
     skuId: string | null;
     claimId: string | null;
@@ -297,6 +304,7 @@ export interface RoyaltyEntryView {
         artistId: string | null;
         organizationId: string | null;
         name: string | null;
+        publicCode: string | null;
     };
     calculation: {
         basis: string;
@@ -310,7 +318,9 @@ export interface RoyaltyEntryView {
     entryType: string;
     status: string;
     adjustsEntryId: string | null;
+    adjustsEntryPublicCode: string | null;
     payoutId: string | null;
+    payoutPublicCode: string | null;
     accruedAt: string;
     paidAt: string | null;
     createdAt: string;
@@ -319,6 +329,7 @@ export interface RoyaltyEntryView {
 export interface RoyaltyBalanceView {
     payeeType: string;
     payeeId: string | null;
+    payeePublicCode: string | null;
     payeeName: string | null;
     currency: string;
     accrued: string;
@@ -335,11 +346,13 @@ export interface RoyaltyBalanceView {
 
 export interface PayoutView {
     id: string;
+    publicCode: string | null;
     payee: {
         type: string;
         artistId: string | null;
         organizationId: string | null;
         name: string | null;
+        publicCode: string | null;
     };
     amount: string;
     currency: string;
@@ -367,9 +380,12 @@ export interface PayoutView {
 
 export interface AdjustmentView {
     id: string;
+    publicCode: string | null;
     targetType: string;
     targetId: string;
+    targetPublicCode: string | null;
     orderId: string | null;
+    orderPublicCode: string | null;
     amountAdjustment: string;
     currency: string;
     reasonCode: string;
@@ -383,7 +399,9 @@ export interface AdjustmentView {
 
 export interface FinanceEntryView {
     id: string;
+    publicCode: string | null;
     orderId: string | null;
+    orderPublicCode: string | null;
     entryType: string;
     direction: string;
     category: string;

@@ -1,9 +1,11 @@
 import { Prisma } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
+import { MVP_CURRENCIES, MVP_PAYEE_TYPE } from '../constants/finance.constant';
 import type { ListPayoutsQuery } from '../dto/finance.dto';
 
 const payoutSelect = {
     id: true,
+    publicCode: true,
     payeeType: true,
     payeeArtistId: true,
     payeeOrganizationId: true,
@@ -49,9 +51,9 @@ export class PayoutRepository {
         const where: Prisma.RoyaltyPayoutWhereInput = {
             ...query.scopeFilter,
             ...(query.status ? { status: query.status } : {}),
-            ...(query.currency ? { currency: query.currency } : {}),
+            currency: query.currency ?? { in: [...MVP_CURRENCIES] },
+            payeeType: MVP_PAYEE_TYPE,
             ...(query.artistId ? { payeeArtistId: query.artistId } : {}),
-            ...(query.organizationId ? { payeeOrganizationId: query.organizationId } : {}),
         };
 
         const [total, items] = await Promise.all([
