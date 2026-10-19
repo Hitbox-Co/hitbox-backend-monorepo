@@ -9,7 +9,7 @@ Branch `feature/cogs-royalty-quarterly-payout`. Specs: `HitBox_Payments_Finance_
 
 | # | Spec asks | State before | What this branch does |
 |---|-----------|--------------|-----------------------|
-| COGS-1 | `DropPrice` versioned table: COGS, `salesPriceUsd/Inr`, generated gross profit, effective dates, status, costSource, varianceReason, approvedBy/At | A model **named `DropPrice` already exists** (products): one row per drop × market, `amount` + `costOfGoods`, `effectiveFrom/To`. No combined entry, no generated profit, no costSource/varianceReason, no version number | New table **`DropPricing`** (name differs because `DropPrice` is taken). One row = one version. Gross profit = Postgres `GENERATED ALWAYS … STORED`. |
+| COGS-1 | `DropPrice` versioned table: COGS (USD + INR), `salesPriceUsd/Inr`, generated gross profit, effective dates, status, costSource, varianceReason, approvedBy/At | A model **named `DropPrice` already exists** (products): one row per drop × market, `amount` + `costOfGoods`, `effectiveFrom/To`. No combined entry, no generated profit, no costSource/varianceReason, no version number | New table **`DropPricing`** (name differs because `DropPrice` is taken). One row = one version. Gross profit = Postgres `GENERATED ALWAYS … STORED`. |
 | COGS-2 | COGS and both prices entered together, immutable | Prices editable per market through the products API | One write path (`POST …/pricing`); no PATCH. A change = new version with `varianceReason`. |
 | COGS-3 | Only the active version affects new orders | Orders read `DropPrice` rows | Each new version is **projected onto the base `DropPrice` rows of the USD and INR markets** (previous rows closed, new opened). Order/ledger code is untouched; ledger snapshots are never rewritten. |
 | COGS-4 | Entered at drop creation | Drop creation lives in products | **Not atomic with drop creation.** The console calls `POST /drops/:id/pricing` right after creating the drop. Not wired into the products module (merge safety). |
@@ -27,11 +27,7 @@ Branch `feature/cogs-royalty-quarterly-payout`. Specs: `HitBox_Payments_Finance_
 
 ## 2. Open issues / needs a decision
 
-1. **Currency of the single COGS.** Spec and decision: one global COGS, with
-   `grossProfitInr = salesPriceInr − costOfGoods`. That subtracts a (USD-looking) cost from a rupee
-   price. The same figure is projected onto the INR market `DropPrice.costOfGoods`, so INR orders
-   would compute royalty on `₹price − $cost`. Recommended: add `costOfGoodsInr` (or an FX basis) —
-   not done because it contradicts "one global figure".
+1. ~~Currency of the single COGS~~ **Resolved (product decision):** `DropPricing` has two cost columns, `costOfGoods` (USD) and `costOfGoodsInr`, entered together. `grossProfitUsd = salesPriceUsd − costOfGoods`, `grossProfitInr = salesPriceInr − costOfGoodsInr`; the USD cost is projected onto the USD market row and the INR cost onto the INR row.
 2. **UK/GBP market** (and variant-specific prices) are not projected: only USD and INR markets are
    written. A GBP `DropPrice` row keeps its old COGS.
 3. **Spec name collision** — `DropPricing` vs spec `DropPrice` (see COGS-1). Rename is cheap now.
@@ -49,13 +45,13 @@ Money is a string. Errors use the app's `{ error: { code, message, details } }` 
 
 ### Drop pricing — `drop:configure:global`
 - `POST /drops/:dropId/pricing` → 201
-  `{ costOfGoods, salesPriceUsd, salesPriceInr, costSource?, varianceReason?, effectiveFrom? }`
+  `{ costOfGoods (USD), costOfGoodsInr, salesPriceUsd, salesPriceInr, costSource?, varianceReason?, effectiveFrom? }`
   (strict; `varianceReason` ≥5 chars required when superseding; `effectiveFrom` not in the future)
   → `{ data: DropPricingView }`
 - `GET /drops/:dropId/pricing` → `{ data: DropPricingView[] }` (newest version first)
 - `GET /drops/:dropId/pricing/active` → `{ data: DropPricingView }` (404 if none)
 
-`DropPricingView`: `id, publicCode, dropId, version, costOfGoods, salesPriceUsd, salesPriceInr,
+`DropPricingView`: `id, publicCode, dropId, version, costOfGoods, costOfGoodsInr, salesPriceUsd, salesPriceInr,
 grossProfitUsd, grossProfitInr, status (ACTIVE|DISABLED), isActive, effectiveFrom, effectiveTo,
 costSource, varianceReason, approvedById, approvedAt, createdAt`.
 

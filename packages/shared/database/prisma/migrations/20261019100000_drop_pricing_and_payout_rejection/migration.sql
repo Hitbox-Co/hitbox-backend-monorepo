@@ -8,11 +8,12 @@ CREATE TABLE "DropPricing" (
     "dropId" UUID NOT NULL,
     "version" INTEGER NOT NULL,
     "costOfGoods" DECIMAL(12,2) NOT NULL,
+    "costOfGoodsInr" DECIMAL(12,2) NOT NULL,
     "salesPriceUsd" DECIMAL(12,2) NOT NULL,
     "salesPriceInr" DECIMAL(12,2) NOT NULL,
     -- Computed by the database so they can never disagree with the inputs.
     "grossProfitUsd" DECIMAL(12,2) GENERATED ALWAYS AS ("salesPriceUsd" - "costOfGoods") STORED,
-    "grossProfitInr" DECIMAL(12,2) GENERATED ALWAYS AS ("salesPriceInr" - "costOfGoods") STORED,
+    "grossProfitInr" DECIMAL(12,2) GENERATED ALWAYS AS ("salesPriceInr" - "costOfGoodsInr") STORED,
     "status" "DropPriceStatus" NOT NULL DEFAULT 'ACTIVE',
     "effectiveFrom" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "effectiveTo" TIMESTAMP(3),

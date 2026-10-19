@@ -31,7 +31,10 @@ export const decisionReason = z
  */
 export const createDropPricingSchema = z
     .object({
+        /** Unit cost in USD. */
         costOfGoods: positiveMoney,
+        /** Unit cost in INR: entered with the rest, never on its own. */
+        costOfGoodsInr: positiveMoney,
         salesPriceUsd: positiveMoney,
         salesPriceInr: positiveMoney,
         costSource: z.string().trim().min(1).max(200).optional(),
@@ -49,6 +52,7 @@ export interface DropPricingView {
     dropId: string;
     version: number;
     costOfGoods: string;
+    costOfGoodsInr: string;
     salesPriceUsd: string;
     salesPriceInr: string;
     grossProfitUsd: string | null;

@@ -83,6 +83,7 @@ export class DropPricingService {
         }
 
         const costOfGoods = new Prisma.Decimal(dto.costOfGoods);
+        const costOfGoodsInr = new Prisma.Decimal(dto.costOfGoodsInr);
         const salesPriceUsd = new Prisma.Decimal(dto.salesPriceUsd);
         const salesPriceInr = new Prisma.Decimal(dto.salesPriceInr);
         if (salesPriceUsd.lessThanOrEqualTo(0) || salesPriceInr.lessThanOrEqualTo(0)) {
@@ -127,6 +128,7 @@ export class DropPricingService {
                     dropId,
                     version,
                     costOfGoods,
+                    costOfGoodsInr,
                     salesPriceUsd,
                     salesPriceInr,
                     status: 'ACTIVE',
@@ -154,7 +156,7 @@ export class DropPricingService {
                         dropId,
                         marketId: market.id,
                         amount: market.currency === 'USD' ? salesPriceUsd : salesPriceInr,
-                        costOfGoods,
+                        costOfGoods: market.currency === 'USD' ? costOfGoods : costOfGoodsInr,
                         effectiveFrom,
                         approvedById: actorId,
                     },
@@ -172,6 +174,7 @@ export class DropPricingService {
                         ? {
                             version: active.version,
                             costOfGoods: active.costOfGoods.toFixed(2),
+                            costOfGoodsInr: active.costOfGoodsInr.toFixed(2),
                             salesPriceUsd: active.salesPriceUsd.toFixed(2),
                             salesPriceInr: active.salesPriceInr.toFixed(2),
                         }
@@ -180,6 +183,7 @@ export class DropPricingService {
                         dropId,
                         version,
                         costOfGoods: costOfGoods.toFixed(2),
+                        costOfGoodsInr: costOfGoodsInr.toFixed(2),
                         salesPriceUsd: salesPriceUsd.toFixed(2),
                         salesPriceInr: salesPriceInr.toFixed(2),
                         varianceReason: dto.varianceReason ?? null,
@@ -222,6 +226,7 @@ export class DropPricingService {
             dropId: row.dropId,
             version: row.version,
             costOfGoods: row.costOfGoods.toFixed(2),
+            costOfGoodsInr: row.costOfGoodsInr.toFixed(2),
             salesPriceUsd: row.salesPriceUsd.toFixed(2),
             salesPriceInr: row.salesPriceInr.toFixed(2),
             grossProfitUsd: row.grossProfitUsd?.toFixed(2) ?? null,

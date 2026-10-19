@@ -18,6 +18,7 @@ type Version = {
     dropId: string;
     version: number;
     costOfGoods: Prisma.Decimal;
+    costOfGoodsInr: Prisma.Decimal;
     salesPriceUsd: Prisma.Decimal;
     salesPriceInr: Prisma.Decimal;
     grossProfitUsd: Prisma.Decimal | null;
@@ -59,7 +60,7 @@ function setup(opts: { dropExists?: boolean } = {}) {
                     data.costOfGoods as Prisma.Decimal,
                 ),
                 grossProfitInr: (data.salesPriceInr as Prisma.Decimal).minus(
-                    data.costOfGoods as Prisma.Decimal,
+                    data.costOfGoodsInr as Prisma.Decimal,
                 ),
                 effectiveTo: null,
                 publicCode: null,
@@ -93,6 +94,7 @@ function setup(opts: { dropExists?: boolean } = {}) {
 const admin = accessFor(ADMIN_PERMISSIONS);
 const INPUT = {
     costOfGoods: '9.00',
+    costOfGoodsInr: '700.00',
     salesPriceUsd: '25.00',
     salesPriceInr: '2075.00',
 };
@@ -109,7 +111,8 @@ describe('DropPricingService.create', () => {
             salesPriceUsd: '25.00',
             salesPriceInr: '2075.00',
             grossProfitUsd: '16.00',
-            grossProfitInr: '2066.00',
+            costOfGoodsInr: '700.00',
+            grossProfitInr: '1375.00',
             isActive: true,
             approvedById: 'admin-1',
         });
@@ -142,6 +145,7 @@ describe('DropPricingService.create', () => {
         expect((usd.amount as Prisma.Decimal).toFixed(2)).toBe('25.00');
         expect((inr.amount as Prisma.Decimal).toFixed(2)).toBe('2075.00');
         expect((usd.costOfGoods as Prisma.Decimal).toFixed(2)).toBe('9.00');
+        expect((inr.costOfGoods as Prisma.Decimal).toFixed(2)).toBe('700.00');
         expect(projected.find((p) => p.marketId === 'market-usd-2')).toBeUndefined();
     });
 
@@ -230,6 +234,8 @@ describe('versioning', () => {
 describe('createDropPricingSchema', () => {
     it('requires COGS and both prices together', () => {
         expect(createDropPricingSchema.safeParse({ costOfGoods: '9.00' }).success).toBe(false);
+        const { costOfGoodsInr: _omitted, ...withoutInr } = INPUT;
+        expect(createDropPricingSchema.safeParse(withoutInr).success).toBe(false);
         expect(
             createDropPricingSchema.safeParse({ salesPriceUsd: '25.00', salesPriceInr: '2075' })
                 .success,
