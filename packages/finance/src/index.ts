@@ -116,3 +116,22 @@ export type {
     RoyaltyEntryView,
     RoyaltyRuleView,
 } from './dto/finance.dto';
+
+// COGS / artist royalty rate / quarterly payout approval (2026-09-15 changes)
+export { QuarterlyPayoutService } from './service/quarterly-payout.service';
+export type { QuarterlySweepResult } from './service/quarterly-payout.service';
+export { PayoutDecisionService } from './service/payout-decision.service';
+export { DropPricingService } from './service/drop-pricing.service';
+export { ArtistRoyaltyRateService } from './service/artist-royalty-rate.service';
+export {
+    currentQuarterBoundary,
+    nextQuarterBoundary,
+    quarterEndingAt,
+} from './domain/quarter';
+export { approvalStateOf } from './domain/payout-approval-state';
+export {
+    requireApprove,
+    requireTransfer,
+    requireSetRoyaltyRate,
+    requireConfigureDropPricing,
+} from './domain/finance-access';

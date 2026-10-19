@@ -5,9 +5,14 @@ import { createModuleLogger } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import {
     FINANCE_MANAGE_CAPABILITY,
+    DROP_PRICING_CAPABILITY,
     FINANCE_MODULE,
     FINANCE_READ_CAPABILITY,
+    PAYOUT_APPROVE_CAPABILITY,
+    PAYOUT_TRANSFER_CAPABILITY,
+    ROYALTY_RATE_CAPABILITY,
 } from './constants/finance.constant';
+import { CogsRoyaltyPayoutController } from './controller/cogs-royalty-payout.controller';
 import { FinanceController } from './controller/finance.controller';
 import type { FinanceAccessResolver } from './controller/finance.controller';
 import type { IFinanceAuditRecorder } from './domain/interfaces/audit-recorder.port';
@@ -16,9 +21,14 @@ import type { IOrderRevenueSource } from './domain/interfaces/order-revenue.inte
 import { PayoutReportingAdapter } from './domain/payout-reporting.adapter';
 import { FinanceLedgerRepository } from './repository/finance-ledger.repository';
 import { PayoutRepository } from './repository/payout.repository';
+import { DropPricingRepository } from './repository/drop-pricing.repository';
 import { RoyaltyLedgerRepository } from './repository/royalty-ledger.repository';
 import { RoyaltyRuleRepository } from './repository/royalty-rule.repository';
+import { ArtistRoyaltyRateService } from './service/artist-royalty-rate.service';
+import { DropPricingService } from './service/drop-pricing.service';
 import { FinanceLedgerService } from './service/finance-ledger.service';
+import { PayoutDecisionService } from './service/payout-decision.service';
+import { QuarterlyPayoutService } from './service/quarterly-payout.service';
 import { RoyaltyAccrualService } from './service/royalty-accrual.service';
 import { RoyaltyPayoutService } from './service/royalty-payout.service';
 import { RoyaltyRuleService } from './service/royalty-rule.service';
@@ -74,6 +84,8 @@ export interface FinanceModule {
     >;
     /** Exposed for jobs and scripts that run the sweep without HTTP. */
     payouts: RoyaltyPayoutService;
+    /** The quarterly sweep (manual run or `startScheduler()`). */
+    quarterlyPayouts: QuarterlyPayoutService;
     accrual: RoyaltyAccrualService;
     /**
      * Tax's `IPayoutLookup`: was this payout actually PAID, and who approved
@@ -147,6 +159,43 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
         },
     );
 
+    const quarterlyPayouts = new QuarterlyPayoutService({
+        prisma: deps.prisma,
+        payouts: payoutRepo,
+        ledger: ledgerRepo,
+        eventBus: deps.eventBus,
+        audit,
+        logger,
+    });
+    const cogsRoyaltyPayout = new CogsRoyaltyPayoutController({
+        dropPricing: new DropPricingService({
+            prisma: deps.prisma,
+            pricing: new DropPricingRepository(deps.prisma),
+            eventBus: deps.eventBus,
+            audit,
+            logger,
+        }),
+        artistRates: new ArtistRoyaltyRateService({
+            prisma: deps.prisma,
+            rules: ruleRepo,
+            eventBus: deps.eventBus,
+            audit,
+            logger,
+        }),
+        decisions: new PayoutDecisionService({
+            prisma: deps.prisma,
+            payouts: payoutRepo,
+            ledger: ledgerRepo,
+            financeLedger: financeLedgerRepo,
+            payoutReads: payouts,
+            eventBus: deps.eventBus,
+            audit,
+            logger,
+        }),
+        quarterly: quarterlyPayouts,
+        resolveAccess: deps.resolveAccess,
+    });
+
     const controller = new FinanceController({
         rules,
         accrual,
@@ -159,6 +208,7 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
         royaltyReversal: accrual,
         postings: ledger,
         payouts,
+        quarterlyPayouts,
         accrual,
         payoutReporting: new PayoutReportingAdapter(deps.prisma),
 
@@ -188,6 +238,18 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
             // guard say so rather than relying on the service alone.
             const manage = requirePermission(FINANCE_MANAGE_CAPABILITY, { globalOnly: true });
 
+            const approve = requirePermission(PAYOUT_APPROVE_CAPABILITY, { globalOnly: true });
+            const transfer = requirePermission(PAYOUT_TRANSFER_CAPABILITY, { globalOnly: true });
+            const setRate = requirePermission(ROYALTY_RATE_CAPABILITY, { globalOnly: true });
+            const configureDrops = requirePermission(DROP_PRICING_CAPABILITY, { globalOnly: true });
+
+            // COGS + sales price per drop (versioned) and the artist royalty rate
+            router.get('/drops/:dropId/pricing', configureDrops, cogsRoyaltyPayout.listDropPricing);
+            router.get('/drops/:dropId/pricing/active', configureDrops, cogsRoyaltyPayout.getActiveDropPricing);
+            router.post('/drops/:dropId/pricing', configureDrops, cogsRoyaltyPayout.createDropPricing);
+            router.get('/artists/:artistId/royalty-rate', read, cogsRoyaltyPayout.getArtistRoyaltyRate);
+            router.post('/artists/:artistId/royalty-rate', setRate, cogsRoyaltyPayout.setArtistRoyaltyRate);
+
             // Royalty rules
             router.get('/royalty-rules', read, controller.listRules);
             router.post('/royalty-rules', manage, controller.createRule);
@@ -212,8 +274,14 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
             router.get('/payouts', read, controller.listPayouts);
             router.post('/payouts/schedule', manage, controller.schedulePayouts);
             router.get('/payouts/:payoutId', read, controller.getPayout);
-            router.post('/payouts/:payoutId/approve', manage, controller.approvePayout);
-            router.post('/payouts/:payoutId/execute', manage, controller.executePayout);
+            // Approve / reject / transfer are three separate permissions
+            // (separation of duties); `/execute` is kept as an alias of
+            // `/transfer` so it can no longer be used with `manage` alone.
+            router.post('/payouts/quarterly-sweep', manage, cogsRoyaltyPayout.quarterlySweep);
+            router.post('/payouts/:payoutId/approve', approve, cogsRoyaltyPayout.approvePayout);
+            router.post('/payouts/:payoutId/reject', approve, cogsRoyaltyPayout.rejectPayout);
+            router.post('/payouts/:payoutId/transfer', transfer, cogsRoyaltyPayout.transferPayout);
+            router.post('/payouts/:payoutId/execute', transfer, cogsRoyaltyPayout.transferPayout);
             router.post('/payouts/:payoutId/fail', manage, controller.failPayout);
 
             // Corrections and the platform's own books

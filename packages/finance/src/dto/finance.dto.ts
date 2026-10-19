@@ -352,6 +352,17 @@ export interface PayoutView {
     gatewayPayoutRef: string | null;
     paidAt: string | null;
     failureReason: string | null;
+    /** PENDING_APPROVAL | APPROVED | REJECTED | PAID | FAILED — a label over status + rejection trail. */
+    approvalState: string;
+    approvalReason: string | null;
+    rejectedById: string | null;
+    rejectedAt: string | null;
+    rejectionReason: string | null;
+    transferInitiatedById: string | null;
+    transferInitiatedAt: string | null;
+    /** The accrual window a quarterly batch settles (ISO dates), when known. */
+    payoutPeriodStart: string | null;
+    payoutPeriodEnd: string | null;
 }
 
 export interface AdjustmentView {

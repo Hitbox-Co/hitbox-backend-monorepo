@@ -25,6 +25,7 @@ import type {
 } from '../dto/finance.dto';
 import type { FinanceLedgerRepository } from '../repository/finance-ledger.repository';
 import type { PayoutRepository, PayoutRow } from '../repository/payout.repository';
+import { approvalStateOf } from '../domain/payout-approval-state';
 import type { RoyaltyLedgerRepository } from '../repository/royalty-ledger.repository';
 import type { RoyaltyRuleRepository } from '../repository/royalty-rule.repository';
 
@@ -229,6 +230,15 @@ export class RoyaltyPayoutService {
                     gatewayPayoutRef: null,
                     paidAt: null,
                     failureReason: null,
+                    approvalState: 'PENDING_APPROVAL',
+                    approvalReason: null,
+                    rejectedById: null,
+                    rejectedAt: null,
+                    rejectionReason: null,
+                    transferInitiatedById: null,
+                    transferInitiatedAt: null,
+                    payoutPeriodStart: null,
+                    payoutPeriodEnd: null,
                 });
                 continue;
             }
@@ -599,6 +609,15 @@ export class RoyaltyPayoutService {
             gatewayPayoutRef: row.gatewayPayoutRef,
             paidAt: row.paidAt?.toISOString() ?? null,
             failureReason: row.failureReason,
+            approvalState: approvalStateOf(row),
+            approvalReason: row.approvalReason,
+            rejectedById: row.rejectedById,
+            rejectedAt: row.rejectedAt?.toISOString() ?? null,
+            rejectionReason: row.rejectionReason,
+            transferInitiatedById: row.transferInitiatedById,
+            transferInitiatedAt: row.transferInitiatedAt?.toISOString() ?? null,
+            payoutPeriodStart: row.payoutPeriodStart?.toISOString().slice(0, 10) ?? null,
+            payoutPeriodEnd: row.payoutPeriodEnd?.toISOString().slice(0, 10) ?? null,
         };
     }
 }

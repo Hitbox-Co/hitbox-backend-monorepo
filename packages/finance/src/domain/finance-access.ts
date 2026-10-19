@@ -41,6 +41,14 @@ export interface FinanceAccess {
     canManage: boolean;
     /** May reverse a posting outside the normal calculation. */
     canOverride: boolean;
+    /** May approve or reject a payout (`payment-royalty:approve:global`). */
+    canApprove: boolean;
+    /** May instruct a payout's bank transfer (`payment-royalty:transfer:global`). */
+    canTransfer: boolean;
+    /** May set an artist's royalty rate (`payment-royalty:update:global`). */
+    canSetRoyaltyRate: boolean;
+    /** May enter COGS / sales prices for a drop (`drop:configure:global`). */
+    canConfigureDropPricing: boolean;
 }
 
 const SCOPE_RANK: Record<string, number> = { own: 1, organization: 2, global: 3 };
@@ -110,6 +118,10 @@ export function buildFinanceAccess(principal: FinancePrincipal): FinanceAccess {
         organizationIds,
         canManage: strongestScope(principal, 'payment-royalty', 'manage') === 'global',
         canOverride: strongestScope(principal, 'payment-royalty', 'override') === 'global',
+        canApprove: strongestScope(principal, 'payment-royalty', 'approve') === 'global',
+        canTransfer: strongestScope(principal, 'payment-royalty', 'transfer') === 'global',
+        canSetRoyaltyRate: strongestScope(principal, 'payment-royalty', 'update') === 'global',
+        canConfigureDropPricing: strongestScope(principal, 'drop', 'configure') === 'global',
     };
 }
 
@@ -133,6 +145,48 @@ export function requireManage(access: FinanceAccess, action: string): void {
 
 export function requireOverride(access: FinanceAccess, action: string): void {
     if (!access.canOverride) {
+        throw AppError.forbidden(
+            `You do not have permission to ${action}.`,
+            FINANCE_ERROR_CODES.FORBIDDEN,
+        );
+    }
+}
+
+/**
+ * The four guards below are separate on purpose: each is its own catalog key,
+ * and holding one never implies another. In particular `approve` does not
+ * imply `transfer` — deciding to pay and instructing the money to move are two
+ * acts under the separation-of-duties rule.
+ */
+export function requireApprove(access: FinanceAccess, action: string): void {
+    if (!access.canApprove) {
+        throw AppError.forbidden(
+            `You do not have permission to ${action}.`,
+            FINANCE_ERROR_CODES.FORBIDDEN,
+        );
+    }
+}
+
+export function requireTransfer(access: FinanceAccess, action: string): void {
+    if (!access.canTransfer) {
+        throw AppError.forbidden(
+            `You do not have permission to ${action}.`,
+            FINANCE_ERROR_CODES.FORBIDDEN,
+        );
+    }
+}
+
+export function requireSetRoyaltyRate(access: FinanceAccess, action: string): void {
+    if (!access.canSetRoyaltyRate) {
+        throw AppError.forbidden(
+            `You do not have permission to ${action}.`,
+            FINANCE_ERROR_CODES.FORBIDDEN,
+        );
+    }
+}
+
+export function requireConfigureDropPricing(access: FinanceAccess, action: string): void {
+    if (!access.canConfigureDropPricing) {
         throw AppError.forbidden(
             `You do not have permission to ${action}.`,
             FINANCE_ERROR_CODES.FORBIDDEN,

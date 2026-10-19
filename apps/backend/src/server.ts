@@ -28,7 +28,15 @@ const keepWarm = setInterval(() => {
 }, 60_000);
 keepWarm.unref();
 
+// Quarterly royalty payout sweep: opt-in so a dev or QA instance sharing a
+// database never creates payout batches it was not asked to.
+const stopQuarterlySweep =
+    process.env.QUARTERLY_PAYOUT_SWEEP_ENABLED === 'true'
+        ? bootstrapped.startQuarterlyPayoutSweep()
+        : null;
+
 function shutdown(signal: string): void {
+    stopQuarterlySweep?.();
     logger.info({ signal }, "shutting down");
     server.close(() => {
         Promise.allSettled([

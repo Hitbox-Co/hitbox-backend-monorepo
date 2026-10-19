@@ -75,3 +75,48 @@ export const FINANCE_AUDIT_EVENTS = {
     PAYOUT_EXECUTE: 'royalty.payout.execute',
     ADJUSTMENT_CREATE: 'adjustment.create',
 } as const;
+
+// ── COGS / royalty rate / payout approval (2026-09-15 changes) ───────────────
+// Four capabilities added to the catalog by this change. Approving a payout and
+// instructing its transfer are deliberately separate keys (separation of duties).
+
+/** Entering COGS + USD/INR sales prices for a drop, and versioning them. */
+export const DROP_PRICING_CAPABILITY = 'drop:configure' as const;
+/** Setting an artist's royalty rate. */
+export const ROYALTY_RATE_CAPABILITY = 'payment-royalty:update' as const;
+/** Approving or rejecting a payout. */
+export const PAYOUT_APPROVE_CAPABILITY = 'payment-royalty:approve' as const;
+/** Instructing the bank transfer for an approved payout. */
+export const PAYOUT_TRANSFER_CAPABILITY = 'payment-royalty:transfer' as const;
+
+export const FINANCE_DECISION_ERROR_CODES = {
+    /** A payout decision was submitted without a reason. */
+    REASON_REQUIRED: 'FINANCE_REASON_REQUIRED',
+    /** The artist already has a royalty rate in force for the requested window. */
+    RATE_OVERLAP: 'FINANCE_RATE_OVERLAP',
+    /** The drop the pricing was entered for does not exist. */
+    DROP_NOT_FOUND: 'FINANCE_DROP_NOT_FOUND',
+    /** The artist the rate was entered for does not exist. */
+    ARTIST_NOT_FOUND: 'FINANCE_ARTIST_NOT_FOUND',
+} as const;
+
+export const FINANCE_DECISION_EVENTS = {
+    PAYOUT_APPROVED: 'finance.payout.approved',
+    PAYOUT_REJECTED: 'finance.payout.rejected',
+    DROP_PRICING_CREATED: 'finance.drop-pricing.created',
+    ARTIST_ROYALTY_RATE_SET: 'finance.artist-royalty-rate.set',
+} as const;
+
+export const FINANCE_DECISION_AUDIT_EVENTS = {
+    PAYOUT_APPROVE: 'royalty.payout.approve',
+    PAYOUT_REJECT: 'royalty.payout.reject',
+    PAYOUT_TRANSFER: 'royalty.payout.transfer',
+    /** Reuses the registered `royalty.payout.schedule` type. */
+    PAYOUT_QUARTERLY_SWEEP: 'royalty.payout.schedule',
+    DROP_PRICING_CREATE: 'drop.pricing.create',
+    /** Reuses the registered `royalty.rule.change` type. */
+    ARTIST_RATE_SET: 'royalty.rule.change',
+} as const;
+
+/** Quarter boundaries: Jan 1, Apr 1, Jul 1, Oct 1, 00:00 UTC. */
+export const QUARTER_START_MONTHS = [0, 3, 6, 9] as const;

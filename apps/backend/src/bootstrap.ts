@@ -58,6 +58,12 @@ export interface Bootstrapped {
      */
     releaseExpiredReservations(): Promise<number>;
     /**
+     * Starts the quarterly royalty payout sweep (Jan/Apr/Jul/Oct 1, 00:00 UTC).
+     * Opt-in: server.ts only calls it when QUARTERLY_PAYOUT_SWEEP_ENABLED=true.
+     * Returns a stop function. Idempotent, so a second instance is harmless.
+     */
+    startQuarterlyPayoutSweep(): () => void;
+    /**
      * Subscribes the authorization cache to cross-instance invalidation
      * broadcasts. Until this runs, each process still caches locally but only
      * learns about another instance's revoke when its short L1 TTL lapses.
@@ -710,6 +716,7 @@ export function bootstrap(): Bootstrapped {
         leadsRouter: leadsModule.router,
         webhookRouter: paymentsModule.createWebhookRouter() ?? webhooksUnavailableRouter(),
         releaseExpiredReservations: () => paymentsModule.releaseExpiredReservations(),
+        startQuarterlyPayoutSweep: () => financeModule.quarterlyPayouts.startScheduler(),
         startCaches: () => accessControlModule.startCache(),
         stopCaches: () => accessControlModule.stopCache(),
     };

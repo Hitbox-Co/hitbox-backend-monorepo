@@ -182,6 +182,26 @@ export class RoyaltyLedgerRepository {
     }
 
     /**
+     * Every unbatched ACCRUED entry accrued before `cutoff`, across all payees.
+     * The quarterly sweep's input: the cutoff is the quarter boundary, so an
+     * entry accrued after it waits for the next run.
+     */
+    accruedBefore(cutoff: Date) {
+        return this.prisma.royaltyLedgerEntry.findMany({
+            where: { status: 'ACCRUED', payoutId: null, accruedAt: { lt: cutoff } },
+            select: {
+                id: true,
+                payeeType: true,
+                payeeArtistId: true,
+                payeeOrganizationId: true,
+                currency: true,
+                amount: true,
+            },
+            orderBy: { accruedAt: 'asc' },
+        });
+    }
+
+    /**
      * Attaches a set of entries to a payout batch.
      *
      * Guarded on `status: 'ACCRUED', payoutId: null`, so an entry that was
