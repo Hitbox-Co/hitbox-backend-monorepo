@@ -511,6 +511,7 @@ export class FinanceLedgerService {
     private async entryViews(rows: RoyaltyEntryRow[]): Promise<RoyaltyEntryView[]> {
         const codes = await this.deps.codes.resolve({
             order: rows.map((r) => r.orderId),
+            royaltyRule: rows.map((r) => r.ruleId),
             royaltyPayout: rows.map((r) => r.payoutId),
             royaltyLedgerEntry: rows.map((r) => r.adjustsEntryId),
             artist: rows.map((r) => r.payeeArtistId),
@@ -521,6 +522,7 @@ export class FinanceLedgerService {
             return {
                 ...view,
                 orderPublicCode: codes.get('order', row.orderId),
+                rulePublicCode: codes.get('royaltyRule', row.ruleId),
                 payoutPublicCode: codes.get('royaltyPayout', row.payoutId),
                 adjustsEntryPublicCode: codes.get('royaltyLedgerEntry', row.adjustsEntryId),
                 payee: {
@@ -562,6 +564,7 @@ export class FinanceLedgerService {
             orderId: row.orderId,
             orderPublicCode: null,
             ruleId: row.ruleId,
+            rulePublicCode: null,
             skuId: row.skuId,
             claimId: row.claimId,
             payee: {

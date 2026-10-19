@@ -297,6 +297,7 @@ export interface RoyaltyEntryView {
     orderId: string;
     orderPublicCode: string | null;
     ruleId: string;
+    rulePublicCode: string | null;
     skuId: string | null;
     claimId: string | null;
     payee: {

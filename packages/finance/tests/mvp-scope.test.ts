@@ -112,6 +112,7 @@ describe('public codes', () => {
             'royaltyPayout:p1': 'pyo0001',
             'royaltyLedgerEntry:e0': 'rle0000',
             'artist:a1': 'art0001',
+            'royaltyRule:r1': 'ryr0001',
             'financeLedgerEntry:f1': 'fle0001',
         },
     ) {
@@ -138,6 +139,8 @@ describe('public codes', () => {
             publicCode: 'rle0001',
             orderId: 'o1',
             orderPublicCode: 'odr0001',
+            ruleId: 'r1',
+            rulePublicCode: 'ryr0001',
             payoutId: 'p1',
             payoutPublicCode: 'pyo0001',
             adjustsEntryId: 'e0',
@@ -161,6 +164,7 @@ describe('public codes', () => {
             payoutPublicCode: null,
             adjustsEntryPublicCode: null,
             orderPublicCode: null,
+            rulePublicCode: null,
         });
     });
 

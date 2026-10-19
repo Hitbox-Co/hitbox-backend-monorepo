@@ -14,7 +14,8 @@ export type CodedModel =
     | 'artist'
     | 'organization'
     | 'drop'
-    | 'artistCollection';
+    | 'artistCollection'
+    | 'royaltyRule';
 
 export type CodeLookup = Partial<Record<CodedModel, (string | null | undefined)[]>>;
 
