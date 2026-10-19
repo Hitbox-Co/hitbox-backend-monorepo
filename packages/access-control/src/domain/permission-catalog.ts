@@ -260,6 +260,8 @@ const DEFINITIONS: Record<string, string> = {
     'drop:read:global': 'View any drop, including unpublished.',
     'drop:manage:organization': "Create, edit and retire your organization's drops.",
     'drop:manage:global': 'Create, edit and retire any drop on the platform.',
+    'drop:configure:global':
+        'Enter the cost of goods and USD/INR sales prices when creating a drop, and version them.',
 
     // ── Drop types (variant configuration) ──────────────────────────────────
     'drop-type:manage:global':
@@ -308,6 +310,9 @@ const DEFINITIONS: Record<string, string> = {
     'payment-royalty:configure:global': 'Configure payment gateways.',
     'payment-royalty:manage:global': 'Administer payments and the royalty ledger.',
     'payment-royalty:override:global': 'Override a payment or royalty posting.',
+    'payment-royalty:update:global': "Set an artist's royalty rate when the artist is created.",
+    'payment-royalty:approve:global': 'Approve or reject a quarterly royalty payout.',
+    'payment-royalty:transfer:global': 'Instruct the bank transfer for an approved royalty payout.',
 
     // ── Exclusive content ───────────────────────────────────────────────────
     'content-unlock:read:own': 'View content you have unlocked.',
