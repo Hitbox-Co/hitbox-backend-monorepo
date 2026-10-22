@@ -304,7 +304,7 @@ will work, instead of discovering the rule by getting a 400.
 
 ```jsonc
 {
-  "status": "SHIPPED",              // PROCESSING | SHIPPED | DELIVERED | CANCELLED
+  "status": "SHIPPED",              // PROCESSING | SHIPPED | DELIVERED | CANCELLED (unpaid orders only)
   "trackingNote": "DHL 7741…",      // optional
   "reason": "Customer requested"    // REQUIRED when status is CANCELLED
 }
@@ -316,14 +316,20 @@ not need a second fetch.
 #### The lifecycle graph
 
 ```text
-PENDING_PAYMENT ──▶ CANCELLED
+PENDING_PAYMENT ──▶ CANCELLED   (by an admin, or the checkout sweep when unpaid)
        │
        ▼ (payments module)
      PAID ──▶ PROCESSING ──▶ SHIPPED ──▶ DELIVERED
-       │            │
-       ▼            ▼
-   CANCELLED    CANCELLED
+       └────────────┴──────────────┴───────────┴──▶ REFUNDED (refund pipeline)
 ```
+
+**Only an unpaid order can be cancelled.** Cancelling a `PENDING_PAYMENT`
+order also releases its stock hold, so the unit is back on sale at once. A
+`PAID` / `PROCESSING` order is refused with `ORDERS_CANCEL_REQUIRES_REFUND`:
+the buyer has paid, so "cancel" is a refund (`physicalReturnRequired: false`),
+which returns the money and puts the never-shipped unit back on sale. Unpaid
+orders are also cancelled automatically by the checkout sweep. See
+[orders/checkout-sweep.md](../orders/checkout-sweep.md).
 
 **`PAID` and `REFUNDED` are not settable by hand.** They are written by the
 payments and refund pipelines, and an operator typing them would decouple the
@@ -336,6 +342,7 @@ be refunded, it cannot go back to being in transit.
 | Code | Status | When |
 |---|---|---|
 | `ORDERS_STATUS_NOT_SETTABLE` | 400 | Tried to set `PAID` / `REFUNDED` |
+| `ORDERS_CANCEL_REQUIRES_REFUND` | 400 | Tried to cancel a `PAID` / `PROCESSING` order. Refund it instead |
 | `ORDERS_INVALID_TRANSITION` | 400 | e.g. `DELIVERED → PROCESSING`. `details` carries `{ from, to, allowed[] }` |
 | `ORDERS_INVALID_TRANSITION` | 409 | Another operator changed it first — reload and retry |
 | `ORDERS_NOT_FOUND` | 404 | Missing **or** out of your scope |

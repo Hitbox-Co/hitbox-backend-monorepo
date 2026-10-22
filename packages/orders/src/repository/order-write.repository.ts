@@ -3,6 +3,7 @@ import { Prisma } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import { ORDERS_ERROR_CODES } from '../constants/orders.constant';
+import { lockSku, unitTakenByAnotherOrder } from './sku-lock';
 
 /**
  * The write side of an order's life: placing it, settling it, cancelling it,
@@ -186,6 +187,11 @@ export class OrderWriteRepository {
                 );
             }
 
+            // Serialises against a late settlement or a packing swap on the
+            // same unit (see sku-lock.ts); the live-hold count below then sees
+            // their committed result.
+            await lockSku(tx, sku.id);
+
             const orderId = randomUUID();
             await tx.order.create({
                 data: {
@@ -266,37 +272,78 @@ export class OrderWriteRepository {
     }
 
     /**
-     * Settlement. Guarded on PENDING_PAYMENT, so the second delivery of the
-     * same webhook returns false instead of re-committing stock.
+     * Settlement: the order becomes PAID and its unit COMMITTED.
      *
-     * Returns false too when the hold has already expired and the unit is
-     * gone — the caller parks the transaction for a human rather than
-     * pretending the order shipped.
+     * Returns false — and the payments module parks the money for review —
+     * when the order is no longer waiting for payment, or its unit now belongs
+     * to someone else. In both cases **nothing is committed**:
+     *
+     *   - The order is checked *first*. Committing the hold of an order that
+     *     was already cancelled would lock its unit off sale forever.
+     *   - The unit is locked, then checked for another owner. A late payment
+     *     on an expired hold must not commit a unit a newer checkout has
+     *     taken — that is the same piece sold twice.
+     *
+     * A hold that expired (even one the sweeper already RELEASED) is still
+     * honoured when nobody else has taken the unit: the buyer paid, the piece
+     * is free, and refunding them instead helps no one. The unpaid-order
+     * grace period (UNPAID_ORDER_GRACE_SECONDS) is what keeps the order
+     * PENDING_PAYMENT long enough for that.
      */
     async markPaid(input: { orderId: string; settledAt: Date }): Promise<boolean> {
-        return this.prisma.$transaction(async (tx) => {
-            const reservation = await tx.inventoryReservation.findFirst({
-                where: { orderId: input.orderId, status: { in: ['HELD', 'COMMITTED'] } },
-                orderBy: { createdAt: 'desc' },
-            });
-            if (!reservation) return false;
+        try {
+            return await this.prisma.$transaction(
+                async (tx) => {
+                    const order = await tx.order.findFirst({
+                        where: { id: input.orderId, status: 'PENDING_PAYMENT' },
+                        select: { id: true },
+                    });
+                    if (!order) return false;
 
-            const committed = await tx.inventoryReservation.updateMany({
-                where: { id: reservation.id, status: { in: ['HELD', 'COMMITTED'] } },
-                data: { status: 'COMMITTED' },
-            });
-            if (committed.count === 0) return false;
+                    const reservation = await tx.inventoryReservation.findFirst({
+                        where: { orderId: input.orderId },
+                        orderBy: { createdAt: 'desc' },
+                    });
+                    if (!reservation) return false;
 
-            const updated = await tx.order.updateMany({
-                where: { id: input.orderId, status: 'PENDING_PAYMENT' },
-                data: {
-                    status: 'PAID',
-                    skuId: reservation.skuId,
-                    updatedAt: input.settledAt,
+                    await lockSku(tx, reservation.skuId);
+                    const taken = await unitTakenByAnotherOrder(tx, {
+                        skuId: reservation.skuId,
+                        orderId: input.orderId,
+                        now: new Date(),
+                    });
+                    if (taken) {
+                        // Let go of our own stale hold; the order stays
+                        // PENDING_PAYMENT until the unpaid-order sweep cancels it.
+                        await tx.inventoryReservation.updateMany({
+                            where: { id: reservation.id, status: 'HELD' },
+                            data: { status: 'RELEASED' },
+                        });
+                        return false;
+                    }
+
+                    await tx.inventoryReservation.update({
+                        where: { id: reservation.id },
+                        data: { status: 'COMMITTED' },
+                    });
+                    const updated = await tx.order.updateMany({
+                        where: { id: input.orderId, status: 'PENDING_PAYMENT' },
+                        data: {
+                            status: 'PAID',
+                            skuId: reservation.skuId,
+                            updatedAt: input.settledAt,
+                        },
+                    });
+                    // Cancelled between our read and this write: undo the commit.
+                    if (updated.count === 0) throw new SettlementLost();
+                    return true;
                 },
-            });
-            return updated.count > 0;
-        });
+                { maxWait: 10_000, timeout: 20_000 },
+            );
+        } catch (error) {
+            if (error instanceof SettlementLost) return false;
+            throw error;
+        }
     }
 
     /** Payment failed or was abandoned: cancel the order, free the unit. */
@@ -323,20 +370,45 @@ export class OrderWriteRepository {
     /**
      * Refunded.
      *
-     * The reservation is deliberately **not** released: the unit physically
-     * went to the buyer and came back, and whether it may be sold again is a
-     * decision the refund workflow makes from the returned tag's condition,
-     * not something to infer from the money having moved.
+     * A unit that **shipped** keeps its reservation: it went to the buyer
+     * and came back, and whether it may be sold again is the refund
+     * workflow's call from the returned tag's condition — not something to
+     * infer from the money having moved.
+     *
+     * A unit that **never shipped** (refunded while PAID / PROCESSING) never
+     * left the warehouse, so it goes straight back on sale: its hold is
+     * released and the order lets go of it (`skuId` cleared — checkout treats
+     * any order pointing at a unit as a sale). The released reservation row
+     * keeps the record of which unit it was.
      */
     async markRefunded(input: { orderId: string; refundedAt: Date }): Promise<boolean> {
-        const updated = await this.prisma.order.updateMany({
-            where: {
-                id: input.orderId,
-                status: { in: ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'] },
-            },
-            data: { status: 'REFUNDED', updatedAt: input.refundedAt },
+        return this.prisma.$transaction(async (tx) => {
+            const order = await tx.order.findFirst({
+                where: { id: input.orderId, status: { in: ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'] } },
+                select: { status: true, shippedAt: true },
+            });
+            if (!order) return false;
+
+            const neverShipped =
+                (order.status === 'PAID' || order.status === 'PROCESSING') && order.shippedAt === null;
+            const updated = await tx.order.updateMany({
+                where: { id: input.orderId, status: order.status },
+                data: {
+                    status: 'REFUNDED',
+                    updatedAt: input.refundedAt,
+                    ...(neverShipped ? { skuId: null } : {}),
+                },
+            });
+            if (updated.count === 0) return false;
+
+            if (neverShipped) {
+                await tx.inventoryReservation.updateMany({
+                    where: { orderId: input.orderId, status: { in: ['HELD', 'COMMITTED'] } },
+                    data: { status: 'RELEASED' },
+                });
+            }
+            return true;
         });
-        return updated.count > 0;
     }
 
     /**
@@ -364,6 +436,49 @@ export class OrderWriteRepository {
             data: { claimId: input.claimId, claimedAt: input.claimedAt },
         });
         return updated.count > 0 ? order.id : null;
+    }
+
+    /**
+     * Cancels an order nobody paid for, and frees its unit.
+     *
+     * The one way an unpaid order is cancelled — by an operator, or by the
+     * unpaid-order sweep. Guarded on PENDING_PAYMENT, so a payment that
+     * settles at the same moment wins and this returns false.
+     */
+    async cancelUnpaid(input: { orderId: string; now: Date }): Promise<boolean> {
+        return this.prisma.$transaction(async (tx) => {
+            const updated = await tx.order.updateMany({
+                where: { id: input.orderId, status: 'PENDING_PAYMENT' },
+                data: { status: 'CANCELLED', updatedAt: input.now },
+            });
+            if (updated.count === 0) return false;
+            await tx.inventoryReservation.updateMany({
+                where: { orderId: input.orderId, status: 'HELD' },
+                data: { status: 'RELEASED' },
+            });
+            return true;
+        });
+    }
+
+    /**
+     * Unpaid orders whose hold ran out before `cutoff` (now − grace) — the
+     * ones the sweep cancels. An order with a COMMITTED hold is never one of
+     * them: its payment went through.
+     */
+    async findExpiredUnpaid(cutoff: Date, limit: number): Promise<string[]> {
+        const rows = await this.prisma.order.findMany({
+            where: {
+                status: 'PENDING_PAYMENT',
+                placedAt: { lt: cutoff },
+                inventoryReservations: {
+                    none: { OR: [{ status: 'COMMITTED' }, { expiresAt: { gt: cutoff } }] },
+                },
+            },
+            select: { id: true },
+            orderBy: { placedAt: 'asc' },
+            take: limit,
+        });
+        return rows.map((row) => row.id);
     }
 
     /** The sweeper: every hold past its expiry goes back on sale. */
@@ -577,3 +692,6 @@ export class OrderWriteRepository {
         }
     }
 }
+
+/** Thrown inside markPaid's transaction to roll back a commit that lost its order. */
+class SettlementLost extends Error {}

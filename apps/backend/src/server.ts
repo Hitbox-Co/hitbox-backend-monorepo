@@ -28,6 +28,26 @@ const keepWarm = setInterval(() => {
 }, 60_000);
 keepWarm.unref();
 
+// The checkout sweep (docs/orders/checkout-sweep.md): every minute, release
+// stock holds that expired and cancel orders left unpaid past the grace
+// period. Skips a tick while the previous run is still going; safe on every
+// instance because each write is guarded. CHECKOUT_SWEEP_INTERVAL_SECONDS=0
+// turns this off in favour of an external cron running `jobs:checkout-sweep`.
+if (env.CHECKOUT_SWEEP_INTERVAL_SECONDS > 0) {
+    let sweeping = false;
+    const checkoutSweep = setInterval(() => {
+        if (sweeping) return;
+        sweeping = true;
+        bootstrapped
+            .runCheckoutSweep()
+            .catch((err: unknown) => logger.error({ err }, 'checkout sweep failed'))
+            .finally(() => {
+                sweeping = false;
+            });
+    }, env.CHECKOUT_SWEEP_INTERVAL_SECONDS * 1000);
+    checkoutSweep.unref();
+}
+
 function shutdown(signal: string): void {
     logger.info({ signal }, "shutting down");
     server.close(() => {

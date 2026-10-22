@@ -54,10 +54,11 @@ export interface Bootstrapped {
      */
     webhookRouter: Router;
     /**
-     * Frees stock holds whose checkout never completed. Call it from a
-     * scheduler; it is idempotent and safe to run concurrently.
+     * The checkout sweep: frees stock holds whose checkout never completed,
+     * then cancels orders left unpaid past UNPAID_ORDER_GRACE_SECONDS.
+     * Idempotent and safe to run concurrently (docs/orders/checkout-sweep.md).
      */
-    releaseExpiredReservations(): Promise<number>;
+    runCheckoutSweep(): Promise<{ releasedHolds: number; cancelledOrders: number }>;
     /**
      * Subscribes the authorization cache to cross-instance invalidation
      * broadcasts. Until this runs, each process still caches locally but only
@@ -395,6 +396,7 @@ export function bootstrap(): Bootstrapped {
         eventBus,
         guard: accessControlModule.guard,
         resolveCaller: adminView,
+        unpaidOrderGraceSeconds: env.UNPAID_ORDER_GRACE_SECONDS,
     });
 
     /**
@@ -726,7 +728,7 @@ export function bootstrap(): Bootstrapped {
         apiRouter,
         leadsRouter: leadsModule.router,
         webhookRouter: paymentsModule.createWebhookRouter() ?? webhooksUnavailableRouter(),
-        releaseExpiredReservations: () => paymentsModule.releaseExpiredReservations(),
+        runCheckoutSweep: () => ordersModule.runCheckoutSweep(),
         startCaches: () => accessControlModule.startCache(),
         stopCaches: () => accessControlModule.stopCache(),
     };

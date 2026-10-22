@@ -181,6 +181,18 @@ const envSchema = z.object({
      * abandoned basket does not keep a one-of-500 unit off sale for an hour.
      */
     INVENTORY_HOLD_SECONDS: z.coerce.number().int().positive().default(900),
+    /**
+     * How long an unpaid order survives after its hold expires before the
+     * checkout sweep cancels it. A card payment that settles inside this
+     * window is still honoured if nobody else took the unit.
+     */
+    UNPAID_ORDER_GRACE_SECONDS: z.coerce.number().int().nonnegative().default(1800),
+    /**
+     * How often the server runs the checkout sweep (release expired holds,
+     * cancel unpaid orders). 0 turns the in-process timer off — for a
+     * deployment that runs `pnpm jobs:checkout-sweep` from an external cron.
+     */
+    CHECKOUT_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().nonnegative().default(60),
 });
 
 export type Env = z.infer<typeof envSchema>;

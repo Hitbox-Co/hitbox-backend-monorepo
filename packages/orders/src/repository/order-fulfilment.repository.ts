@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import { ORDERS_ERROR_CODES, UNIT_ASSIGNABLE_STATUSES } from '../constants/orders.constant';
 import type { FulfilmentQueueQuery } from '../dto/order-fulfilment.dto';
+import { lockSku } from './sku-lock';
 
 /**
  * Scan-to-assign: matching a placed order to the physical unit that goes into
@@ -171,6 +172,8 @@ export class OrderFulfilmentRepository {
         return this.prisma.$transaction(
             async (tx) => {
                 if (input.toSkuId !== input.fromSkuId) {
+                    // Same lock as checkout and settlement (sku-lock.ts).
+                    await lockSku(tx, input.toSkuId);
                     const free = await tx.sku.findFirst({
                         where: {
                             id: input.toSkuId,

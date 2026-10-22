@@ -77,16 +77,14 @@ table records which entries, who approved, or what the provider did.
 
 ## Open items, collected
 
-Five things are not built. None is hidden behind a stub that reports success:
+Five things were not built (one is now done). None is hidden behind a stub that reports success:
 
 1. **Audit-log database triggers.** Append-only is enforced by code today. A
    migration adding `BEFORE UPDATE OR DELETE` triggers on `AuditEvent` is the
    fix, and it belongs with the audit module rather than this change.
-2. **The expired-reservation sweeper is not scheduled.**
-   `bootstrap().releaseExpiredReservations()` exists and is idempotent; this app
-   has no job runner to call it from. Availability is unaffected — the checkout
-   query already filters on `expiresAt > now` — so the effect is untidy rows,
-   not oversold stock.
+2. ~~**The expired-reservation sweeper is not scheduled.**~~ Done: the
+   checkout sweep runs in the API server every minute and also cancels unpaid
+   orders. See [orders/checkout-sweep.md](../orders/checkout-sweep.md).
 3. **No payout notification.** `finance.payout.paid` is published and
    `@hitbox/notifications` is still schema-only.
 4. **No integration test suite.** The tests here are unit tests with fakes, and

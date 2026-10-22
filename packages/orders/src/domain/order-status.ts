@@ -19,11 +19,16 @@ import { OrderStatus } from '@hitbox/database';
  *     the order from the payment that justifies it.
  *   • **`REFUNDED` is not settable by hand** for the same reason — the refund
  *     pipeline owns it. It appears as a *source* state only.
+ *   • **Only an unpaid order can be `CANCELLED`.** Once money has been taken
+ *     (PAID / PROCESSING), "cancel" means giving it back, and that is a
+ *     refund: it returns the money *and* puts the unit back on sale. A plain
+ *     status flip did neither — the buyer stayed charged and the unit stayed
+ *     committed to a dead order.
  */
 export const ORDER_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
     [OrderStatus.PENDING_PAYMENT]: [OrderStatus.CANCELLED],
-    [OrderStatus.PAID]: [OrderStatus.PROCESSING, OrderStatus.CANCELLED],
-    [OrderStatus.PROCESSING]: [OrderStatus.SHIPPED, OrderStatus.CANCELLED],
+    [OrderStatus.PAID]: [OrderStatus.PROCESSING],
+    [OrderStatus.PROCESSING]: [OrderStatus.SHIPPED],
     [OrderStatus.SHIPPED]: [OrderStatus.DELIVERED],
     [OrderStatus.DELIVERED]: [],
     [OrderStatus.CANCELLED]: [],

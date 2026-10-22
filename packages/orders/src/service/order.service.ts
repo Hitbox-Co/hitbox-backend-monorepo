@@ -22,6 +22,7 @@ import type {
     OrderListRow,
     OrderRepository,
 } from '../repository/order.repository';
+import type { OrderWriteRepository } from '../repository/order-write.repository';
 
 /**
  * What the caller is allowed to see. Resolved from their grants by the
@@ -43,6 +44,7 @@ export interface OrderView {
 
 export interface OrderServiceDeps {
     orders: OrderRepository;
+    writes: OrderWriteRepository;
     eventBus: IEventBus;
     logger: Logger;
 }
@@ -195,6 +197,14 @@ export class OrderService {
                 ORDERS_ERROR_CODES.STATUS_NOT_SETTABLE,
             );
         }
+        if (to === OrderStatus.CANCELLED && (order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING)) {
+            throw AppError.badRequest(
+                'This order has been paid. Cancel it by refunding it (POST /refunds with ' +
+                'physicalReturnRequired: false) — that returns the money and puts the unit back on sale.',
+                ORDERS_ERROR_CODES.CANCEL_REQUIRES_REFUND,
+                { status: order.status },
+            );
+        }
         if (order.status === to) {
             // Idempotent rather than an error — a double-clicked button should
             // not read as a failure.
@@ -219,14 +229,19 @@ export class OrderService {
         }
 
         const now = new Date();
-        const changed = await this.deps.orders.changeStatus({
-            id: input.id,
-            from: order.status,
-            to,
-            trackingNote: input.dto.trackingNote,
-            timestamps: timestampsFor(to, now),
-            now,
-        });
+        // Cancelling an unpaid order also releases its stock hold; every other
+        // transition is a plain guarded status write.
+        const changed =
+            to === OrderStatus.CANCELLED
+                ? Number(await this.deps.writes.cancelUnpaid({ orderId: input.id, now }))
+                : await this.deps.orders.changeStatus({
+                    id: input.id,
+                    from: order.status,
+                    to,
+                    trackingNote: input.dto.trackingNote,
+                    timestamps: timestampsFor(to, now),
+                    now,
+                });
 
         if (changed === 0) {
             throw AppError.conflict(

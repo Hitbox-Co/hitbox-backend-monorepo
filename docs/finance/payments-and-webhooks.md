@@ -67,12 +67,16 @@ across currencies for the same reason.
 — long enough for a 3-D Secure challenge, short enough that an abandoned basket
 does not keep a one-of-500 unit off sale for an hour).
 
-`bootstrap()` returns `releaseExpiredReservations()` for a scheduler to call. It
-is idempotent and safe to run concurrently. **It is not scheduled by this
-change** — there is no job runner in this app yet; see
-[coverage-matrix.md](coverage-matrix.md). Until one exists, an expired hold is
-still correctly *ignored* by the availability query (it filters on
-`expiresAt > now`), so the unit is sellable; the sweeper only tidies the row.
+The **checkout sweep** runs every minute in the API server
+(`CHECKOUT_SWEEP_INTERVAL_SECONDS`, or `pnpm jobs:checkout-sweep` from an
+external cron). It releases expired holds and cancels orders left unpaid for
+`UNPAID_ORDER_GRACE_SECONDS` (default 30 min) after their hold expired.
+
+A payment that settles after its hold expired is still honoured if nobody else
+took the unit. If someone did, settlement is refused without committing
+anything, and the payment is parked `needsReview`. Checkout, settlement and the
+packing swap lock the unit's row, so one unit can't be sold twice. Details:
+[orders/checkout-sweep.md](../orders/checkout-sweep.md).
 
 ## The webhook endpoint
 

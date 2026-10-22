@@ -21,6 +21,8 @@ import {
 import { OrderRepository } from './repository/order.repository';
 import { OrderWriteRepository } from './repository/order-write.repository';
 import { OrderService } from './service/order.service';
+import { CheckoutSweepService } from './service/checkout-sweep.service';
+import type { CheckoutSweepResult } from './service/checkout-sweep.service';
 
 /** Structural guard — the shape of `requirePermission`, not an import. */
 export interface OrdersPermissionGuard {
@@ -35,6 +37,11 @@ export interface OrdersModuleDeps {
     eventBus: IEventBus;
     guard: OrdersPermissionGuard;
     resolveCaller: OrderCallerResolver;
+    /**
+     * How long an unpaid order is kept after its stock hold expires, so a
+     * late card payment can still settle. Default 1800 (30 min).
+     */
+    unpaidOrderGraceSeconds?: number;
 }
 
 /** The claim event orders links back to the order. Matches @hitbox/claims. */
@@ -64,13 +71,25 @@ export interface OrdersModule {
      * where — everything the customer invoice prints.
      */
     invoicing: OrderInvoicingAdapter;
+    /**
+     * The scheduled checkout clean-up: release expired stock holds, then
+     * cancel orders left unpaid past the grace period. Run by the server's
+     * timer and by `pnpm jobs:checkout-sweep` (docs/orders/checkout-sweep.md).
+     */
+    runCheckoutSweep(now?: Date): Promise<CheckoutSweepResult>;
 }
 
 export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
     const logger = createModuleLogger(ORDERS_MODULE);
     const orders = new OrderRepository(deps.prisma);
     const writes = new OrderWriteRepository(deps.prisma);
-    const service = new OrderService({ orders, eventBus: deps.eventBus, logger });
+    const service = new OrderService({ orders, writes, eventBus: deps.eventBus, logger });
+    const checkoutSweep = new CheckoutSweepService({
+        writes,
+        eventBus: deps.eventBus,
+        logger,
+        graceSeconds: deps.unpaidOrderGraceSeconds ?? 1800,
+    });
     const controller = new OrderController(service, deps.resolveCaller);
     const fulfilment = new OrderFulfilmentController(
         new OrderFulfilmentService({
@@ -115,6 +134,7 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
         ledger: new OrderLedgerAdapter(writes),
         revenue: new OrderRevenueAdapter(writes),
         invoicing: new OrderInvoicingAdapter(writes),
+        runCheckoutSweep: (now) => checkoutSweep.run(now),
 
         createRouter(requireAuth) {
             const router = Router();

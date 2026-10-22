@@ -469,9 +469,17 @@ backend — the frontend just shows the result:
 4. **A damaged/missing/tampered tag blocks resale** for a period (`resaleBlockedUntil`) and puts the tag in `DISPUTED`.
 5. **Royalties are reversed** — the artist's royalty for that sale is reversed with an adjustment entry, so the artist isn't paid for a refunded sale.
 
-The refunded unit is **not** put back on sale automatically: whether it can be
-sold again is decided from the returned item's condition, through the SKU
-inventory tools ([admin/sku-inventory-management.md](../admin/sku-inventory-management.md)).
+A unit that **shipped** is **not** put back on sale automatically: whether it
+can be sold again is decided from the returned item's condition, through the
+SKU inventory tools ([admin/sku-inventory-management.md](../admin/sku-inventory-management.md)).
+A unit that **never shipped** (refunded while `PAID` / `PROCESSING`) goes
+straight back on sale: its hold is released and the order's `skuId` is
+cleared.
+
+**Cancelling a paid order is a refund.** `PATCH …/status CANCELLED` refuses
+`PAID` / `PROCESSING` orders (`ORDERS_CANCEL_REQUIRES_REFUND`). Raise a refund
+with `physicalReturnRequired: false` instead; see
+[checkout-sweep.md §4](checkout-sweep.md#4-cancelling-an-order-admin).
 
 Over-refund protection: a refund can never take the total refunded past what
 the order was charged — checked when the refund is requested.
