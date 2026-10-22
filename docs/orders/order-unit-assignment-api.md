@@ -70,8 +70,8 @@ be oversold                                               → placeholder #1 bac
 GET  /api/v1/admin/orders/fulfilment-queue              ← oldest waiting order first
 POST /api/v1/admin/orders/{orderId}/unit                ← packer scans a shirt
      { "tagId": "04A1B2C3D4E5F6" }
-PATCH /api/v1/admin/orders/{orderId}/status             ← then ship as usual
-     { "status": "SHIPPED", "trackingNote": "DHL 7741…" }
+POST /api/v1/admin/orders/{orderId}/shipment           ← then ship with the tracking number
+     { "carrierName": "DHL Express", "trackingNumber": "7741…" }
 ```
 
 **Scan first** (the packer picks up a shirt and asks "who is this for?"):
@@ -226,8 +226,8 @@ the item back on the shelf.
 
 | Endpoint | Change |
 |---|---|
-| `PATCH /admin/orders/:orderId/status` → `SHIPPED` | Refused with `400 ORDERS_UNIT_NOT_ASSIGNED` until the unit is scanned |
-| `GET /admin/orders/:orderId` | `allowedTransitions` no longer offers `SHIPPED` until the unit is scanned. New field `unitAssignedAt` |
+| Shipping (`POST /admin/orders/:orderId/shipment`) | Refused with `400 ORDERS_UNIT_NOT_ASSIGNED` until the unit is scanned. (`PATCH …/status` → `SHIPPED` is no longer used; see [order-history-and-shipments.md](order-history-and-shipments.md)) |
+| `GET /admin/orders/:orderId` | New field `unitAssignedAt`; `canRecordShipment` turns true once the unit is scanned |
 | `GET /admin/orders` | New field `unitAssignedAt` on each item |
 | `Order.skuId` (anywhere it's shown) | Before packing it's the **placeholder**. Treat it as final only once `unitAssignedAt` is set |
 | Checkout response / Stripe metadata `skuId` | Also the placeholder — informational only |

@@ -157,6 +157,8 @@ export const PUBLIC_CODE_PREFIXES: Record<string, string> = {
     Order: 'odr',
     OrderAddress: 'oda',
     InventoryReservation: 'ivr',
+    OrderStatusHistory: 'osh',
+    OrderShipment: 'shp',
     // organizations
     Organization: 'org',
     // payments

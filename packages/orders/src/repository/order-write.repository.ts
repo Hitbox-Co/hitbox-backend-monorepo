@@ -3,6 +3,7 @@ import { Prisma } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import { ORDERS_ERROR_CODES } from '../constants/orders.constant';
+import { recordStatusChange } from './order-history';
 import { lockSku, unitTakenByAnotherOrder } from './sku-lock';
 
 /**
@@ -215,6 +216,10 @@ export class OrderWriteRepository {
                     updatedAt: params.now,
                 },
             });
+            await recordStatusChange(tx, {
+                orderId, from: null, to: 'PENDING_PAYMENT', source: 'CHECKOUT',
+                actorId: params.buyerId, at: params.now,
+            });
 
             const reservationId = randomUUID();
             await tx.inventoryReservation.create({
@@ -331,11 +336,16 @@ export class OrderWriteRepository {
                         data: {
                             status: 'PAID',
                             skuId: reservation.skuId,
+                            paidAt: input.settledAt,
                             updatedAt: input.settledAt,
                         },
                     });
                     // Cancelled between our read and this write: undo the commit.
                     if (updated.count === 0) throw new SettlementLost();
+                    await recordStatusChange(tx, {
+                        orderId: input.orderId, from: 'PENDING_PAYMENT', to: 'PAID', source: 'PAYMENT',
+                        at: input.settledAt,
+                    });
                     return true;
                 },
                 { maxWait: 10_000, timeout: 20_000 },
@@ -357,6 +367,12 @@ export class OrderWriteRepository {
                     updatedAt: new Date(),
                 },
             });
+            if (updated.count > 0) {
+                await recordStatusChange(tx, {
+                    orderId: input.orderId, from: 'PENDING_PAYMENT', to: 'CANCELLED', source: 'PAYMENT',
+                    reason: input.reason, at: new Date(),
+                });
+            }
             // The hold is released either way. An order that was already
             // cancelled still must not keep a unit off sale.
             await tx.inventoryReservation.updateMany({
@@ -381,7 +397,12 @@ export class OrderWriteRepository {
      * any order pointing at a unit as a sale). The released reservation row
      * keeps the record of which unit it was.
      */
-    async markRefunded(input: { orderId: string; refundedAt: Date }): Promise<boolean> {
+    async markRefunded(input: {
+        orderId: string;
+        refundedAt: Date;
+        refundRequestId?: string;
+        actorId?: string | null;
+    }): Promise<boolean> {
         return this.prisma.$transaction(async (tx) => {
             const order = await tx.order.findFirst({
                 where: { id: input.orderId, status: { in: ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'] } },
@@ -400,6 +421,11 @@ export class OrderWriteRepository {
                 },
             });
             if (updated.count === 0) return false;
+            await recordStatusChange(tx, {
+                orderId: input.orderId, from: order.status, to: 'REFUNDED', source: 'REFUND',
+                actorId: input.actorId ?? null, at: input.refundedAt,
+                ...(input.refundRequestId ? { metadata: { refundRequestId: input.refundRequestId } } : {}),
+            });
 
             if (neverShipped) {
                 await tx.inventoryReservation.updateMany({
@@ -439,19 +465,60 @@ export class OrderWriteRepository {
     }
 
     /**
+     * The buyer tapped the unit's tag: they have the item, so a SHIPPED order
+     * is DELIVERED — the strongest proof of delivery there is, and the only
+     * automatic one without a carrier feed. Guarded on SHIPPED: an order
+     * already delivered (or never shipped) is left alone.
+     */
+    async deliverOnClaim(input: {
+        orderId: string;
+        claimId: string;
+        claimerId: string;
+        claimedAt: Date;
+    }): Promise<boolean> {
+        return this.prisma.$transaction(async (tx) => {
+            const updated = await tx.order.updateMany({
+                where: { id: input.orderId, status: 'SHIPPED' },
+                data: { status: 'DELIVERED', deliveredAt: input.claimedAt, updatedAt: input.claimedAt },
+            });
+            if (updated.count === 0) return false;
+            await tx.orderShipment.updateMany({
+                where: { orderId: input.orderId, status: 'ACTIVE', deliveredAt: null },
+                data: { deliveredAt: input.claimedAt, deliveredVia: 'NFC_CLAIM', updatedAt: input.claimedAt },
+            });
+            await recordStatusChange(tx, {
+                orderId: input.orderId, from: 'SHIPPED', to: 'DELIVERED', source: 'NFC_CLAIM',
+                actorId: input.claimerId, reason: 'Buyer tapped the NFC tag',
+                metadata: { claimId: input.claimId }, at: input.claimedAt,
+            });
+            return true;
+        });
+    }
+
+    /**
      * Cancels an order nobody paid for, and frees its unit.
      *
      * The one way an unpaid order is cancelled — by an operator, or by the
      * unpaid-order sweep. Guarded on PENDING_PAYMENT, so a payment that
      * settles at the same moment wins and this returns false.
      */
-    async cancelUnpaid(input: { orderId: string; now: Date }): Promise<boolean> {
+    async cancelUnpaid(input: {
+        orderId: string;
+        now: Date;
+        source: 'ADMIN' | 'CHECKOUT_SWEEP';
+        actorId?: string | null;
+        reason?: string | null;
+    }): Promise<boolean> {
         return this.prisma.$transaction(async (tx) => {
             const updated = await tx.order.updateMany({
                 where: { id: input.orderId, status: 'PENDING_PAYMENT' },
                 data: { status: 'CANCELLED', updatedAt: input.now },
             });
             if (updated.count === 0) return false;
+            await recordStatusChange(tx, {
+                orderId: input.orderId, from: 'PENDING_PAYMENT', to: 'CANCELLED', source: input.source,
+                actorId: input.actorId ?? null, reason: input.reason ?? null, at: input.now,
+            });
             await tx.inventoryReservation.updateMany({
                 where: { orderId: input.orderId, status: 'HELD' },
                 data: { status: 'RELEASED' },

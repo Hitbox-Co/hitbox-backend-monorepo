@@ -45,7 +45,9 @@ export class CheckoutSweepService {
         for (let batch = 0; batch < MAX_BATCHES; batch += 1) {
             const ids = await this.deps.writes.findExpiredUnpaid(cutoff, BATCH);
             for (const orderId of ids) {
-                const cancelled = await this.deps.writes.cancelUnpaid({ orderId, now });
+                const cancelled = await this.deps.writes.cancelUnpaid({
+                    orderId, now, source: 'CHECKOUT_SWEEP', reason: 'Checkout expired without payment',
+                });
                 if (!cancelled) continue; // paid or cancelled meanwhile
                 cancelledOrders += 1;
                 await this.deps.eventBus.publish(ORDER_EVENTS.STATUS_CHANGED, {

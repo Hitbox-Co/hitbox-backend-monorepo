@@ -28,9 +28,10 @@ describe('OrderService.changeStatus — CANCELLED', () => {
         };
         const writes = { cancelUnpaid: jest.fn(async () => true) };
         const eventBus = { publish: jest.fn(async () => undefined) };
-        const service = new OrderService({ orders: orders as never, writes: writes as never, eventBus: eventBus as never, logger: silentLogger });
+        const audit = { record: jest.fn(async () => undefined) };
+        const service = new OrderService({ orders: orders as never, writes: writes as never, audit, eventBus: eventBus as never, logger: silentLogger });
         jest.spyOn(service, 'getById').mockResolvedValue({ id: 'o1' } as never);
-        return { service, orders, writes, eventBus };
+        return { service, orders, writes, eventBus, audit };
     }
 
     it.each(['PAID', 'PROCESSING'])('a %s order is refused with CANCEL_REQUIRES_REFUND', async (status) => {
@@ -43,11 +44,18 @@ describe('OrderService.changeStatus — CANCELLED', () => {
     });
 
     it('an unpaid order is cancelled through cancelUnpaid, which frees its hold', async () => {
-        const { service, orders, writes, eventBus } = build('PENDING_PAYMENT');
+        const { service, orders, writes, eventBus, audit } = build('PENDING_PAYMENT');
         await service.changeStatus({ id: 'o1', dto: { status: 'CANCELLED', reason: 'buyer asked' }, view: VIEW, actorId: 'admin' });
-        expect(writes.cancelUnpaid).toHaveBeenCalledWith(expect.objectContaining({ orderId: 'o1' }));
+        expect(writes.cancelUnpaid).toHaveBeenCalledWith(
+            expect.objectContaining({ orderId: 'o1', source: 'ADMIN', actorId: 'admin', reason: 'buyer asked' }),
+        );
         expect(orders.changeStatus).not.toHaveBeenCalled();
         expect(eventBus.publish).toHaveBeenCalledWith('orders.order.status-changed', expect.objectContaining({ from: 'PENDING_PAYMENT', to: 'CANCELLED' }));
+        expect(audit.record).toHaveBeenCalledWith(expect.objectContaining({
+            eventType: 'order.status.change',
+            actor: { type: 'HITBOX_EMPLOYEE', id: 'admin' },
+            beforeState: { status: 'PENDING_PAYMENT' },
+        }));
     });
 
     it('a payment that lands at the same moment wins (conflict, not a cancel)', async () => {
@@ -79,6 +87,7 @@ describe('CheckoutSweepService', () => {
         expect(writes.releaseExpiredReservations).toHaveBeenCalledWith(now);
         // cutoff = now − 30 min
         expect(writes.findExpiredUnpaid).toHaveBeenCalledWith(new Date('2026-10-22T11:30:00Z'), 200);
+        expect(writes.cancelUnpaid).toHaveBeenCalledWith(expect.objectContaining({ orderId: 'o1', source: 'CHECKOUT_SWEEP' }));
         expect(eventBus.publish).toHaveBeenCalledWith(
             'orders.order.status-changed',
             expect.objectContaining({ orderId: 'o1', to: 'CANCELLED', actorId: null }),

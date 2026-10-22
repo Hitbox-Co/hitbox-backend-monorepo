@@ -32,6 +32,8 @@ export interface ApiRouters {
     adminMarkets: Router;
     /** Order list, full detail with SKU units, and status transitions. */
     adminOrders: Router;
+    /** A buyer's own order tracking — docs/orders/order-history-and-shipments.md. */
+    orders: Router;
     /** Release approval queue: review, decide, compliance sign-off. */
     adminReleases: Router;
     /** Catalog administration: product detail with performance + SKU units, CRUD. */
@@ -113,6 +115,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/authz', routers.authz);
     // Buyer money routes sit beside /orders rather than under /admin: these
     // are the two things a buyer does with their own wallet.
+    api.use('/orders', routers.orders);
     api.use('/', routers.payments);
     // The buyer's receipts sit beside their orders and their wallet, for the
     // same reason: these are things a buyer does with their own purchases.

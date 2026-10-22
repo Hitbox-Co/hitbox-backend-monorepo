@@ -32,6 +32,16 @@ export const ORDERS_ERROR_CODES = {
     NO_WAITING_ORDER: 'ORDERS_NO_WAITING_ORDER',
     /** Two packers scanned at once and the other one won. */
     ASSIGN_CONFLICT: 'ORDERS_ASSIGN_CONFLICT',
+
+    // ── Shipments (docs/orders/order-history-and-shipments.md) ───────────────
+    /** SHIPPED is set by recording the shipment, which carries the tracking number. */
+    SHIPMENT_REQUIRED: 'ORDERS_SHIPMENT_REQUIRED',
+    /** The order is not ready to ship (not PROCESSING), or not shipped (for a correction). */
+    NOT_SHIPPABLE: 'ORDERS_NOT_SHIPPABLE',
+    /** A shipment is already recorded; correct it with PUT instead. */
+    SHIPMENT_EXISTS: 'ORDERS_SHIPMENT_EXISTS',
+    /** That carrier + tracking number is on another order. */
+    TRACKING_IN_USE: 'ORDERS_TRACKING_IN_USE',
 } as const;
 
 /** Reading the order list and detail. */
@@ -50,6 +60,8 @@ export const ORDER_EVENTS = {
     STATUS_CHANGED: 'orders.order.status-changed',
     /** A physical unit was scanned and confirmed for an order at packing. */
     UNIT_ASSIGNED: 'orders.order.unit-assigned',
+    /** Tracking recorded or corrected — what a buyer notification would hang off. */
+    SHIPMENT_RECORDED: 'orders.order.shipment-recorded',
 } as const;
 
 /** Order statuses in which a unit may be scanned and assigned. */

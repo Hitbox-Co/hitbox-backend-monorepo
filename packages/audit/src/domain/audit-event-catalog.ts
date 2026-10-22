@@ -175,6 +175,24 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         sourceStories: [`${AUDIT_DOC} write-paths`],
     },
 
+    // ── Orders ──────────────────────────────────────────────────────────────
+    // What a person does to an order. System-driven changes (webhook, sweep,
+    // NFC tap) are on the order's own status history instead.
+    {
+        eventType: 'order.status.change',
+        personaGroup: HITBOX_EMPLOYEE,
+        description: 'An operator changed an order’s status (processing, delivered, cancelled).',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/orders/order-history-and-shipments.md'],
+    },
+    {
+        eventType: 'order.shipment.record',
+        personaGroup: HITBOX_EMPLOYEE,
+        description: 'An operator recorded or corrected an order’s carrier and tracking number.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/orders/order-history-and-shipments.md'],
+    },
+
     // ── Money ───────────────────────────────────────────────────────────────
     {
         eventType: 'order.refund',

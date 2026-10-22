@@ -697,6 +697,14 @@ async function main(): Promise<void> {
     const claimedUnits = units.filter((u) => u.claim);
     console.log(`  units: ${units.length} across ${sellable.length} drops (${claimedUnits.length} claimed)`);
 
+    // No fixed logistics partner: each market's warehouse uses a local carrier.
+    const CARRIER: Record<string, { name: string; number: (i: number) => string }> = {
+        us: { name: 'UPS', number: (i) => `1Z999AA1${String(10000000 + i)}` },
+        in: { name: 'Delhivery', number: (i) => `${1490000000000 + i}` },
+        uk: { name: 'Royal Mail', number: (i) => `RM${String(100000000 + i)}GB` },
+    };
+    const carrierOf = (o: DemoOrder) => CARRIER[o.market.key]!;
+
     await prisma.order.createMany({
         data: orders.map((o) => ({
             id: id(`order:${o.key}`), buyerId: id(`user:buyer:${o.buyerIdx}`),
@@ -710,7 +718,7 @@ async function main(): Promise<void> {
             termsAcceptedAt: o.placedAt, paidAt: o.paidAt,
             unitAssignedAt: o.assignedAt, unitAssignedById: o.assignedAt ? id('user:ops') : null,
             shippedAt: o.shippedAt, deliveredAt: o.deliveredAt,
-            trackingNote: o.shippedAt ? `DHL ${7740000 + o.index}` : o.status === OrderStatus.CANCELLED ? 'card_declined' : null,
+            trackingNote: o.shippedAt ? `${carrierOf(o).name} ${carrierOf(o).number(o.index)}` : o.status === OrderStatus.CANCELLED ? 'card_declined' : null,
             placedAt: o.placedAt,
             updatedAt: o.deliveredAt ?? o.shippedAt ?? o.assignedAt ?? o.paidAt ?? o.placedAt,
             archivedAt: null,
@@ -743,6 +751,49 @@ async function main(): Promise<void> {
             createdAt: o.placedAt,
         })),
     });
+    // Shipments for everything that left the warehouse, and the status
+    // timeline every order would have built up through the real endpoints.
+    await prisma.orderShipment.createMany({
+        data: orders.filter((o) => o.shippedAt).map((o) => ({
+            id: id(`shipment:${o.key}`), orderId: id(`order:${o.key}`),
+            carrierName: carrierOf(o).name, trackingNumber: carrierOf(o).number(o.index),
+            trackingUrl: null, note: null, status: 'ACTIVE' as const,
+            createdById: id('user:ops'), createdAt: o.shippedAt!,
+            deliveredAt: o.deliveredAt, deliveredVia: o.deliveredAt ? ('ADMIN' as const) : null,
+            voidedAt: null, voidedById: null, voidReason: null,
+            updatedAt: o.deliveredAt ?? o.shippedAt!,
+        })),
+    });
+    await prisma.orderStatusHistory.createMany({
+        data: orders.flatMap((o) => {
+            const rows: Prisma.OrderStatusHistoryCreateManyInput[] = [];
+            const push = (
+                from: OrderStatus | null, to: OrderStatus, source: Prisma.OrderStatusHistoryCreateManyInput['source'],
+                at: Date, actorId: string | null, reason: string | null = null, metadata?: Record<string, string>,
+            ) => rows.push({
+                id: id(`history:${o.key}:${rows.length}`), orderId: id(`order:${o.key}`),
+                fromStatus: from, toStatus: to, source, actorId, reason, occurredAt: at,
+                ...(metadata ? { metadata } : {}),
+            });
+            const buyer = id(`user:buyer:${o.buyerIdx}`);
+            push(null, OrderStatus.PENDING_PAYMENT, 'CHECKOUT', o.placedAt, buyer);
+            if (o.status === OrderStatus.CANCELLED) {
+                push(OrderStatus.PENDING_PAYMENT, OrderStatus.CANCELLED, 'PAYMENT', hours(o.placedAt, 0.1), null, 'card_declined');
+                return rows;
+            }
+            if (o.paidAt) push(OrderStatus.PENDING_PAYMENT, OrderStatus.PAID, 'PAYMENT', o.paidAt, null);
+            if (o.assignedAt) push(OrderStatus.PAID, OrderStatus.PROCESSING, 'PACKING', o.assignedAt, id('user:ops'), 'Unit scanned and assigned at packing');
+            if (o.shippedAt) {
+                push(OrderStatus.PROCESSING, OrderStatus.SHIPPED, 'SHIPMENT', o.shippedAt, id('user:ops'), null, {
+                    shipmentId: id(`shipment:${o.key}`), carrierName: carrierOf(o).name, trackingNumber: carrierOf(o).number(o.index),
+                });
+            }
+            if (o.deliveredAt) push(OrderStatus.SHIPPED, OrderStatus.DELIVERED, 'ADMIN', o.deliveredAt, id('user:ops'), 'Carrier tracking shows delivered');
+            if (o.status === OrderStatus.REFUNDED) push(OrderStatus.DELIVERED, OrderStatus.REFUNDED, 'REFUND', hours(o.deliveredAt!, 102), id('user:fin'));
+            return rows;
+        }),
+    });
+
     const byStatus = orders.reduce<Record<string, number>>((acc, o) => ({ ...acc, [o.status]: (acc[o.status] ?? 0) + 1 }), {});
     console.log(`  orders: ${orders.length} ${JSON.stringify(byStatus)}`);
 
@@ -1260,6 +1311,8 @@ async function clearBusinessTables(): Promise<void> {
         prisma.paymentGatewayConfig.deleteMany(),
         prisma.inventoryReservation.deleteMany(),
         prisma.orderAddress.deleteMany(),
+        prisma.orderStatusHistory.deleteMany(),
+        prisma.orderShipment.deleteMany(),
         prisma.order.deleteMany(),
         prisma.buyerCollection.deleteMany(),
         prisma.skuHistory.deleteMany(),

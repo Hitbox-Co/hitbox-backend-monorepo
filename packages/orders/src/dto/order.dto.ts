@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { ORDERS_DEFAULT_LIMIT, ORDERS_MAX_LIMIT } from '../constants/orders.constant';
 import { ADMIN_SETTABLE_STATUSES } from '../domain/order-status';
 import type { OrderMoneySummary } from '../domain/order-money';
+import type { ShipmentView, StatusHistoryView } from './order-shipment.dto';
 
 export const listOrdersQuerySchema = z.object({
     status: z.nativeEnum(OrderStatus).optional(),
@@ -134,8 +135,22 @@ export interface OrderDetail extends OrderListItem {
      */
     skuUnits: OrderSkuUnit[];
     addresses: OrderAddressView[];
-    /** Which statuses this order may move to right now. Drives the UI. */
+    /**
+     * Which statuses this order may move to through `PATCH …/status` right
+     * now. Drives the UI. SHIPPED is never listed — an order ships by
+     * recording its shipment (`canRecordShipment`).
+     */
     allowedTransitions: OrderStatus[];
+    /** PROCESSING, unit scanned, no shipment yet → show "Ship (add tracking)". */
+    canRecordShipment: boolean;
+    /** SHIPPED with a shipment → show "Correct tracking". */
+    canCorrectShipment: boolean;
+    /** The live shipment (carrier + tracking number), or null. */
+    shipment: ShipmentView | null;
+    /** Every shipment, newest first, including VOIDED corrections. */
+    shipments: ShipmentView[];
+    /** Every status the order has been in, oldest first — the order timeline. */
+    history: StatusHistoryView[];
 
     /** When payment settled. Null until PAID. */
     paidAt: string | null;

@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import { ORDERS_ERROR_CODES, UNIT_ASSIGNABLE_STATUSES } from '../constants/orders.constant';
 import type { FulfilmentQueueQuery } from '../dto/order-fulfilment.dto';
+import { recordStatusChange } from './order-history';
 import { lockSku } from './sku-lock';
 
 /**
@@ -212,6 +213,13 @@ export class OrderFulfilmentRepository {
                     },
                 });
                 if (updated.count === 0) throw conflict();
+                if (statusChanged) {
+                    await recordStatusChange(tx, {
+                        orderId: input.orderId, from: 'PAID', to: 'PROCESSING', source: 'PACKING',
+                        actorId: input.actorId, reason: 'Unit scanned and assigned at packing',
+                        metadata: { skuId: input.toSkuId }, at: input.now,
+                    });
+                }
 
                 const [holds, orders] = await Promise.all([
                     tx.inventoryReservation.count({ where: { skuId: input.toSkuId, ...liveHold(input.now) } }),

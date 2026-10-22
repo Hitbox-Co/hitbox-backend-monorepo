@@ -397,6 +397,10 @@ export function bootstrap(): Bootstrapped {
         guard: accessControlModule.guard,
         resolveCaller: adminView,
         unpaidOrderGraceSeconds: env.UNPAID_ORDER_GRACE_SECONDS,
+        // Deferred: the audit module is built further down. Only called at
+        // request time, long after bootstrap has finished.
+        audit: { record: (input, options) => auditModule.recorder.record(input, options) },
+        resolveBuyer: (req: Request) => req.auth?.accountId as string,
     });
 
     /**
@@ -704,6 +708,7 @@ export function bootstrap(): Bootstrapped {
             : mediaUnavailableRouter(),
         adminMarkets: marketsModule.createRouter(authModule.requireAuth),
         adminOrders: ordersModule.createRouter(authModule.requireAuth),
+        orders: ordersModule.createBuyerRouter(authModule.requireAuth),
         adminReleases: releasesModule.createRouter(authModule.requireAuth),
         adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
         artistSelf: artistModule.createSelfRouter(authModule.requireAuth),

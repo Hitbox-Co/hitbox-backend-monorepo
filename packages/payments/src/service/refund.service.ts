@@ -489,7 +489,12 @@ export class RefundService {
         }
 
         // 3. The order.
-        await this.deps.orders.markRefunded({ orderId: refund.orderId, refundedAt: processedAt });
+        await this.deps.orders.markRefunded({
+            orderId: refund.orderId,
+            refundedAt: processedAt,
+            refundRequestId: refund.id,
+            actorId: access.userId,
+        });
 
         // 4. The platform's books.
         await this.deps.finance.postRefund({

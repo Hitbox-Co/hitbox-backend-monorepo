@@ -23,6 +23,9 @@ import type {
     OrderRepository,
 } from '../repository/order.repository';
 import type { OrderWriteRepository } from '../repository/order-write.repository';
+import type { IOrdersAuditRecorder } from '../domain/interfaces/audit-recorder.port';
+import { ORDERS_AUDIT_EVENTS, auditActorType, toShipmentView } from './order-shipment.service';
+import { randomUUID } from 'node:crypto';
 
 /**
  * What the caller is allowed to see. Resolved from their grants by the
@@ -45,6 +48,7 @@ export interface OrderView {
 export interface OrderServiceDeps {
     orders: OrderRepository;
     writes: OrderWriteRepository;
+    audit: IOrdersAuditRecorder;
     eventBus: IEventBus;
     logger: Logger;
 }
@@ -120,10 +124,29 @@ export class OrderService {
             // instead of discovering the rule by getting a 409.
             // SHIPPED is withheld until a packer has scanned the unit.
             allowedTransitions: ORDER_STATUS_TRANSITIONS[order.status].filter(
-                (status) =>
-                    ADMIN_SETTABLE_STATUSES.includes(status) &&
-                    !(status === OrderStatus.SHIPPED && order.unitAssignedAt === null),
+                (status) => ADMIN_SETTABLE_STATUSES.includes(status) && status !== OrderStatus.SHIPPED,
             ),
+            canRecordShipment:
+                order.status === OrderStatus.PROCESSING &&
+                order.unitAssignedAt !== null &&
+                !order.shipments.some((s) => s.status === 'ACTIVE'),
+            canCorrectShipment:
+                order.status === OrderStatus.SHIPPED && order.shipments.some((s) => s.status === 'ACTIVE'),
+            shipment: (() => {
+                const active = order.shipments.find((s) => s.status === 'ACTIVE');
+                return active ? toShipmentView(active) : null;
+            })(),
+            shipments: order.shipments.map(toShipmentView),
+            history: order.statusHistory.map((row) => ({
+                id: row.id,
+                fromStatus: row.fromStatus,
+                toStatus: row.toStatus,
+                source: row.source,
+                actorId: row.actorId,
+                reason: row.reason,
+                metadata: row.metadata,
+                occurredAt: row.occurredAt.toISOString(),
+            })),
         };
 
         if (view.canSeeMoney) {
@@ -205,6 +228,13 @@ export class OrderService {
                 { status: order.status },
             );
         }
+        if (to === OrderStatus.SHIPPED) {
+            throw AppError.badRequest(
+                'An order ships by recording its carrier and tracking number: ' +
+                'POST /admin/orders/:orderId/shipment.',
+                ORDERS_ERROR_CODES.SHIPMENT_REQUIRED,
+            );
+        }
         if (order.status === to) {
             // Idempotent rather than an error — a double-clicked button should
             // not read as a failure.
@@ -218,22 +248,20 @@ export class OrderService {
             );
         }
 
-        // A parcel ships with a scanned, confirmed unit — otherwise the tag in
-        // the box may not be the one on the order, and the buyer can't claim it.
-        if (to === OrderStatus.SHIPPED && order.unitAssignedAt === null) {
-            throw AppError.badRequest(
-                'Scan the item going into this parcel before shipping it ' +
-                '(POST /admin/orders/:orderId/unit).',
-                ORDERS_ERROR_CODES.UNIT_NOT_ASSIGNED,
-            );
-        }
-
         const now = new Date();
         // Cancelling an unpaid order also releases its stock hold; every other
         // transition is a plain guarded status write.
         const changed =
             to === OrderStatus.CANCELLED
-                ? Number(await this.deps.writes.cancelUnpaid({ orderId: input.id, now }))
+                ? Number(
+                    await this.deps.writes.cancelUnpaid({
+                        orderId: input.id,
+                        now,
+                        source: 'ADMIN',
+                        actorId: input.actorId,
+                        reason: input.dto.reason ?? null,
+                    }),
+                )
                 : await this.deps.orders.changeStatus({
                     id: input.id,
                     from: order.status,
@@ -241,6 +269,8 @@ export class OrderService {
                     trackingNote: input.dto.trackingNote,
                     timestamps: timestampsFor(to, now),
                     now,
+                    actorId: input.actorId,
+                    reason: input.dto.reason ?? null,
                 });
 
         if (changed === 0) {
@@ -250,6 +280,16 @@ export class OrderService {
             );
         }
 
+        await this.deps.audit.record({
+            eventType: ORDERS_AUDIT_EVENTS.STATUS_CHANGE,
+            actor: { type: auditActorType(input.view), id: input.actorId },
+            result: 'SUCCESS',
+            organizationId: order.organizationId,
+            resource: { type: 'Order', id: input.id },
+            beforeState: { status: order.status },
+            afterState: { status: to, reason: input.dto.reason ?? null },
+            correlationId: randomUUID(),
+        });
         await this.deps.eventBus.publish(ORDER_EVENTS.STATUS_CHANGED, {
             orderId: input.id,
             from: order.status,

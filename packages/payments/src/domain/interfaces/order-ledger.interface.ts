@@ -58,7 +58,13 @@ export interface IOrderLedger {
     markFailed(input: { orderId: string; reason: string }): Promise<boolean>;
 
     /** Refund completed: order → REFUNDED. */
-    markRefunded(input: { orderId: string; refundedAt: Date }): Promise<boolean>;
+    markRefunded(input: {
+        orderId: string;
+        refundedAt: Date;
+        /** Recorded on the order's status history. */
+        refundRequestId?: string;
+        actorId?: string | null;
+    }): Promise<boolean>;
 
     /** The money facts a refund or a chargeback needs. */
     findOrderSummary(orderId: string): Promise<{
