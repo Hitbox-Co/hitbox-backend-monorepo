@@ -79,6 +79,12 @@ export interface IOrderLedger {
         gateway: string;
     } | null>;
 
+    /**
+     * The unit an unpaid order is still holding, if the hold has not expired
+     * — what resuming a checkout needs. Null once it has lapsed.
+     */
+    findLiveHold(orderId: string): Promise<{ reservationId: string; skuId: string; expiresAt: Date } | null>;
+
     /** Releases every hold that has passed its expiry. Returns how many. */
     releaseExpiredReservations(now: Date): Promise<number>;
 }

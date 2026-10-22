@@ -59,6 +59,21 @@ function strongestScope(
 
 export function buildPaymentAccess(principal: PaymentPrincipal): PaymentAccess {
     const read = strongestScope(principal, 'payment-royalty', 'read');
+    // A buyer holds no payment grant, only `order:*:own` — and still has to be
+    // able to raise a refund on their own order (`POST /refunds`). They get the
+    // narrowest access there is: OWN scope (their own orders only), no staff
+    // powers. Every admin payments route is separately guarded on
+    // `payment-royalty:*`, so this opens nothing beyond the buyer routes.
+    if (!read && (strongestScope(principal, 'order', 'create') || strongestScope(principal, 'order', 'read'))) {
+        return {
+            userId: principal.userId,
+            scope: PaymentScope.OWN,
+            organizationIds: [],
+            canManage: false,
+            canConfigure: false,
+            canRefund: strongestScope(principal, 'order', 'refund') === 'global',
+        };
+    }
     if (!read) {
         throw AppError.forbidden(
             'You do not have access to payment records.',

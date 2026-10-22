@@ -4,6 +4,7 @@ import type { PrismaClient } from '@hitbox/database';
 import { createModuleLogger } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import {
+    ORDER_CREATE_CAPABILITY,
     ORDER_EVENTS,
     ORDER_READ_CAPABILITY,
     ORDER_WRITE_CAPABILITY,
@@ -14,6 +15,10 @@ import type { OrderBuyerResolver } from './controller/order-shipment.controller'
 import type { IOrdersAuditRecorder } from './domain/interfaces/audit-recorder.port';
 import { OrderShipmentRepository } from './repository/order-shipment.repository';
 import { OrderShipmentService } from './service/order-shipment.service';
+import { BuyerOrderController } from './controller/buyer-order.controller';
+import { BuyerOrderRepository } from './repository/buyer-order.repository';
+import { BuyerOrderService } from './service/buyer-order.service';
+import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
 import { OrderFulfilmentController } from './controller/order-fulfilment.controller';
 import { OrderFulfilmentRepository } from './repository/order-fulfilment.repository';
 import { OrderFulfilmentService } from './service/order-fulfilment.service';
@@ -50,8 +55,10 @@ export interface OrdersModuleDeps {
     unpaidOrderGraceSeconds?: number;
     /** Admin status changes and tracking edits are audited through this. */
     audit: IOrdersAuditRecorder;
-    /** The signed-in buyer, for `GET /orders/:orderId/tracking`. */
+    /** The signed-in buyer, for the `/orders` buyer routes. */
     resolveBuyer: OrderBuyerResolver;
+    /** Product images on the buyer's order screens. Optional: without it, `imageUrl` is null. */
+    mediaUrls?: IMediaUrlResolver | undefined;
 }
 
 /** The claim event orders links back to the order. Matches @hitbox/claims. */
@@ -65,7 +72,7 @@ interface ClaimedEventPayload {
 export interface OrdersModule {
     /** Mounted at `/admin/orders`. */
     createRouter(requireAuth: RequestHandler): Router;
-    /** Mounted at `/orders`: the buyer's own order tracking. */
+    /** Mounted at `/orders`: the buyer's own orders (docs/orders/buyer-orders-api.md). */
     createBuyerRouter(requireAuth: RequestHandler): Router;
     /**
      * Payments' `IOrderLedger`: place an order, settle it, cancel it, refund
@@ -106,6 +113,16 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
         }),
         service,
         deps.resolveCaller,
+        deps.resolveBuyer,
+    );
+    const buyerOrders = new BuyerOrderController(
+        new BuyerOrderService({
+            orders: new BuyerOrderRepository(deps.prisma),
+            writes,
+            mediaUrls: deps.mediaUrls,
+            eventBus: deps.eventBus,
+            logger,
+        }),
         deps.resolveBuyer,
     );
     const checkoutSweep = new CheckoutSweepService({
@@ -250,12 +267,17 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
         createBuyerRouter(requireAuth) {
             const router = Router();
             router.use(requireAuth);
-            // Any scope of order:read; the service returns the order only to
-            // its own buyer (404 for anyone else's).
-            router.get(
-                '/:orderId/tracking',
-                deps.guard.requirePermission(ORDER_READ_CAPABILITY),
-                shipping.buyerTracking,
+            // Any scope of order:read / order:create; every service call is
+            // keyed on the caller's own buyer id, so another person's order is
+            // a 404 (docs/orders/buyer-orders-api.md).
+            const read = deps.guard.requirePermission(ORDER_READ_CAPABILITY);
+            router.get('/', read, buyerOrders.list);
+            router.get('/:orderId', read, buyerOrders.get);
+            router.get('/:orderId/tracking', read, shipping.buyerTracking);
+            router.post(
+                '/:orderId/cancel',
+                deps.guard.requirePermission(ORDER_CREATE_CAPABILITY),
+                buyerOrders.cancel,
             );
             return router;
         },

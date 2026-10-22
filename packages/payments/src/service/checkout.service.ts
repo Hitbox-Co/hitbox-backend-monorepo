@@ -171,4 +171,100 @@ export class CheckoutService {
             gatewayRef,
         };
     }
+
+    /**
+     * Back to the payment screen for an order the buyer already placed — they
+     * closed the tab, the app was killed, the card was declined and they want
+     * to try another. Same order, same held unit, same charge: the original
+     * idempotency key makes the provider hand back the *same* intent, so this
+     * can never create a second charge. docs/orders/buyer-orders-api.md.
+     *
+     * Only while the order is unpaid and its hold is live; after that the
+     * piece may have gone to someone else and the buyer starts a new checkout.
+     */
+    async resume(orderId: string, buyerId: string): Promise<CheckoutView> {
+        const order = await this.deps.orders.findOrderSummary(orderId);
+        if (!order || order.buyerId !== buyerId) {
+            throw AppError.notFound('Order not found.', PAYMENTS_ERROR_CODES.NOT_FOUND);
+        }
+        if (order.status !== 'PENDING_PAYMENT') {
+            throw AppError.conflict(
+                order.status === 'CANCELLED'
+                    ? 'This order was cancelled. Start a new checkout.'
+                    : 'This order has already been paid.',
+                PAYMENTS_ERROR_CODES.ORDER_NOT_PAYABLE,
+                { status: order.status },
+            );
+        }
+        const hold = await this.deps.orders.findLiveHold(orderId);
+        if (!hold) {
+            throw AppError.conflict(
+                'The time to pay for this order has run out and the piece has been released. Start a new checkout.',
+                PAYMENTS_ERROR_CODES.RESERVATION_EXPIRED,
+            );
+        }
+
+        const transaction = (await this.deps.payments.findByOrder(orderId))
+            .find((t) => t.status === 'INITIATED' || t.status === 'PENDING');
+        if (!transaction) {
+            throw AppError.conflict(
+                'This order has no open payment attempt. Start a new checkout.',
+                PAYMENTS_ERROR_CODES.ORDER_NOT_PAYABLE,
+            );
+        }
+
+        let clientToken: string | null = null;
+        let gatewayRef = transaction.gatewayRef;
+        let status = transaction.status;
+        if (this.deps.gateway) {
+            const config = await this.deps.gatewayConfigs.resolve({
+                gateway: transaction.gateway,
+                organizationId: order.organizationId,
+            });
+            if (!config) {
+                throw AppError.badRequest(
+                    'No active payment configuration exists for this drop.',
+                    PAYMENTS_ERROR_CODES.NO_GATEWAY,
+                    { gateway: transaction.gateway },
+                );
+            }
+            const charge = await this.deps.gateway
+                .createCharge({
+                    orderId,
+                    paymentTransactionId: transaction.id,
+                    amount: order.amount,
+                    currency: order.currency,
+                    idempotencyKey: transaction.idempotencyKey,
+                    buyerId,
+                    credentialsRef: config.credentialsRef,
+                    metadata: { orderId, skuId: hold.skuId },
+                })
+                .catch((error: unknown) => gatewayFailure(error, 'resume this payment'));
+            clientToken = charge.clientToken;
+            gatewayRef = charge.gatewayRef;
+            if (status === 'INITIATED') {
+                await this.deps.payments.transition({
+                    id: transaction.id,
+                    from: 'INITIATED',
+                    data: { status: 'PENDING', gatewayRef: charge.gatewayRef },
+                });
+                status = 'PENDING';
+            }
+        }
+
+        this.deps.logger.info({ orderId, transactionId: transaction.id }, 'checkout resumed');
+        return {
+            orderId,
+            paymentTransactionId: transaction.id,
+            skuId: hold.skuId,
+            reservationId: hold.reservationId,
+            reservationExpiresAt: hold.expiresAt.toISOString(),
+            amount: order.amount,
+            currency: order.currency,
+            gateway: transaction.gateway,
+            status,
+            clientToken,
+            gatewayRef,
+        };
+    }
 }

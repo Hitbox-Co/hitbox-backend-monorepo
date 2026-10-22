@@ -86,6 +86,10 @@ export class OrderLedgerAdapter {
         };
     }
 
+    findLiveHold(orderId: string) {
+        return this.orders.findLiveHold(orderId);
+    }
+
     releaseExpiredReservations(now: Date): Promise<number> {
         return this.orders.releaseExpiredReservations(now);
     }

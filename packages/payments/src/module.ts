@@ -199,6 +199,13 @@ export function createPaymentsModule(deps: PaymentsModuleDeps): PaymentsModule {
                 requirePermission(ORDER_CREATE_CAPABILITY),
                 controller.checkout,
             );
+            // Back to paying for an order the buyer already placed (same
+            // order, same hold, same charge). docs/orders/buyer-orders-api.md
+            router.post(
+                '/checkout/:orderId/resume',
+                requirePermission(ORDER_CREATE_CAPABILITY),
+                controller.resumeCheckout,
+            );
             // A buyer raising a refund on their own order needs no operator
             // grant; the service checks ownership and demands `order:refund`
             // only when the requester is not the buyer.

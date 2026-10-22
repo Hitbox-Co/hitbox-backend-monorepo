@@ -118,6 +118,10 @@ order, or a second tap, changes nothing. `deliveredAt` is the moment of the tap.
 
 ## 5. Buyer: `GET /orders/:orderId/tracking`
 
+> All buyer-facing order APIs (my orders, detail, cancel, resume payment,
+> refunds, invoices) are documented together in
+> [buyer-orders-api.md](buyer-orders-api.md).
+
 🔒 any `order:read` (buyers have `order:read:own`). Returns the order **only
 to its buyer**; anyone else gets `404`.
 

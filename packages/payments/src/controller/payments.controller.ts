@@ -55,6 +55,12 @@ export class PaymentsController {
         res.status(201).json({ data: await this.deps.checkout.checkout(dto, buyerId) });
     });
 
+    /** POST /checkout/:orderId/resume — back to paying for an unpaid order. */
+    resumeCheckout: RequestHandler = asyncHandler(async (req, res) => {
+        const buyerId = this.deps.resolveBuyer(req);
+        res.json({ data: await this.deps.checkout.resume(req.params.orderId as string, buyerId) });
+    });
+
     /** POST /refunds — a buyer on their own order, or support on any. */
     requestRefund: RequestHandler = asyncHandler(async (req, res) => {
         const dto = requestRefundSchema.parse(req.body);

@@ -44,6 +44,8 @@ export const ORDERS_ERROR_CODES = {
     TRACKING_IN_USE: 'ORDERS_TRACKING_IN_USE',
 } as const;
 
+/** The buyer's own-order actions (cancelling an unpaid order). Buyers hold it at `own` scope. */
+export const ORDER_CREATE_CAPABILITY = 'order:create' as const;
 /** Reading the order list and detail. */
 export const ORDER_READ_CAPABILITY = 'order:read' as const;
 /** Changing an order's status. Fulfilment is an operator action, not a global-only one. */

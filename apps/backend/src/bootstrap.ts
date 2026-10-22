@@ -400,6 +400,7 @@ export function bootstrap(): Bootstrapped {
         // Deferred: the audit module is built further down. Only called at
         // request time, long after bootstrap has finished.
         audit: { record: (input, options) => auditModule.recorder.record(input, options) },
+        mediaUrls,
         resolveBuyer: (req: Request) => req.auth?.accountId as string,
     });
 

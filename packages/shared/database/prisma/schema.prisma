@@ -1903,6 +1903,8 @@ enum OrderStatusSource {
   NFC_CLAIM
   REFUND
   CHECKOUT_SWEEP
+  /// The buyer cancelled their own unpaid order.
+  BUYER
   /// Rows written by the migration for orders that predate history.
   BACKFILL
 }

@@ -9,6 +9,8 @@ export const PAYMENTS_ERROR_CODES = {
     OUT_OF_STOCK: 'PAYMENTS_OUT_OF_STOCK',
     /** No price is configured for the buyer's market. */
     NO_PRICE: 'PAYMENTS_NO_PRICE',
+    /** Resuming payment on an order that is not awaiting payment. */
+    ORDER_NOT_PAYABLE: 'PAYMENTS_ORDER_NOT_PAYABLE',
     /** The hold expired before payment settled. */
     RESERVATION_EXPIRED: 'PAYMENTS_RESERVATION_EXPIRED',
     /** Webhook signature missing, malformed, or wrong. */

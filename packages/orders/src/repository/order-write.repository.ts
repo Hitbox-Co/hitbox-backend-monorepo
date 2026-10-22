@@ -505,7 +505,7 @@ export class OrderWriteRepository {
     async cancelUnpaid(input: {
         orderId: string;
         now: Date;
-        source: 'ADMIN' | 'CHECKOUT_SWEEP';
+        source: 'ADMIN' | 'CHECKOUT_SWEEP' | 'BUYER';
         actorId?: string | null;
         reason?: string | null;
     }): Promise<boolean> {
@@ -546,6 +546,16 @@ export class OrderWriteRepository {
             take: limit,
         });
         return rows.map((row) => row.id);
+    }
+
+    /** The unexpired hold of an order, if it has one — for resuming a checkout. */
+    async findLiveHold(orderId: string): Promise<{ reservationId: string; skuId: string; expiresAt: Date } | null> {
+        const hold = await this.prisma.inventoryReservation.findFirst({
+            where: { orderId, status: 'HELD', expiresAt: { gt: new Date() } },
+            orderBy: { createdAt: 'desc' },
+            select: { id: true, skuId: true, expiresAt: true },
+        });
+        return hold ? { reservationId: hold.id, skuId: hold.skuId, expiresAt: hold.expiresAt } : null;
     }
 
     /** The sweeper: every hold past its expiry goes back on sale. */
