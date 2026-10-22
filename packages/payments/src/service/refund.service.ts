@@ -16,7 +16,9 @@ import type {
     IRoyaltyReversal,
 } from '../domain/interfaces/finance-postings.interface';
 import type { IOrderLedger } from '../domain/interfaces/order-ledger.interface';
-import type { IPaymentGateway } from '../domain/interfaces/payment-gateway.interface';
+import type { CreateRefundResult, IPaymentGateway } from '../domain/interfaces/payment-gateway.interface';
+import { gatewayFailure } from '../domain/gateway-error';
+import { toMinorUnits } from '../domain/minor-units';
 import type { PaymentAccess } from '../domain/payment-access';
 import { PaymentScope, requireRefund } from '../domain/payment-access';
 import {
@@ -50,6 +52,23 @@ export interface RefundServiceDeps {
     eventBus: IEventBus;
     audit: IPaymentsAuditRecorder;
     logger: Logger;
+}
+
+/** A provider refund object, as the webhook hands it over. */
+export interface GatewayRefundUpdate {
+    /** The provider event type — `refund.created`, `refund.updated`, `refund.failed`. */
+    eventType: string;
+    gatewayRefundId: string;
+    status: 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED';
+    failureReason: string | null;
+    /** `metadata.refundRequestId` — present on refunds this platform issued. */
+    refundRequestId: string | null;
+    /** The charge it refunds: PaymentIntent and/or Charge ids. */
+    paymentRefs: string[];
+    /** In minor units, as the provider reports it. */
+    amountMinor: number | null;
+    occurredAt: Date;
+    correlationId: string;
 }
 
 /**
@@ -364,6 +383,7 @@ export class RefundService {
         id: string,
         dto: ProcessRefundDto,
         access: PaymentAccess,
+        options: { issuedVia?: 'OPERATOR' | 'PROVIDER_DASHBOARD' } = {},
     ): Promise<RefundView> {
         requireRefund(access, 'execute refunds');
         const refund = await this.requireInScope(id, access);
@@ -383,6 +403,7 @@ export class RefundService {
 
         // 1. Move the money.
         let gatewayRefundId = dto.gatewayRefundId ?? null;
+        let issued: CreateRefundResult | null = null;
         if (!gatewayRefundId) {
             const settled = await this.deps.payments.findSettledForOrder(refund.orderId);
             if (!this.deps.gateway) {
@@ -407,17 +428,29 @@ export class RefundService {
                     PAYMENTS_ERROR_CODES.NO_GATEWAY,
                 );
             }
-            const result = await this.deps.gateway.createRefund({
-                paymentGatewayRef: settled.gatewayRef,
-                amount: refund.amount.toFixed(2),
-                currency: refund.currency,
-                // Keyed on the refund request, so a retried execute cannot
-                // send the money twice.
-                idempotencyKey: `refund:${refund.id}`,
-                credentialsRef: config.credentialsRef,
-                reason: refund.reason,
-            });
+            // A provider failure throws before anything here is written, so
+            // the refund stays APPROVED and the button can simply be pressed
+            // again.
+            const result = await this.deps.gateway
+                .createRefund({
+                    paymentGatewayRef: settled.gatewayRef,
+                    amount: refund.amount.toFixed(2),
+                    currency: refund.currency,
+                    // Keyed on the refund request, so a retried execute cannot
+                    // send the money twice.
+                    idempotencyKey: `refund:${refund.id}`,
+                    credentialsRef: config.credentialsRef,
+                    reason: refund.reason,
+                    reasonCode: refund.reasonCode,
+                    metadata: { refundRequestId: refund.id, orderId: refund.orderId },
+                })
+                .catch((error: unknown) => gatewayFailure(error, 'issue this refund'));
             gatewayRefundId = result.gatewayRefundId;
+            issued = result;
+            this.deps.logger.info(
+                { refundRequestId: id, gatewayRefundId, settled: result.settled },
+                'refund issued through the payment provider',
+            );
         }
 
         // 2. Lock the request. Guarded: two operators pressing execute produce
@@ -441,6 +474,18 @@ export class RefundService {
                 'This refund was already executed.',
                 PAYMENTS_ERROR_CODES.INVALID_TRANSITION,
             );
+        }
+
+        // The provider's first word on the money. Only over nothing: the
+        // `refund.created` webhook can beat this line, and it knows better.
+        if (issued) {
+            await this.deps.refunds.setGatewayStatus({
+                id,
+                status: issued.settled ? 'SUCCEEDED' : 'PENDING',
+                failureReason: null,
+                at: processedAt,
+                onlyIfUnset: true,
+            });
         }
 
         // 3. The order.
@@ -514,6 +559,7 @@ export class RefundService {
                 nfcTagCondition: nfcCondition,
                 resaleBlockedUntil: blockedUntil?.toISOString() ?? null,
                 claimRevokedAt: claimRevokedAt?.toISOString() ?? null,
+                issuedVia: issued ? 'GATEWAY_ADAPTER' : (options.issuedVia ?? 'OPERATOR'),
             },
             correlationId,
         });
@@ -529,37 +575,191 @@ export class RefundService {
         return this.getById(id, access);
     }
 
+    // ── 5. What the provider says afterwards ────────────────────────────────
+
     /**
-     * The provider confirmed a refund that was initiated elsewhere (its own
-     * dashboard, or asynchronously). Fills in the settlement timestamp without
-     * re-running the workflow.
+     * A `refund.*` webhook: the provider's view of a refund's money.
+     *
+     * Three cases:
+     *
+     *   **A refund this platform knows** (by the `refundRequestId` the adapter
+     *   put in metadata, or by `gatewayRefundId`) — record the provider status.
+     *   FAILED / CANCELED after PROCESSED is the dangerous one: the order says
+     *   REFUNDED and the buyer has no money. Nothing is rolled back
+     *   automatically — the claim was revoked and the royalty reversed on
+     *   purpose, and undoing those by webhook is worse than a person deciding —
+     *   so it is flagged (`gatewayStatus` FAILED), audited, logged at error and
+     *   published as `payments.refund.failed` for an operator.
+     *
+     *   **A refund issued in the provider's dashboard** for an order whose
+     *   refund is APPROVED and not yet paid, for the same amount — that is an
+     *   operator who paid it out there instead of pressing Process. It is
+     *   processed now, exactly as Process would, as the approver.
+     *
+     *   **Anything else** (no approved refund, different amount) — money left
+     *   outside the workflow. Audited and published as
+     *   `payments.refund.unmatched` once, on `refund.created`; never acted on.
      */
-    async confirmSettlementFromGateway(input: {
-        gatewayRefundId: string;
-        processedAt: Date;
-        correlationId: string;
-    }): Promise<void> {
-        const { items } = await this.deps.refunds.list({
-            page: 1,
-            limit: 1,
-            scopeFilter: { gatewayRefundId: input.gatewayRefundId },
-            skip: 0,
-            take: 1,
-        });
-        const refund = items[0];
+    async applyGatewayRefundUpdate(update: GatewayRefundUpdate): Promise<void> {
+        let refund = update.refundRequestId
+            ? await this.deps.refunds.findById(update.refundRequestId)
+            : null;
+        // Metadata is only a hint: it must agree with a recorded provider id.
+        if (refund?.gatewayRefundId && refund.gatewayRefundId !== update.gatewayRefundId) refund = null;
+        refund ??= await this.deps.refunds.findByGatewayRefundId(update.gatewayRefundId);
+
         if (!refund) {
+            await this.matchProviderIssuedRefund(update);
+            return;
+        }
+
+        const changed = await this.deps.refunds.setGatewayStatus({
+            id: refund.id,
+            status: update.status,
+            failureReason: update.failureReason,
+            at: update.occurredAt,
+        });
+        if (changed === 0) return; // already knew — a retried or out-of-order delivery
+
+        if (update.status === 'FAILED' || update.status === 'CANCELED') {
+            await this.flagFailedRefund(refund, update);
+        } else {
             this.deps.logger.info(
-                { gatewayRefundId: input.gatewayRefundId },
-                'refund webhook referenced a refund this platform did not initiate',
+                { refundRequestId: refund.id, gatewayRefundId: update.gatewayRefundId, gatewayStatus: update.status },
+                'provider refund status updated',
+            );
+        }
+    }
+
+    private async flagFailedRefund(refund: RefundRequest, update: GatewayRefundUpdate): Promise<void> {
+        this.deps.logger.error(
+            {
+                refundRequestId: refund.id,
+                orderId: refund.orderId,
+                gatewayRefundId: update.gatewayRefundId,
+                gatewayStatus: update.status,
+                failureReason: update.failureReason,
+                workflowStatus: refund.status,
+            },
+            'provider refund FAILED — the buyer was not paid back; manual action required',
+        );
+        await this.deps.audit.record({
+            eventType: PAYMENTS_AUDIT_EVENTS.REFUND_PROCESS,
+            actor: { type: 'SYSTEM', id: null },
+            result: 'FAILURE',
+            resource: { type: 'RefundRequest', id: refund.id },
+            beforeState: { gatewayStatus: refund.gatewayStatus },
+            afterState: {
+                gatewayStatus: update.status,
+                gatewayRefundId: update.gatewayRefundId,
+                failureReason: update.failureReason,
+                workflowStatus: refund.status,
+            },
+            correlationId: update.correlationId,
+        });
+        await this.deps.eventBus.publish(PAYMENT_EVENTS.REFUND_FAILED, {
+            refundRequestId: refund.id,
+            orderId: refund.orderId,
+            amount: refund.amount.toFixed(2),
+            currency: refund.currency,
+            gatewayRefundId: update.gatewayRefundId,
+            gatewayStatus: update.status,
+            failureReason: update.failureReason,
+        });
+    }
+
+    private async matchProviderIssuedRefund(update: GatewayRefundUpdate): Promise<void> {
+        if (update.status === 'FAILED' || update.status === 'CANCELED') {
+            this.deps.logger.warn(
+                { gatewayRefundId: update.gatewayRefundId, gatewayStatus: update.status },
+                'provider reported a failed refund this platform has no record of',
             );
             return;
         }
-        if (refund.processedAt) return;
 
-        await this.deps.refunds.transition({
-            id: refund.id,
-            from: refund.status,
-            data: { processedAt: input.processedAt },
+        let payment = null;
+        for (const ref of update.paymentRefs) {
+            payment = await this.deps.payments.findByGatewayRef(ref);
+            if (payment) break;
+        }
+        if (!payment) {
+            this.deps.logger.info(
+                { gatewayRefundId: update.gatewayRefundId, paymentRefs: update.paymentRefs },
+                'refund webhook for a charge this platform does not know',
+            );
+            return;
+        }
+
+        const candidate = await this.deps.refunds.findApprovedUnissuedForOrder(payment.orderId);
+        const amountMatches =
+            candidate !== null &&
+            (update.amountMinor === null ||
+                update.amountMinor === toMinorUnits(candidate.amount.toFixed(2), candidate.currency));
+
+        if (candidate?.approvedById && amountMatches) {
+            const access: PaymentAccess = {
+                userId: candidate.approvedById,
+                scope: PaymentScope.GLOBAL,
+                organizationIds: null,
+                canManage: false,
+                canConfigure: false,
+                canRefund: true,
+            };
+            try {
+                await this.process(
+                    candidate.id,
+                    { gatewayRefundId: update.gatewayRefundId, processedAt: update.occurredAt },
+                    access,
+                    { issuedVia: 'PROVIDER_DASHBOARD' },
+                );
+            } catch (error) {
+                // An operator pressed Process with the same id at the same
+                // moment; theirs won, and the status below still applies.
+                if (!(error instanceof AppError && error.statusCode === 409)) throw error;
+            }
+            await this.deps.refunds.setGatewayStatus({
+                id: candidate.id,
+                status: update.status,
+                failureReason: null,
+                at: update.occurredAt,
+            });
+            this.deps.logger.info(
+                { refundRequestId: candidate.id, gatewayRefundId: update.gatewayRefundId },
+                'refund issued in the provider dashboard — processed against the approved request',
+            );
+            return;
+        }
+
+        if (update.eventType !== 'refund.created') return; // alert once, not on every update
+        const reason = candidate ? 'AMOUNT_MISMATCH' : 'NO_APPROVED_REFUND';
+        this.deps.logger.warn(
+            {
+                orderId: payment.orderId,
+                gatewayRefundId: update.gatewayRefundId,
+                amountMinor: update.amountMinor,
+                approvedRefundId: candidate?.id ?? null,
+                reason,
+            },
+            'refund issued at the provider with no matching approved refund — review',
+        );
+        await this.deps.audit.record({
+            eventType: PAYMENTS_AUDIT_EVENTS.ORDER_REFUND,
+            actor: { type: 'SYSTEM', id: null },
+            result: 'FAILURE',
+            resource: { type: 'Order', id: payment.orderId },
+            afterState: {
+                gatewayRefundId: update.gatewayRefundId,
+                amountMinor: update.amountMinor,
+                reason,
+                approvedRefundId: candidate?.id ?? null,
+            },
+            correlationId: update.correlationId,
+        });
+        await this.deps.eventBus.publish(PAYMENT_EVENTS.REFUND_UNMATCHED, {
+            orderId: payment.orderId,
+            gatewayRefundId: update.gatewayRefundId,
+            amountMinor: update.amountMinor,
+            reason,
         });
     }
 
@@ -631,6 +831,9 @@ export class RefundService {
             approvedAt: row.approvedAt?.toISOString() ?? null,
             rejectionReason: row.rejectionReason,
             gatewayRefundId: row.gatewayRefundId,
+            gatewayStatus: row.gatewayStatus,
+            gatewayFailureReason: row.gatewayFailureReason,
+            gatewayStatusAt: row.gatewayStatusAt?.toISOString() ?? null,
             processedAt: row.processedAt?.toISOString() ?? null,
             claimRevokedAt: row.claimRevokedAt?.toISOString() ?? null,
             resaleBlockedUntil: row.resaleBlockedUntil?.toISOString() ?? null,

@@ -13,6 +13,7 @@
  *   D  AWAITING_RETURN  item back, tag DAMAGED (claimed)  → approve + process tests resale block
  *   E  APPROVED         approved by override (lost parcel) → ready to process
  *   F  REJECTED         history only
+ *   G  PROCESSED        then FAILED at Stripe (gatewayStatus) — reuses a demo refund
  *
  * It also lists untouched orders you can start a NEW refund on from the order
  * page. Re-running uses the next orders without refunds, until none are left.
@@ -150,6 +151,33 @@ async function main(): Promise<void> {
         console.log(`     next:  ${c.next}`);
     }
 
+    // G — a refund that was PROCESSED and then failed at Stripe (closed card).
+    // Reuses a demo refund that is already PROCESSED, because a failed refund
+    // only exists after the whole process step ran (order REFUNDED, claim
+    // revoked…), which this seed does not fake. Only the provider status
+    // changes; re-running leaves an existing G alone.
+    const existingG = await prisma.refundRequest.findFirst({
+        where: { status: 'PROCESSED', gatewayStatus: 'FAILED' },
+        select: { id: true, orderId: true },
+    });
+    const g = existingG ?? await prisma.refundRequest.findFirst({
+        where: { status: 'PROCESSED', OR: [{ gatewayStatus: 'SUCCEEDED' }, { gatewayStatus: null }] },
+        orderBy: { processedAt: 'desc' },
+        select: { id: true, orderId: true },
+    });
+    if (g && !existingG) {
+        await prisma.refundRequest.update({
+            where: { id: g.id },
+            data: { gatewayStatus: 'FAILED', gatewayFailureReason: 'expired_or_canceled_card', gatewayStatusAt: daysAgo(0.2) },
+        });
+    }
+    if (g) {
+        console.log(`\n  G  PROCESSED but Stripe FAILED (gatewayStatus=FAILED, expired_or_canceled_card)`);
+        console.log(`     refund ${g.id}`);
+        console.log(`     order  ${g.orderId}`);
+        console.log('     next:  nothing to press — the UI should show "Refund failed — buyer not paid" (money.refundFailed > 0)');
+    }
+
     // Orders to start a brand-new refund on, from the order page.
     const fresh = await prisma.order.findMany({
         where: { status: { in: ['DELIVERED', 'SHIPPED', 'PROCESSING', 'PAID'] }, refundRequests: { none: {} }, id: { notIn: [...used] } },
@@ -159,7 +187,8 @@ async function main(): Promise<void> {
     });
     console.log('\n  Start a NEW refund on (order page → Refund):');
     for (const o of fresh) console.log(`     ${o.status.padEnd(10)} ${o.id}  ${o.drop.name} — ${o.amount.toFixed(2)} ${o.currency}`);
-    console.log('\n  No payment provider is wired: when processing, send { "gatewayRefundId": "re_test_…" }.');
+    console.log('\n  Processing: with STRIPE_SECRET_KEY set, run `pnpm db:stripe:test-charges` first, then Process with {}.');
+    console.log('  Without a Stripe key, send { "gatewayRefundId": "re_test_…" }.');
 }
 
 main()

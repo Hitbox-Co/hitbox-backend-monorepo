@@ -8,6 +8,7 @@ import {
     PAYMENT_EVENTS,
 } from '../constants/payments.constant';
 import type { IPaymentGateway } from '../domain/interfaces/payment-gateway.interface';
+import { gatewayFailure } from '../domain/gateway-error';
 import type { IOrderLedger } from '../domain/interfaces/order-ledger.interface';
 import type { GatewayConfigRepository } from '../repository/gateway-config.repository';
 import type { PaymentRepository } from '../repository/payment.repository';
@@ -101,28 +102,39 @@ export class CheckoutService {
         // 4. Ask the provider to create the charge, if an adapter is wired.
         //    Without one the client completes payment through the provider's
         //    own hosted flow and the webhook is what settles the order.
+        //
+        //    Also on a retry while the charge is still open: the idempotency
+        //    key makes the provider hand back the same intent, so a client that
+        //    lost the first response still gets its client token, and a first
+        //    attempt that failed at the provider is simply made again.
         let gatewayRef: string | null = transaction.gatewayRef;
         let clientToken: string | null = null;
+        let status = transaction.status;
 
-        if (created && this.deps.gateway) {
-            const charge = await this.deps.gateway.createCharge({
-                orderId: placed.orderId,
-                paymentTransactionId: transaction.id,
-                amount: placed.amount,
-                currency: placed.currency,
-                idempotencyKey,
-                buyerId,
-                credentialsRef: config.credentialsRef,
-                metadata: { orderId: placed.orderId, skuId: placed.skuId },
-            });
+        if (this.deps.gateway && (status === 'INITIATED' || status === 'PENDING')) {
+            const charge = await this.deps.gateway
+                .createCharge({
+                    orderId: placed.orderId,
+                    paymentTransactionId: transaction.id,
+                    amount: placed.amount,
+                    currency: placed.currency,
+                    idempotencyKey,
+                    buyerId,
+                    credentialsRef: config.credentialsRef,
+                    metadata: { orderId: placed.orderId, skuId: placed.skuId },
+                })
+                .catch((error: unknown) => gatewayFailure(error, 'start this payment'));
             gatewayRef = charge.gatewayRef;
             clientToken = charge.clientToken;
 
-            await this.deps.payments.transition({
-                id: transaction.id,
-                from: 'INITIATED',
-                data: { status: 'PENDING', gatewayRef: charge.gatewayRef },
-            });
+            if (status === 'INITIATED') {
+                await this.deps.payments.transition({
+                    id: transaction.id,
+                    from: 'INITIATED',
+                    data: { status: 'PENDING', gatewayRef: charge.gatewayRef },
+                });
+                status = 'PENDING';
+            }
         }
 
         await this.deps.eventBus.publish(PAYMENT_EVENTS.CHECKOUT_STARTED, {
@@ -154,7 +166,7 @@ export class CheckoutService {
             amount: placed.amount,
             currency: placed.currency,
             gateway: dto.gateway,
-            status: this.deps.gateway && created ? 'PENDING' : transaction.status,
+            status,
             clientToken,
             gatewayRef,
         };

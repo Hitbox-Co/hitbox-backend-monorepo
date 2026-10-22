@@ -20,6 +20,57 @@ export class RefundRepository {
         });
     }
 
+    findByGatewayRefundId(gatewayRefundId: string): Promise<RefundRequest | null> {
+        return this.prisma.refundRequest.findFirst({ where: { gatewayRefundId } });
+    }
+
+    /**
+     * The approved refund on an order that has not been paid out yet — what a
+     * refund issued in the provider's dashboard is matched against.
+     */
+    findApprovedUnissuedForOrder(orderId: string): Promise<RefundRequest | null> {
+        return this.prisma.refundRequest.findFirst({
+            where: { orderId, status: 'APPROVED', gatewayRefundId: null },
+            orderBy: { approvedAt: 'desc' },
+        });
+    }
+
+    /**
+     * Records what the provider said about the money, never going backwards.
+     *
+     * Webhooks arrive out of order and more than once, and the synchronous
+     * answer to `process` races the first webhook. So: PENDING is written only
+     * over nothing; a terminal status (SUCCEEDED / FAILED / CANCELED) is
+     * written over anything different — Stripe can move a refund from
+     * succeeded to failed. `onlyIfUnset` is for `process`'s own first write,
+     * which must not overwrite a webhook that got there first.
+     *
+     * Returns the number of rows changed: 0 means "already knew", which is
+     * what keeps a retried webhook from alerting twice.
+     */
+    async setGatewayStatus(input: {
+        id: string;
+        status: 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED';
+        failureReason: string | null;
+        at: Date;
+        onlyIfUnset?: boolean;
+    }): Promise<number> {
+        const guard: Prisma.RefundRequestWhereInput =
+            input.onlyIfUnset || input.status === 'PENDING'
+                ? { gatewayStatus: null }
+                : { OR: [{ gatewayStatus: null }, { gatewayStatus: { not: input.status } }] };
+        const result = await this.prisma.refundRequest.updateMany({
+            where: { id: input.id, ...guard },
+            data: {
+                gatewayStatus: input.status,
+                gatewayFailureReason: input.failureReason,
+                gatewayStatusAt: input.at,
+                updatedAt: new Date(),
+            },
+        });
+        return result.count;
+    }
+
     create(data: Prisma.RefundRequestUncheckedCreateInput): Promise<RefundRequest> {
         return this.prisma.refundRequest.create({ data });
     }
@@ -57,6 +108,7 @@ export class RefundRepository {
             ...(query.orderId ? { orderId: query.orderId } : {}),
             ...(query.status ? { status: query.status } : {}),
             ...(query.reasonCode ? { reasonCode: query.reasonCode } : {}),
+            ...(query.gatewayStatus ? { gatewayStatus: query.gatewayStatus } : {}),
             ...(query.from || query.to
                 ? {
                     createdAt: {

@@ -85,6 +85,7 @@ const detailSelect = {
             id: true, status: true, amount: true, currency: true, reason: true, reasonCode: true,
             physicalReturnRequired: true, physicalReturnConfirmedAt: true, nfcTagCondition: true,
             approvedAt: true, rejectionReason: true, gatewayRefundId: true, processedAt: true,
+            gatewayStatus: true, gatewayFailureReason: true, gatewayStatusAt: true,
             claimRevokedAt: true, createdAt: true, updatedAt: true,
         },
     },

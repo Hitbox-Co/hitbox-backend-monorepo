@@ -3,12 +3,12 @@ import { Router } from 'express';
 import type { Request } from 'express';
 import { prisma, OrganizationType } from '@hitbox/database';
 import type { Prisma } from '@hitbox/database';
-import { eventBus, env } from '@hitbox/shared';
+import { createModuleLogger, eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
 import { createAccessControlModule } from '@hitbox/access-control';
 import { createAuditModule, correlationIdOf } from '@hitbox/audit';
 import { buildFinanceAccess, createFinanceModule } from '@hitbox/finance';
-import { buildPaymentAccess, createPaymentsModule } from '@hitbox/payments';
+import { buildPaymentAccess, createPaymentsModule, createStripeGateway } from '@hitbox/payments';
 import { createDashboardModule } from '@hitbox/dashboard';
 import { createMediaModule, isPublicKey, S3ObjectStorage } from '@hitbox/media';
 import { createUsersModule } from '@hitbox/users';
@@ -32,6 +32,7 @@ import {
     supplierProfilesFromEnv,
 } from '@hitbox/tax';
 import { createLeadsModule } from '@hitbox/leads';
+import { createStripeSecrets } from './adapters/stripe-secrets';
 import { createTagCipher } from './adapters/tag-cipher';
 import { buildRoutes } from './routes';
 
@@ -591,15 +592,30 @@ export function bootstrap(): Bootstrapped {
     });
 
     /**
-     * Payments. No gateway adapter is wired on this deployment: the platform
-     * records the order and the pending charge, the buyer completes payment in
-     * the provider's own flow, and the *webhook* is what settles the order —
-     * which is how card payments actually work, and the only statement about
-     * money this system treats as authoritative. Refunds are issued in the
-     * provider's dashboard and their reference supplied to `/process`.
+     * Payments. The Stripe adapter is wired when a Stripe secret key is present
+     * (STRIPE_SECRET_KEY, or STRIPE_SECRET_KEY_<NAME> for an org on its own
+     * account — see adapters/stripe-secrets.ts). With it, checkout creates the
+     * PaymentIntent and refund `/process` issues the refund in Stripe itself.
+     *
+     * Without a key nothing changes from before: the platform records the order
+     * and the pending charge, the buyer pays through the provider's own flow,
+     * and refunds are issued in the dashboard with their reference supplied to
+     * `/process`. Either way the *webhook* is what settles an order — the only
+     * statement about money this system treats as authoritative.
      *
      * Without STRIPE_WEBHOOK_SECRET the webhook route is not mounted at all.
      */
+    const paymentsLogger = createModuleLogger('payments');
+    const stripeSecrets = createStripeSecrets(env, process.env, (message) => paymentsLogger.warn(message));
+    const paymentGateway = stripeSecrets.configured
+        ? createStripeGateway({ resolveSecretKey: stripeSecrets.resolve })
+        : undefined;
+    paymentsLogger.info(
+        { gateway: paymentGateway ? 'STRIPE' : null },
+        paymentGateway
+            ? 'Stripe adapter wired — checkout and refund processing call Stripe'
+            : 'no payment gateway adapter — refunds need a gatewayRefundId from the dashboard',
+    );
     const paymentsModule = createPaymentsModule({
         prisma,
         eventBus,
@@ -609,6 +625,7 @@ export function bootstrap(): Bootstrapped {
         finance: financeModule.postings,
         royalties: financeModule.royaltyReversal,
         claims: claimsModule.revocation,
+        gateway: paymentGateway,
         webhookSigningSecret: env.STRIPE_WEBHOOK_SECRET,
         webhookToleranceSeconds: env.PAYMENT_WEBHOOK_TOLERANCE_SECONDS,
         holdSeconds: env.INVENTORY_HOLD_SECONDS,

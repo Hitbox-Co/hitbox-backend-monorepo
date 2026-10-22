@@ -156,7 +156,7 @@ not by hoping the provider tries again.
 | --- | --- |
 | `payment_intent.succeeded`, `charge.succeeded` | `PaymentService.settle` — order PAID, stock committed, revenue booked |
 | `payment_intent.payment_failed`, `charge.failed` | `PaymentService.fail` — order CANCELLED, hold released |
-| `charge.refunded`, `refund.updated` | Fills in `processedAt` on a refund initiated elsewhere |
+| `refund.created`, `refund.updated`, `refund.failed` | Updates the refund's `gatewayStatus` (never backwards); a FAILED/CANCELED refund is flagged, audited and published as `payments.refund.failed`; a refund issued in the Stripe dashboard is matched to the order's APPROVED refund and processed. See [stripe-adapter.md §6](stripe-adapter.md#6-refund-webhooks--what-happens-after-process) |
 | `charge.dispute.created` | Opens a `DisputeCase` |
 | `charge.dispute.closed` | Resolves it; a loss books the chargeback and reverses the royalty |
 | anything else | Recorded, acknowledged, ignored |
@@ -165,9 +165,15 @@ That last row matters: an endpoint that 400s on an event type it did not ask for
 is an endpoint the provider eventually disables, taking the events that matter
 with it.
 
-## Running without a gateway adapter
+## Running with or without a gateway adapter
 
-`IPaymentGateway` is optional, and this deployment wires none.
+`IPaymentGateway` is optional. The Stripe adapter is wired when
+`STRIPE_SECRET_KEY` (or a `STRIPE_SECRET_KEY_<NAME>`) is set: checkout then
+creates the PaymentIntent, and refund `process` issues the refund in Stripe
+itself. Setup, key resolution, errors and local testing:
+[stripe-adapter.md](stripe-adapter.md).
+
+With no key set, no adapter is wired.
 
 Without it the platform still takes checkouts (order + hold + pending charge are
 recorded), still ingests webhooks (which is how settlement is confirmed), and

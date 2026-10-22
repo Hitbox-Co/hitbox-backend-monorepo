@@ -125,11 +125,21 @@ model RefundRequest {
   /// Quarantine window on the returned tag (default 90 days on a damaged or
   /// missing tag). Null means the unit is free to re-enter circulation.
   resaleBlockedUntil        DateTime?
+  /// What the provider last said about the money itself, separate from the
+  /// workflow `status`: a card refund is PENDING for days, and can still FAIL
+  /// (closed card) after the workflow is PROCESSED. Null until the provider
+  /// has said anything — e.g. a dashboard refund id typed in by an operator.
+  gatewayStatus             RefundGatewayStatus?
+  /// The provider's reason when gatewayStatus is FAILED / CANCELED.
+  gatewayFailureReason      String?
+  gatewayStatusAt           DateTime?
   createdAt                 DateTime
   updatedAt                 DateTime
 
   @@index([orderId])
   @@index([status, createdAt])
+  @@index([gatewayStatus])
+  @@index([gatewayRefundId])
 }
 
 /// A chargeback or payment dispute raised at the provider.
@@ -203,6 +213,16 @@ enum ConfigStatus {
 
 /// Refund lifecycle. AWAITING_RETURN is the physical-goods hold before
 /// approval; PROCESSED means the gateway confirmed the money moved.
+/// The provider's view of a refund's money (Stripe `refund.status`).
+/// FAILED / CANCELED after PROCESSED means the buyer did not get the money
+/// back and an operator has to act.
+enum RefundGatewayStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
 enum RefundStatus {
   REQUESTED
   AWAITING_RETURN

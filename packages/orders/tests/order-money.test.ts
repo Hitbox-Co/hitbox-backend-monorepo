@@ -18,6 +18,7 @@ describe('buildMoneySummary', () => {
             charged: '2499.00',
             paid: '2499.00',
             refunded: '0.00',
+            refundFailed: '0.00',
             refundInProgress: '0.00',
             refundable: '2499.00',
             canRequestRefund: true,
@@ -76,5 +77,24 @@ describe('buildMoneySummary', () => {
     it('refundable never goes below zero', () => {
         const s = buildMoneySummary({ ...base, refunds: [{ id: 'r1', status: 'PROCESSED', amount: '3000.00' }] });
         expect(s.refundable).toBe('0.00');
+    });
+});
+
+describe('buildMoneySummary — refunds the provider failed', () => {
+    it('a PROCESSED refund Stripe then failed is not money given back', () => {
+        const s = buildMoneySummary({
+            ...base,
+            orderStatus: 'REFUNDED',
+            refunds: [{ id: 'r1', status: 'PROCESSED', amount: '2499.00', gatewayStatus: 'FAILED' }],
+        });
+        expect(s).toMatchObject({ refunded: '0.00', refundFailed: '2499.00', refundable: '0.00' });
+    });
+
+    it('a pending provider refund still counts as refunded', () => {
+        const s = buildMoneySummary({
+            ...base,
+            refunds: [{ id: 'r1', status: 'PROCESSED', amount: '500.00', gatewayStatus: 'PENDING' }],
+        });
+        expect(s).toMatchObject({ refunded: '500.00', refundFailed: '0.00' });
     });
 });

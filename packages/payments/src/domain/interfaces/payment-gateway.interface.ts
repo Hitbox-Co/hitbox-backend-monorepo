@@ -46,6 +46,10 @@ export interface CreateRefundInput {
     idempotencyKey: string;
     credentialsRef: string;
     reason?: string;
+    /** The workflow's reason code — the adapter maps it to the provider's own vocabulary. */
+    reasonCode?: string;
+    /** Echoed back on the provider's refund object and in its webhooks. */
+    metadata?: Record<string, string>;
 }
 
 export interface CreateRefundResult {

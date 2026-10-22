@@ -25,6 +25,10 @@ export const PAYMENTS_ERROR_CODES = {
     AMOUNT_EXCEEDS_CAPTURE: 'PAYMENTS_AMOUNT_EXCEEDS_CAPTURE',
     /** No payment provider adapter is wired on this deployment. */
     GATEWAY_UNAVAILABLE: 'PAYMENTS_GATEWAY_UNAVAILABLE',
+    /** The provider answered and refused (already refunded, unknown charge…). */
+    GATEWAY_REJECTED: 'PAYMENTS_GATEWAY_REJECTED',
+    /** The provider could not be reached, or failed on its side. Safe to retry. */
+    GATEWAY_UNREACHABLE: 'PAYMENTS_GATEWAY_UNREACHABLE',
 } as const;
 
 // ── Capabilities (all already in the permission catalog) ────────────────────
@@ -59,6 +63,10 @@ export const PAYMENT_EVENTS = {
     REFUND_REQUESTED: 'payments.refund.requested',
     REFUND_APPROVED: 'payments.refund.approved',
     REFUND_PROCESSED: 'payments.refund.processed',
+    /** The provider failed or cancelled a refund after it was processed — the buyer was not paid. */
+    REFUND_FAILED: 'payments.refund.failed',
+    /** A refund was issued at the provider that matches no approved HitBox refund. */
+    REFUND_UNMATCHED: 'payments.refund.unmatched',
     DISPUTE_OPENED: 'payments.dispute.opened',
     DISPUTE_RESOLVED: 'payments.dispute.resolved',
 } as const;
@@ -84,8 +92,11 @@ export const STRIPE_EVENT_MAP: Record<string, string> = {
     'payment_intent.payment_failed': 'PAYMENT_FAILED',
     'charge.succeeded': 'PAYMENT_SUCCEEDED',
     'charge.failed': 'PAYMENT_FAILED',
-    'charge.refunded': 'REFUND_SETTLED',
-    'refund.updated': 'REFUND_SETTLED',
+    // The refund object itself, in every state. `charge.refunded` is left
+    // out: its object is the charge, and these three already cover it.
+    'refund.created': 'REFUND_UPDATED',
+    'refund.updated': 'REFUND_UPDATED',
+    'refund.failed': 'REFUND_UPDATED',
     'charge.dispute.created': 'DISPUTE_OPENED',
     'charge.dispute.closed': 'DISPUTE_CLOSED',
 };

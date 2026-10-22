@@ -31,8 +31,13 @@ export interface OrderMoneySummary {
     charged: string;
     /** Sum of SUCCEEDED payment transactions. */
     paid: string;
-    /** Sum of PROCESSED refunds — money actually given back. */
+    /** Sum of PROCESSED refunds the provider has not failed — money given back. */
     refunded: string;
+    /**
+     * PROCESSED refunds the provider then FAILED / CANCELED — the order says
+     * refunded but the buyer has no money. Non-zero means an operator must act.
+     */
+    refundFailed: string;
     /** Amount of the open refund, if one is in progress; else "0.00". */
     refundInProgress: string;
     /** charged − refunded, never below zero. The most a new refund may ask for. */
@@ -55,7 +60,7 @@ export function buildMoneySummary(input: {
     orderAmount: Money;
     currency: string;
     payments: { status: string; amount: Money }[];
-    refunds: { id: string; status: string; amount: Money | null }[];
+    refunds: { id: string; status: string; amount: Money | null; gatewayStatus?: string | null }[];
     /** `order:refund:global` — the grant RefundService requires to act for a buyer. */
     callerCanRefund: boolean;
 }): OrderMoneySummary {
@@ -63,11 +68,15 @@ export function buildMoneySummary(input: {
     const paid = input.payments
         .filter((p) => p.status === 'SUCCEEDED')
         .reduce((sum, p) => sum.plus(toDec(p.amount)), ZERO);
-    const refunded = input.refunds
-        .filter((r) => r.status === 'PROCESSED')
-        .reduce((sum, r) => sum.plus(toDec(r.amount)), ZERO);
+    const processed = input.refunds.filter((r) => r.status === 'PROCESSED');
+    const failed = (r: { gatewayStatus?: string | null }) => r.gatewayStatus === 'FAILED' || r.gatewayStatus === 'CANCELED';
+    const refunded = processed.filter((r) => !failed(r)).reduce((sum, r) => sum.plus(toDec(r.amount)), ZERO);
+    const refundFailed = processed.filter(failed).reduce((sum, r) => sum.plus(toDec(r.amount)), ZERO);
     const open = input.refunds.find((r) => (OPEN_REFUND_STATUSES as readonly string[]).includes(r.status)) ?? null;
-    const refundable = Prisma.Decimal.max(ZERO, charged.minus(refunded));
+    // A failed refund still counts against what may be refunded, exactly as
+    // RefundService's over-refund guard counts every PROCESSED refund: putting
+    // it right is an operator decision, not a second refund request.
+    const refundable = Prisma.Decimal.max(ZERO, charged.minus(refunded).minus(refundFailed));
 
     let blocked: RefundBlockedReason | null = null;
     if (!input.callerCanRefund) blocked = 'NO_PERMISSION';
@@ -80,6 +89,7 @@ export function buildMoneySummary(input: {
         charged: charged.toFixed(2),
         paid: paid.toFixed(2),
         refunded: refunded.toFixed(2),
+        refundFailed: refundFailed.toFixed(2),
         refundInProgress: open ? toDec(open.amount).toFixed(2) : '0.00',
         refundable: refundable.toFixed(2),
         canRequestRefund: blocked === null,

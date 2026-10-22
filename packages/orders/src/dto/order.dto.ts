@@ -178,6 +178,10 @@ export interface OrderDetail extends OrderListItem {
         rejectionReason: string | null;
         /** The provider's refund id, e.g. Stripe `re_…`. */
         gatewayRefundId: string | null;
+        /** Stripe's view of the money: PENDING / SUCCEEDED / FAILED / CANCELED, or null. FAILED on a PROCESSED refund = buyer not paid. */
+        gatewayStatus: string | null;
+        gatewayFailureReason: string | null;
+        gatewayStatusAt: string | null;
         processedAt: string | null;
         claimRevokedAt: string | null;
         createdAt: string;

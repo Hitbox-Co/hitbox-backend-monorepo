@@ -889,6 +889,7 @@ async function main(): Promise<void> {
                 approvedById: id('user:fin'), approvedAt: hours(o.deliveredAt!, 100),
                 gatewayRefundId: `re_demo_${o.index}`,
                 processedAt: hours(o.deliveredAt!, 102),
+                gatewayStatus: 'SUCCEEDED' as const, gatewayStatusAt: hours(o.deliveredAt!, 102),
                 createdAt: hours(o.deliveredAt!, 30), updatedAt: hours(o.deliveredAt!, 100 + i),
             })),
             ...returning.map((o, i) => ({

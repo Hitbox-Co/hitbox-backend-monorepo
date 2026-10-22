@@ -25,6 +25,7 @@
     "db:seed:drop-types": "pnpm --filter @hitbox/database db:seed:drop-types",
     "db:seed:test-tee": "pnpm --filter @hitbox/database db:seed:test-tee",
     "db:seed:test-refunds": "pnpm --filter @hitbox/database db:seed:test-refunds",
+    "db:stripe:test-charges": "pnpm --filter @hitbox/database db:stripe:test-charges",
     "db:link-admin": "pnpm --filter @hitbox/database db:link-admin"
   },
   "keywords": [],

@@ -26,6 +26,7 @@
     "db:seed:drop-types": "dotenv -e ../../../.env -- tsx prisma/seed-drop-types.ts",
     "db:seed:test-tee": "dotenv -e ../../../.env -- tsx prisma/seed-test-tshirt-order.ts",
     "db:seed:test-refunds": "dotenv -e ../../../.env -- tsx prisma/seed-test-refunds.ts",
+    "db:stripe:test-charges": "dotenv -e ../../../.env -- tsx prisma/stripe-test-charges.ts",
     "db:seed:finance": "dotenv -e ../../../.env -- tsx prisma/seed-finance.ts",
     "db:repair:artist-orgs": "dotenv -e ../../../.env -- tsx prisma/repair-artist-organizations.ts",
     "db:link-admin": "dotenv -e ../../../.env -- tsx prisma/link-admin.ts",

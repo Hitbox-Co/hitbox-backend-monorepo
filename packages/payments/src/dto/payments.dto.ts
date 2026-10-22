@@ -188,6 +188,8 @@ export const listRefundsQuerySchema = z.object({
             'OTHER',
         ])
         .optional(),
+    /** `FAILED` is the "refunds that did not reach the buyer" queue. */
+    gatewayStatus: z.enum(['PENDING', 'SUCCEEDED', 'FAILED', 'CANCELED']).optional(),
     from: z.coerce.date().optional(),
     to: z.coerce.date().optional(),
 });
@@ -328,6 +330,14 @@ export interface RefundView {
     approvedAt: string | null;
     rejectionReason: string | null;
     gatewayRefundId: string | null;
+    /**
+     * The provider's view of the money: PENDING → SUCCEEDED normally. FAILED /
+     * CANCELED on a PROCESSED refund means the buyer did NOT get the money
+     * back — show it loudly. Null when the provider has not reported yet.
+     */
+    gatewayStatus: string | null;
+    gatewayFailureReason: string | null;
+    gatewayStatusAt: string | null;
     processedAt: string | null;
     claimRevokedAt: string | null;
     resaleBlockedUntil: string | null;

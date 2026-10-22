@@ -152,9 +152,10 @@ and always in the order's own `currency`.
 |---|---|
 | `charged` | `Order.amount` — what the buyer was charged |
 | `paid` | Sum of payments with status `SUCCEEDED` (failed or pending attempts don't count) |
-| `refunded` | Sum of refunds with status `PROCESSED` — money actually given back |
+| `refunded` | Sum of `PROCESSED` refunds Stripe hasn't failed — money actually given back |
+| `refundFailed` | Sum of `PROCESSED` refunds Stripe then **failed or cancelled** (`gatewayStatus` `FAILED`/`CANCELED`). Non-zero = the order says refunded but the buyer has no money — show a red banner |
 | `refundInProgress` | Amount of the open refund (`REQUESTED`, `AWAITING_RETURN` or `APPROVED`), else `"0.00"` |
-| `refundable` | `charged − refunded`, never below zero — the most a new refund may ask for |
+| `refundable` | `charged − refunded − refundFailed`, never below zero — the most a new refund may ask for (a failed refund is fixed by an operator, not by a second request) |
 | `openRefundId` | The open refund's id, for a "View refund in progress" link |
 | `canRequestRefund` | `true` only when **all** of the rules below pass |
 | `refundBlockedReason` | Which rule failed, when `canRequestRefund` is `false` |
@@ -332,11 +333,13 @@ Response `201`: the refund (6.3), status `REQUESTED`.
 | `status` | `REQUESTED`, `AWAITING_RETURN`, `APPROVED`, `PROCESSED`, `REJECTED` |
 | `orderId` | One order's refunds |
 | `reasonCode` | One reason |
+| `gatewayStatus` | `PENDING`, `SUCCEEDED`, `FAILED`, `CANCELED` — `FAILED` is the "buyer not paid back" queue |
 | `from`, `to` | ISO dates (created) |
 | `page`, `limit` | Pagination |
 
 Suggested tabs: **Requested · Awaiting return · Approved (ready to pay) ·
-Processed · Rejected**. Each item carries `allowedActions`, so the queue can
+Processed · Rejected**, plus a red **Failed at Stripe** tab
+(`gatewayStatus=FAILED`). Each item carries `allowedActions`, so the queue can
 offer inline actions.
 
 ### 6.3 `GET /admin/payments/refunds/:refundId` — detail
@@ -359,6 +362,9 @@ offer inline actions.
     "approvedAt": null,
     "rejectionReason": null,
     "gatewayRefundId": null,
+    "gatewayStatus": null,
+    "gatewayFailureReason": null,
+    "gatewayStatusAt": null,
     "processedAt": null,
     "claimRevokedAt": null,
     "resaleBlockedUntil": null,
@@ -374,6 +380,14 @@ offer inline actions.
 | `nfcTagCondition` | Recorded at the return: `INTACT`, `DAMAGED`, `MISSING`, `TAMPERED` |
 | `claimRevokedAt` | Set if the buyer had claimed the item and the refund took ownership back (7) |
 | `resaleBlockedUntil` | Set when the returned tag wasn't intact — the unit can't be resold until then |
+| `gatewayStatus` | Stripe's view of the money, separate from `status`: `null` (not reported) → `PENDING` → `SUCCEEDED`, or `FAILED` / `CANCELED` |
+| `gatewayFailureReason` | Stripe's reason when it failed, e.g. `expired_or_canceled_card` |
+| `gatewayStatusAt` | When Stripe last reported |
+
+**`status: PROCESSED` + `gatewayStatus: FAILED`** means the workflow finished
+but the money never reached the buyer. Nothing is undone automatically; an
+operator contacts the buyer and pays them another way. Details:
+[finance/stripe-adapter.md §6](../finance/stripe-adapter.md#6-refund-webhooks--what-happens-after-process).
 
 ### 6.4 `POST /admin/payments/refunds/:refundId/confirm-return` 🔒
 
@@ -418,16 +432,25 @@ Pays the money back. Allowed only when `APPROVED`.
 {}
 ```
 
-With a payment provider wired, the server issues the refund through Stripe
-itself. On a deployment with no provider adapter, issue the refund in the
-Stripe dashboard first and pass its id:
+**With the Stripe adapter wired** (`STRIPE_SECRET_KEY` set — see
+[finance/stripe-adapter.md](../finance/stripe-adapter.md)), `{}` is enough: the
+server issues the refund in Stripe itself and stores the returned `re_…` as
+`gatewayRefundId`. If Stripe refuses or can't be reached, nothing changes here —
+the refund stays `APPROVED` and Process can be pressed again (it can never
+refund twice; the Stripe call is idempotent per refund).
+
+**Without the adapter**, or for a refund already issued in the Stripe
+dashboard, pass its id and the Stripe call is skipped (with the webhook set
+up, a dashboard refund for the approved amount is picked up automatically —
+no need to paste the id):
 
 ```json
 { "gatewayRefundId": "re_3Q…", "processedAt": "2026-10-14T11:00:00Z" }
 ```
 
-Without a provider and without `gatewayRefundId`:
-`400 PAYMENTS_GATEWAY_UNAVAILABLE`. See 7 for everything else this does.
+No adapter and no `gatewayRefundId`: `400 PAYMENTS_GATEWAY_UNAVAILABLE`.
+Stripe failures: `400 PAYMENTS_GATEWAY_REJECTED` / `PAYMENTS_GATEWAY_UNREACHABLE`
+(see 11). See 7 for everything else this does.
 
 All four actions return the updated refund (6.3).
 
@@ -440,7 +463,7 @@ All four actions return the updated refund (6.3).
 `process` is one operation with several consequences, all handled by the
 backend — the frontend just shows the result:
 
-1. **Money moves** — refund issued at Stripe (or the supplied `gatewayRefundId` recorded).
+1. **Money moves** — refund issued at Stripe by the adapter (or the supplied `gatewayRefundId` recorded). If this step fails, nothing below happens and the refund stays `APPROVED`.
 2. **The order becomes `REFUNDED`.**
 3. **Ownership is taken back if the buyer had claimed the item** — the claim is stamped revoked (`claimRevokedAt`, never deleted), the unit's owner is cleared, the ownership period is closed, the item leaves the buyer's collection, and a `FLAG` row is appended to the unit's provenance chain (the `CLAIM` row is never rewritten).
 4. **A damaged/missing/tampered tag blocks resale** for a period (`resaleBlockedUntil`) and puts the tag in `DISPUTED`.
@@ -496,6 +519,12 @@ go through". Filter with `provider`, `eventType`
 An event with `processingError` set or `processedAt: null` is the first place
 to look when an order is stuck in `PENDING_PAYMENT` after the buyer paid.
 
+Refund events (`refund.created`, `refund.updated`, `refund.failed`) keep each
+refund's `gatewayStatus` current, flag refunds that fail after processing, and
+auto-process an approved refund that someone paid out in the Stripe dashboard
+instead of pressing Process. See
+[finance/stripe-adapter.md §6](../finance/stripe-adapter.md#6-refund-webhooks--what-happens-after-process).
+
 ---
 
 ## 10. Who can do what
@@ -522,7 +551,9 @@ but not refund sees every number, gets `money.refundBlockedReason:
 | `400` | `PAYMENTS_NOT_REFUNDABLE` | Order status isn't refundable, or there's no settled charge to refund |
 | `400` | `PAYMENTS_RETURN_NOT_CONFIRMED` | Approving before the return is confirmed, without an override |
 | `400` | `PAYMENTS_AMOUNT_EXCEEDS_CAPTURE` | The refund would exceed what was charged (`details` has the numbers) |
-| `400` | `PAYMENTS_GATEWAY_UNAVAILABLE` | Processing with no provider wired and no `gatewayRefundId` |
+| `400` | `PAYMENTS_GATEWAY_UNAVAILABLE` | Processing with no adapter wired (or no key for this config's `credentialsRef`) and no `gatewayRefundId` |
+| `400` | `PAYMENTS_GATEWAY_REJECTED` | Stripe refused — e.g. already refunded, unknown charge. `details.providerCode` has Stripe's code. Nothing changed; refund stays `APPROVED` |
+| `400` | `PAYMENTS_GATEWAY_UNREACHABLE` | Stripe down, timed out or rate-limited. Nothing changed — press Process again |
 | `403` | `PAYMENTS_FORBIDDEN` | Missing the capability for the action |
 | `404` | `PAYMENTS_NOT_FOUND` | Refund, payment, dispute or order not found (or outside your scope) |
 | `409` | `PAYMENTS_INVALID_TRANSITION` | The action isn't possible from the current status, a refund is already open, or someone changed it concurrently — reload |
@@ -583,15 +614,23 @@ amount was partial. Asking for more than `money.refundable` is refused with
 
 ## 13. Test data
 
-`pnpm db:seed:test-refunds` (from `packages/shared/database`) adds one refund
+`pnpm db:seed:test-refunds` adds one refund
 in each workflow state to existing demo orders that have none — REQUESTED
 (return needed, claimed unit), REQUESTED (no return), AWAITING_RETURN with an
 INTACT tag, AWAITING_RETURN with a DAMAGED tag (claimed unit), APPROVED and
-REJECTED — and lists orders you can start a new refund on. Non-destructive;
+REJECTED — plus **G**, a PROCESSED refund whose Stripe refund FAILED
+(`gatewayStatus: FAILED`, reuses a demo refund) for building the "buyer not
+paid" UI — and lists orders you can start a new refund on. Non-destructive;
 re-running uses the next orders without refunds.
 
-No payment provider is wired on this deployment, so `process` needs
-`{ "gatewayRefundId": "re_test_…" }`.
+Run from the repo root. Processing those refunds:
+
+- **No `STRIPE_SECRET_KEY`:** send `{ "gatewayRefundId": "re_test_…" }`.
+- **With a Stripe test key:** first run `pnpm db:stripe:test-charges`. Seeded
+  payments have fake refs (`pi_demo_…`) Stripe doesn't know; this creates real
+  test-mode charges behind every open `[TEST]` refund. Then Process with `{}`
+  issues a real test refund, visible in the Stripe dashboard. Details:
+  [finance/stripe-adapter.md §5](../finance/stripe-adapter.md#5-testing-it-locally).
 
 ## 14. Where the code lives
 
@@ -607,7 +646,12 @@ packages/payments/src/
   service/refund.service.ts        ← request / confirm-return / approve / reject / process
   service/…                        ← payments, disputes, gateway configs, webhooks
   module.ts                        ← routes under /admin/payments and /refunds
+  adapters/stripe-gateway.ts       ← the Stripe adapter (refunds + PaymentIntents)
+  domain/gateway-error.ts          ← Stripe failures → PAYMENTS_GATEWAY_* errors
 packages/payments/tests/refund-actions.test.ts
+packages/payments/tests/stripe-gateway.test.ts
+
+apps/backend/src/adapters/stripe-secrets.ts ← credentialsRef → Stripe key
 
 apps/backend/src/bootstrap.ts      ← adminView.canRefund (order:refund:global) feeds money.canRequestRefund
 ```
@@ -622,6 +666,7 @@ both are covered by tests.
 
 **Order page — Payments & refunds card**
 - [ ] Headline: `money.charged`, `money.paid`, `money.refunded`, `money.refundable` in `money.currency`.
+- [ ] Red banner when `money.refundFailed` > 0: "A refund failed at Stripe — the buyer has not been paid back".
 - [ ] Payments table from `payments[]`: status chip, amount, `gatewayRef` (link to Stripe), `failureReason` on failed rows, a "Needs review" flag.
 - [ ] Refunds table from `refunds[]`: status chip, reason code, amount, dates; row click → refund detail.
 - [ ] **Refund** button: enabled only when `money.canRequestRefund`; otherwise map `refundBlockedReason` (hide for `NO_PERMISSION`; "View refund in progress" → `openRefundId` for `REFUND_IN_PROGRESS`).
@@ -635,9 +680,11 @@ both are covered by tests.
   - `CONFIRM_RETURN` → dialog with tag condition (INTACT / DAMAGED / MISSING / TAMPERED) + note.
   - `APPROVE` → confirm + optional note.
   - `APPROVE_WITH_OVERRIDE` → warning ("item not returned yet") + **required** override reason.
-  - `PROCESS` → confirm "Pay back {amount} {currency}"; if `PAYMENTS_GATEWAY_UNAVAILABLE`, ask for the Stripe refund id and resend.
+  - `PROCESS` → confirm "Pay back {amount} {currency}" and send `{}`. On `PAYMENTS_GATEWAY_UNAVAILABLE`, ask for the Stripe refund id and resend with `gatewayRefundId`. On `PAYMENTS_GATEWAY_REJECTED` show Stripe's message (offer the same "enter Stripe refund id" field — it usually means it was refunded in the dashboard). On `PAYMENTS_GATEWAY_UNREACHABLE` show "Stripe didn't respond — try again". Keep the button disabled while the request is in flight.
   - `REJECT` → required rejection reason.
 - [ ] Show a timeline: requested → return confirmed (with tag condition) → approved → processed / rejected, and `claimRevokedAt` / `resaleBlockedUntil` when set.
+- [ ] Stripe status chip from `gatewayStatus`: grey "Waiting for Stripe" (null), amber "On its way to card" (PENDING), green "Refunded to card" (SUCCEEDED), red "Failed at Stripe: {gatewayFailureReason}" (FAILED/CANCELED).
+- [ ] Refunds queue: a **Failed at Stripe** tab → `?gatewayStatus=FAILED`.
 - [ ] After any action, replace the page state with the response; reload on `409`.
 
 **Payments & disputes**

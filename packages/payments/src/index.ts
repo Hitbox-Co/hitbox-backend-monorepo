@@ -69,6 +69,11 @@ export type {
     CreateRefundResult,
     IPaymentGateway,
 } from './domain/interfaces/payment-gateway.interface';
+export { GatewayError } from './domain/gateway-error';
+export type { GatewayErrorKind } from './domain/gateway-error';
+// The Stripe adapter. Built at the composition root, which owns the key lookup.
+export { createStripeGateway, toMinorUnits } from './adapters/stripe-gateway';
+export type { StripeGatewayDeps } from './adapters/stripe-gateway';
 export { NOOP_PAYMENTS_AUDIT } from './domain/interfaces/audit-recorder.port';
 export type {
     IPaymentsAuditRecorder,
