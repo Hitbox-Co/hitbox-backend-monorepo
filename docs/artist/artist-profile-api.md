@@ -12,7 +12,9 @@
 > [authorization/admin-provisioning.md](../authorization/admin-provisioning.md);
 > the admin-side artist picker (`GET /admin/artists`) —
 > [admin/product-upload-api.md §4](../admin/product-upload-api.md);
-> bucket setup for images — [media/s3-configuration.md](../media/s3-configuration.md).
+> bucket setup for images — [media/s3-configuration.md](../media/s3-configuration.md);
+> the artist's **collections** (create, edit, reorder, delete — same artist-only
+> access) — [artist-collection/](../artist-collection/README.md).
 
 ---
 

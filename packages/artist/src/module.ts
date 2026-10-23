@@ -17,6 +17,15 @@ import { ArtistOwnershipAdapter } from './adapter/artist-ownership.adapter';
 import { ARTIST_MODULE } from './collection/constants/artist-collection.constant';
 import { ArtistCollectionStatsAdapter } from './collection/adapter/artist-collection-stats.adapter';
 import { ArtistCollectionRepository } from './collection/repository/artist-collection.repository';
+import { ArtistCollectionService } from './collection/service/artist-collection.service';
+import {
+    AdminArtistCollectionController,
+    ArtistCollectionController,
+} from './collection/controller/artist-collection.controller';
+import {
+    COLLECTION_READ_CAPABILITY,
+    COLLECTION_WRITE_CAPABILITY,
+} from './collection/constants/artist-collection.constant';
 import {
     ARTIST_SELF_READ_CAPABILITY,
     ARTIST_SELF_UPDATE_CAPABILITY,
@@ -90,6 +99,12 @@ export interface ArtistModule {
      */
     createSelfRouter(requireAuth: RequestHandler): Router;
     /**
+     * HitBox monitoring of every artist's collections, mounted at
+     * /api/v1/admin/artist-collections. Read-only, platform-wide grants only.
+     * docs/artist-collection/.
+     */
+    createCollectionsAdminRouter(requireAuth: RequestHandler): Router;
+    /**
      * Creates the `Artist` row behind an invitation. Exposed for tests and for
      * a backfill script; in the running app it is driven by the subscriptions
      * this factory sets up.
@@ -105,8 +120,16 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
 
     const logger = createModuleLogger(ARTIST_MODULE);
     const provisioning = new ArtistProvisioningService({ artists, logger });
+    const selfRepository = new ArtistSelfRepository(deps.prisma);
+    const collectionService = new ArtistCollectionService({
+        collections,
+        artists: selfRepository,
+        images: deps.images,
+        eventBus: deps.eventBus,
+        logger,
+    });
     const selfService = new ArtistSelfService({
-        artists: new ArtistSelfRepository(deps.prisma),
+        artists: selfRepository,
         images: deps.images,
         eventBus: deps.eventBus,
         logger,
@@ -187,6 +210,43 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
                 router.put(`/me/${kind}`, update, controller.setImage(kind));
                 router.delete(`/me/${kind}`, update, controller.removeImage(kind));
             }
+
+            // Collections — same own-scope gates as the profile: a collection
+            // is part of the artist's record. docs/artist-collection/.
+            const collectionsController = new ArtistCollectionController(collectionService, resolveUserId);
+            const readCollections = guard.requirePermission(COLLECTION_READ_CAPABILITY, { context: mine });
+            const writeCollections = guard.requirePermission(COLLECTION_WRITE_CAPABILITY, { context: mine });
+
+            router.get('/collections', readCollections, collectionsController.list);
+            router.post('/collections', writeCollections, collectionsController.create);
+            // Before '/collections/:collectionId' so "order" is never read as an id.
+            router.put('/collections/order', writeCollections, collectionsController.reorder);
+            router.get('/collections/:collectionId', readCollections, collectionsController.get);
+            router.patch('/collections/:collectionId', writeCollections, collectionsController.update);
+            router.delete('/collections/:collectionId', writeCollections, collectionsController.archive);
+            router.post('/collections/:collectionId/hero/upload-url', writeCollections, collectionsController.createHeroUpload);
+            router.put('/collections/:collectionId/hero', writeCollections, collectionsController.setHero);
+            router.delete('/collections/:collectionId/hero', writeCollections, collectionsController.removeHero);
+            return router;
+        },
+
+        createCollectionsAdminRouter(requireAuth) {
+            if (!deps.guard) {
+                throw new Error(
+                    'createArtistModule({ guard }) is required to build the collections admin router.',
+                );
+            }
+            // Platform-wide only. brand-artist-record:manage:global (System
+            // Admin) satisfies it; a Brand Admin's :organization read does not.
+            const monitor = deps.guard.requirePermission(COLLECTION_READ_CAPABILITY, { globalOnly: true });
+            const adminController = new AdminArtistCollectionController(collectionService);
+
+            const router = Router();
+            router.use(requireAuth);
+            router.get('/', monitor, adminController.list);
+            // Before '/:collectionId' so "summary" is never read as an id.
+            router.get('/summary', monitor, adminController.summary);
+            router.get('/:collectionId', monitor, adminController.get);
             return router;
         },
 

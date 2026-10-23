@@ -32,3 +32,23 @@ export { nameFromEmail, roleImpliesArtistProfile, slugify } from './profile/doma
 export { ARTIST_GENRES } from './self/constants/artist-self.constant';
 export type { IArtistImageStorage } from './self/domain/artist-image-storage.interface';
 export type { MyArtistProfile } from './self/service/artist-self.service';
+
+// Artist collections — docs/artist-collection/.
+export {
+    ARTIST_COLLECTION_ERROR_CODES,
+    ARTIST_COLLECTION_EVENTS,
+    MAX_LIVE_COLLECTIONS_PER_ARTIST,
+} from './collection/constants/artist-collection.constant';
+export {
+    adminListCollectionsQuerySchema,
+    createCollectionSchema,
+    reorderCollectionsSchema,
+    updateCollectionSchema,
+} from './collection/dto/artist-collection.dto';
+export type {
+    AdminCollectionDetailView,
+    AdminCollectionView,
+    CollectionSummaryView,
+    CollectionView,
+    MyCollectionView,
+} from './collection/dto/artist-collection.dto';

@@ -725,6 +725,7 @@ export function bootstrap(): Bootstrapped {
         adminOrganizations: organizationsModule.createRouter(authModule.requireAuth),
         adminSupply: supplyModule.createRouter(authModule.requireAuth),
         adminArtists: artistModule.createAdminRouter(authModule.requireAuth),
+        adminArtistCollections: artistModule.createCollectionsAdminRouter(authModule.requireAuth),
         payments: paymentsModule.createBuyerRouter(authModule.requireAuth),
         adminPayments: paymentsModule.createAdminRouter(authModule.requireAuth),
         adminFinance: financeModule.createRouter(authModule.requireAuth),

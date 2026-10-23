@@ -53,6 +53,8 @@ export interface ApiRouters {
      */
     adminOrganizations: Router;
     adminArtists: Router;
+    /** HitBox monitoring of artist collections — docs/artist-collection/. */
+    adminArtistCollections: Router;
     /**
      * The physical supply chain: vendors, consignments, the NFC chip inventory
      * and the supply/inventory metrics rollup. ONE namespace — a Drop Manager
@@ -140,6 +142,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/skus', routers.adminSkus);
     api.use('/admin/organizations', routers.adminOrganizations);
     api.use('/admin/artists', routers.adminArtists);
+    api.use('/admin/artist-collections', routers.adminArtistCollections);
     api.use('/admin/supply', routers.adminSupply);
 
     return api;
