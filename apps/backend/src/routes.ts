@@ -56,6 +56,12 @@ export interface ApiRouters {
     /** HitBox monitoring of artist collections — docs/artist-collection/. */
     adminArtistCollections: Router;
     /**
+     * The audit trail's read API: events, correlation lookup, event types,
+     * retention. Gated on `audit-log:*`. Bulk export stays unmounted until a
+     * step-up gate is supplied. docs/audit/audit-logging.md §6.
+     */
+    adminAudit: Router;
+    /**
      * The physical supply chain: vendors, consignments, the NFC chip inventory
      * and the supply/inventory metrics rollup. ONE namespace — a Drop Manager
      * reading consignment headers and a System Admin registering a chip
@@ -143,6 +149,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/organizations', routers.adminOrganizations);
     api.use('/admin/artists', routers.adminArtists);
     api.use('/admin/artist-collections', routers.adminArtistCollections);
+    api.use('/admin/audit', routers.adminAudit);
     api.use('/admin/supply', routers.adminSupply);
 
     return api;

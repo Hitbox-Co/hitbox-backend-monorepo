@@ -47,7 +47,7 @@ export interface AuditEventTypeDefinition {
     sourceStories: string[];
 }
 
-const { BUYER, BRAND_EMPLOYEE, HITBOX_EMPLOYEE, HITBOX_ADMIN, SYSTEM } = AuditPersonaGroup;
+const { BUYER, BRAND_EMPLOYEE, ARTIST, HITBOX_EMPLOYEE, HITBOX_ADMIN, SYSTEM } = AuditPersonaGroup;
 const { INFO, WARNING, CRITICAL } = AuditSeverity;
 
 /** Shorthand for the doc citations below. */
@@ -173,6 +173,45 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         description: 'A user account was deleted or anonymised.',
         defaultSeverity: CRITICAL,
         sourceStories: [`${AUDIT_DOC} write-paths`],
+    },
+
+    // ── Artist collections ──────────────────────────────────────────────────
+    // An artist curating their own series — docs/artist-collection/. Every
+    // change is recorded so HitBox's monitoring view has a trail behind it.
+    {
+        eventType: 'artist.collection.create',
+        personaGroup: ARTIST,
+        description: 'An artist created a collection.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.update',
+        personaGroup: ARTIST,
+        description: 'An artist edited a collection — name, address, description, visibility or hero image.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.archive',
+        personaGroup: ARTIST,
+        description: 'An artist deleted (archived) a collection, taking it off the storefront.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.restore',
+        personaGroup: ARTIST,
+        description: 'An artist restored an archived collection.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.reorder',
+        personaGroup: ARTIST,
+        description: 'An artist changed the order of their collections.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
     },
 
     // ── Orders ──────────────────────────────────────────────────────────────

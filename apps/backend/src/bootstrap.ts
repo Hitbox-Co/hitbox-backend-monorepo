@@ -3,7 +3,7 @@ import { Router } from 'express';
 import type { Request } from 'express';
 import { prisma, OrganizationType } from '@hitbox/database';
 import type { Prisma } from '@hitbox/database';
-import { createModuleLogger, eventBus, env } from '@hitbox/shared';
+import { AppError, createModuleLogger, eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
 import { createAccessControlModule } from '@hitbox/access-control';
 import { createAuditModule, correlationIdOf } from '@hitbox/audit';
@@ -475,6 +475,9 @@ export function bootstrap(): Bootstrapped {
         // Media owns MediaAsset and the bucket; undefined on a deploy with no
         // bucket, in which case avatar/cover uploads are refused clearly.
         images: mediaModule?.profileImages,
+        // Deferred: the audit module is built further down. Only called at
+        // request time, long after bootstrap has finished.
+        audit: { record: (input, options) => auditModule.recorder.record(input, options) },
     });
 
     // The organization directory — read-only, and the other half of the drop
@@ -560,9 +563,10 @@ export function bootstrap(): Bootstrapped {
     // exactly that reason — see docs/finance/module-boundaries.md.
 
     /**
-     * The compliance trail. Constructed here for its `recorder` port, which
-     * finance and payments write every money movement through; the audit read
-     * API is a separate surface and is not mounted by this change.
+     * The compliance trail. Its `recorder` port is what every module writes
+     * through; its read API is mounted at /admin/audit (routes.ts), gated on
+     * `audit-log:*` — held platform-wide by HITBOX_SYSTEM_ADMIN only.
+     * docs/audit/audit-logging.md §6.
      */
     const auditModule = createAuditModule({
         prisma,
@@ -574,12 +578,21 @@ export function bootstrap(): Bootstrapped {
                 .map((role) => role.organizationId)
                 .find((id): id is string => id !== null);
             const global = principal.permissions.includes('audit-log:read:global');
+            // GLOBAL only for a platform-wide grant. An organization-scoped
+            // reader with no organization used to fall through to GLOBAL here —
+            // unreachable while the read API was unmounted, a cross-tenant
+            // read once it is — so that case is now refused instead.
+            if (!global && !orgId) {
+                throw AppError.forbidden(
+                    'Your audit access is limited to an organization, and you are not assigned to one.',
+                    'AUTHZ_FORBIDDEN',
+                );
+            }
             return {
                 actor: { type: 'HITBOX_EMPLOYEE' as const, id: principal.userId },
-                scope:
-                    global || !orgId
-                        ? ({ kind: 'GLOBAL' } as const)
-                        : ({ kind: 'ORGANIZATION', organizationId: orgId } as const),
+                scope: global
+                    ? ({ kind: 'GLOBAL' } as const)
+                    : ({ kind: 'ORGANIZATION', organizationId: orgId! } as const),
                 correlationId: correlationIdOf(req as Request & { correlationId?: string }),
             };
         },
@@ -726,6 +739,7 @@ export function bootstrap(): Bootstrapped {
         adminSupply: supplyModule.createRouter(authModule.requireAuth),
         adminArtists: artistModule.createAdminRouter(authModule.requireAuth),
         adminArtistCollections: artistModule.createCollectionsAdminRouter(authModule.requireAuth),
+        adminAudit: auditModule.createAdminRouter(authModule.requireAuth),
         payments: paymentsModule.createBuyerRouter(authModule.requireAuth),
         adminPayments: paymentsModule.createAdminRouter(authModule.requireAuth),
         adminFinance: financeModule.createRouter(authModule.requireAuth),

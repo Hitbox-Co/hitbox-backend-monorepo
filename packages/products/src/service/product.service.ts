@@ -298,6 +298,7 @@ export class ProductService {
         } = dto;
 
         const dropType = dropTypeCode ? await this.requireActiveDropType(dropTypeCode) : null;
+        await this.assertCollectionFits(collectionId ?? null, artistId ?? null);
 
         // A REQUIRED-variant drop has no variants at the moment it is created,
         // so units minted inline would belong to no variant — a T-shirt with no
@@ -467,6 +468,15 @@ export class ProductService {
     async update(id: string, dto: UpdateProductDto): Promise<ProductResponse> {
         const current = await this.requireById(id); // 404 before update
         const { collectionId, artistId, organizationId, dropType: dropTypeCode, ...fields } = dto;
+
+        // Re-checked only when either side of the pairing changes, so an
+        // unrelated edit never trips over a pairing that predates the rule.
+        if (collectionId !== undefined || artistId !== undefined) {
+            await this.assertCollectionFits(
+                collectionId !== undefined ? collectionId || null : current.collectionId,
+                artistId !== undefined ? artistId || null : current.artistId,
+            );
+        }
 
         // The type decides which variants are valid, so it is fixed once the
         // drop has any — changing it would orphan them under rules they were
@@ -1095,6 +1105,40 @@ export class ProductService {
             amount: price.isFree ? '0.00' : (price.amount?.toFixed(2) ?? null),
             currency: price.market.currency,
         };
+    }
+
+    /**
+     * A drop may only be filed under a **live** collection of **its own
+     * artist** — docs/artist-collection/README.md §3.
+     *
+     * Without this a drop could land in another artist's series (and show on
+     * their page and count toward their buyers' collection progress), or in a
+     * collection its artist has deleted. A drop with no artist can't be in a
+     * collection at all: collections are per artist, so there would be nothing
+     * to match against.
+     */
+    private async assertCollectionFits(collectionId: string | null, artistId: string | null): Promise<void> {
+        if (!collectionId) return;
+        const collection = await this.deps.products.findCollectionOwner(collectionId);
+        if (!collection) {
+            throw AppError.badRequest('That collection does not exist.', PRODUCTS_ERROR_CODES.COLLECTION_NOT_FOUND, { collectionId });
+        }
+        if (collection.archivedAt) {
+            throw AppError.badRequest(
+                'That collection has been deleted by its artist, so drops can no longer be added to it.',
+                PRODUCTS_ERROR_CODES.COLLECTION_ARCHIVED,
+                { collectionId },
+            );
+        }
+        if (collection.artistId !== artistId) {
+            throw AppError.badRequest(
+                artistId
+                    ? "A drop can only be in one of its own artist's collections."
+                    : "Set the drop's artist before putting it in a collection — collections belong to one artist.",
+                PRODUCTS_ERROR_CODES.COLLECTION_ARTIST_MISMATCH,
+                { collectionId, collectionArtistId: collection.artistId, dropArtistId: artistId },
+            );
+        }
     }
 
     private async requireById(id: string): Promise<ProductWithRelations> {
