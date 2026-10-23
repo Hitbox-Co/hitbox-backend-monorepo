@@ -956,6 +956,37 @@ async function main(): Promise<void> {
             })),
         ],
     });
+    // The buyer's photos on each open return — a buyer-placed return cannot
+    // exist without them (docs/orders/order-payments-and-refunds-api.md §6.0).
+    // Registry rows only: no bytes are uploaded, so on a real bucket their
+    // signed URLs resolve to 404. Two photos per return.
+    const evidencePhotos = returning.flatMap((o) =>
+        [0, 1].map((n) => ({
+            orderKey: o.key, n, buyerId: id(`user:buyer:${o.buyerIdx}`),
+            assetId: id(`asset:return:${o.key}:${n}`), at: daysAgo(3),
+        })),
+    );
+    await prisma.mediaAsset.createMany({
+        data: evidencePhotos.map((p) => ({
+            id: p.assetId, assetType: AssetType.RETURN_EVIDENCE,
+            storageRef: `return-evidence/orders/${id(`order:${p.orderKey}`)}/${p.assetId}.jpg`,
+            fileName: `return-${p.n + 1}.jpg`, mimeType: 'image/jpeg', sizeBytes: 850000 + p.n * 1000,
+            checksum: null, virusScanStatus: VirusScanStatus.SKIPPED,
+            // Not organization-owned: a brand never sees a buyer's photos
+            // through the media library.
+            uploadedById: p.buyerId, organizationId: null,
+            artistId: null, productId: null, collectionId: null,
+            archivedAt: null, createdAt: p.at,
+        })),
+    });
+    await prisma.refundEvidence.createMany({
+        data: evidencePhotos.map((p) => ({
+            id: id(`refund-evidence:${p.orderKey}:${p.n}`),
+            refundRequestId: id(`refund:pending:${p.orderKey}`),
+            mediaAssetId: p.assetId, position: p.n,
+            attachedById: p.buyerId, createdAt: p.at,
+        })),
+    });
     await prisma.paymentGatewayConfig.createMany({
         data: [
             { id: id('gateway:platform'), scope: GatewayConfigScope.PLATFORM, organizationId: null, gateway: PaymentGateway.STRIPE, isDefault: true, credentialsRef: 'secrets://stripe/platform', status: ConfigStatus.ACTIVE, createdAt: daysAgo(120), updatedAt: daysAgo(120) },
@@ -1305,6 +1336,8 @@ async function clearBusinessTables(): Promise<void> {
         prisma.royaltyRule.deleteMany(),
         prisma.adjustmentEntry.deleteMany(),
         prisma.financeLedgerEntry.deleteMany(),
+        // Photos point at both the refund and the media asset.
+        prisma.refundEvidence.deleteMany(),
         prisma.refundRequest.deleteMany(),
         prisma.paymentTransaction.deleteMany(),
         prisma.paymentWebhookEvent.deleteMany(),

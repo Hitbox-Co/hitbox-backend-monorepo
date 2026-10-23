@@ -12,6 +12,12 @@ import { MediaRepository } from './repository/media.repository';
 import type { AssetRef } from './repository/media.repository';
 import { MediaService } from './service/media.service';
 import type { ScanPipelineMode } from './service/media.service';
+import { ReturnEvidenceService } from './service/return-evidence.service';
+import type {
+    ReturnEvidenceAsset,
+    ReturnEvidenceFile,
+    ReturnEvidenceUpload,
+} from './service/return-evidence.service';
 
 /**
  * Structural guard — the shape of `requirePermission`, not an import of the
@@ -82,6 +88,24 @@ export interface MediaModule {
      * uploads to their own profile, not to an organization's media library.
      */
     profileImages: IArtistProfileImages;
+    /**
+     * Buyer photos on a return. The provider side of the payments module's
+     * `IReturnEvidenceMedia` port — payments proves the caller owns the order,
+     * media applies the file rules and checks the bytes really arrived.
+     */
+    returnEvidence: IReturnEvidenceMedia;
+}
+
+export interface IReturnEvidenceMedia {
+    createUpload(input: {
+        orderId: string;
+        uploadedById: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+    }): Promise<ReturnEvidenceUpload>;
+    inspect(assetIds: string[]): Promise<ReturnEvidenceAsset[]>;
+    viewFiles(assetIds: string[]): Promise<ReturnEvidenceFile[]>;
 }
 
 export interface ArtistImageUpload {
@@ -129,9 +153,20 @@ export function createMediaModule(deps: MediaModuleDeps): MediaModule {
         scanPipeline: deps.scanPipeline ?? 'disabled',
     });
     const controller = new MediaController(service, deps.resolveCaller);
+    const returnEvidence = new ReturnEvidenceService({
+        media: service,
+        repository,
+        storage: deps.storage,
+    });
 
     return {
         assets: { findByIds: (ids) => repository.findManyByIds(ids) },
+
+        returnEvidence: {
+            createUpload: (input) => returnEvidence.createUpload(input),
+            inspect: (ids) => returnEvidence.inspect(ids),
+            viewFiles: (ids) => returnEvidence.viewFiles(ids),
+        },
 
         profileImages: {
             async createUpload(input) {

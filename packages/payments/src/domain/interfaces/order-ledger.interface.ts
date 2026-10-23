@@ -77,6 +77,8 @@ export interface IOrderLedger {
         amount: string;
         currency: string;
         gateway: string;
+        /** When the item was delivered — starts the return window. Null until then. */
+        deliveredAt: Date | null;
     } | null>;
 
     /**

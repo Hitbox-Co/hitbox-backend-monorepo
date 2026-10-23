@@ -662,7 +662,10 @@ separately, together with the design they implement:
   capability and payloads
 * [finance/README.md](finance/README.md) — the rest of the finance documentation
 
-In short: `POST /api/v1/checkout` and `POST /api/v1/refunds` for buyers,
+In short: `POST /api/v1/checkout`, `POST /api/v1/refunds` (a return needs
+photos from `POST /api/v1/refunds/evidence/upload-url` and a ≥ 20-character
+description, and is only possible within 10 days of delivery — [orders/order-payments-and-refunds-api.md §6.0](orders/order-payments-and-refunds-api.md#60-placing-a-return--photos-and-description))
+and `GET /api/v1/refunds/:refundId` for buyers,
 `/api/v1/admin/payments/*` and `/api/v1/admin/finance/*` for operators, and
 `POST /webhooks/payments/stripe` (outside `/api/v1`) for the provider.
 

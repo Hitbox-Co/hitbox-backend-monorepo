@@ -402,6 +402,8 @@ export function bootstrap(): Bootstrapped {
         audit: { record: (input, options) => auditModule.recorder.record(input, options) },
         mediaUrls,
         resolveBuyer: (req: Request) => req.auth?.accountId as string,
+        // Same number payments enforces, so the screens never disagree with it.
+        returnWindowDays: env.RETURN_WINDOW_DAYS,
     });
 
     /**
@@ -632,10 +634,14 @@ export function bootstrap(): Bootstrapped {
         finance: financeModule.postings,
         royalties: financeModule.royaltyReversal,
         claims: claimsModule.revocation,
+        // Media owns MediaAsset and the bucket; undefined with no bucket, in
+        // which case a buyer cannot place a physical return (photos required).
+        returnEvidence: mediaModule?.returnEvidence,
         gateway: paymentGateway,
         webhookSigningSecret: env.STRIPE_WEBHOOK_SECRET,
         webhookToleranceSeconds: env.PAYMENT_WEBHOOK_TOLERANCE_SECONDS,
         holdSeconds: env.INVENTORY_HOLD_SECONDS,
+        returnWindowDays: env.RETURN_WINDOW_DAYS,
         resolveAccess: async (req: Request) =>
             buildPaymentAccess(await accessControlModule.guard.describePrincipal(req)),
         // requireAuth has already run on every route that uses this, so

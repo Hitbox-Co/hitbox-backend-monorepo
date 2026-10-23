@@ -8,6 +8,8 @@ import {
     PAYMENTS_AUDIT_EVENTS,
     PAYMENTS_ERROR_CODES,
     PAYMENT_EVENTS,
+    RETURN_DESCRIPTION_MIN_LENGTH,
+    RETURN_EVIDENCE_MIN_PHOTOS,
 } from '../constants/payments.constant';
 import type { IPaymentsAuditRecorder } from '../domain/interfaces/audit-recorder.port';
 import type { IClaimRevocation } from '../domain/interfaces/claim-revocation.interface';
@@ -17,6 +19,7 @@ import type {
 } from '../domain/interfaces/finance-postings.interface';
 import type { IOrderLedger } from '../domain/interfaces/order-ledger.interface';
 import type { CreateRefundResult, IPaymentGateway } from '../domain/interfaces/payment-gateway.interface';
+import type { IReturnEvidenceMedia } from '../domain/interfaces/return-evidence.interface';
 import { gatewayFailure } from '../domain/gateway-error';
 import { toMinorUnits } from '../domain/minor-units';
 import type { PaymentAccess } from '../domain/payment-access';
@@ -32,13 +35,28 @@ import type {
     ConfirmReturnDto,
     ListRefundsQuery,
     ProcessRefundDto,
+    RefundEvidenceView,
     RefundView,
     RejectRefundDto,
     RequestRefundDto,
+    ReturnEvidenceUploadDto,
+    ReturnEvidenceUploadView,
 } from '../dto/payments.dto';
 import type { GatewayConfigRepository } from '../repository/gateway-config.repository';
 import type { PaymentRepository } from '../repository/payment.repository';
-import type { RefundRepository } from '../repository/refund.repository';
+import type { RefundRepository, RefundRow } from '../repository/refund.repository';
+
+/** The order facts a refund is checked against. */
+type OrderSummary = NonNullable<Awaited<ReturnType<IOrderLedger['findOrderSummary']>>>;
+
+/** Why one attached photo was refused. Reported per asset, all at once. */
+export type EvidenceProblem =
+    | 'NOT_FOUND'
+    | 'WRONG_ORDER'
+    | 'NOT_UPLOADED'
+    | 'ARCHIVED'
+    | 'REJECTED_BY_SCAN'
+    | 'ALREADY_ATTACHED';
 
 export interface RefundServiceDeps {
     refunds: RefundRepository;
@@ -49,6 +67,16 @@ export interface RefundServiceDeps {
     royalties: IRoyaltyReversal;
     claims: IClaimRevocation;
     gateway?: IPaymentGateway | undefined;
+    /**
+     * Photo evidence on returns. Absent on a deployment with no media bucket:
+     * reads still work (photos show without URLs), but a buyer cannot place a
+     * physical return, because the evidence it requires cannot be taken.
+     */
+    evidence?: IReturnEvidenceMedia | undefined;
+    /** Days after delivery a return may be placed. RETURN_WINDOW_DAYS. */
+    returnWindowDays: number;
+    /** Injected for tests. */
+    now?: () => Date;
     eventBus: IEventBus;
     audit: IPaymentsAuditRecorder;
     logger: Logger;
@@ -76,7 +104,9 @@ export interface GatewayRefundUpdate {
  *
  * The design document's day-15-to-21 sequence, as five methods:
  *
- *     request        buyer or support raises it
+ *     createEvidenceUpload   (a return only) one upload URL per photo
+ *     request        buyer or support raises it — a buyer's return must
+ *                    carry photos and a real description
  *     confirmReturn  the warehouse has the item, and the tag's condition
  *     approve        a HitBox admin decides, with the item in hand
  *     process        the money goes back, the claim is revoked, the tag is
@@ -101,40 +131,79 @@ export interface GatewayRefundUpdate {
 export class RefundService {
     constructor(private readonly deps: RefundServiceDeps) { }
 
+    // ── 0. Return photos ────────────────────────────────────────────────────
+
+    /**
+     * An upload URL for one photo of the item being returned.
+     *
+     * Step one of placing a return: the client calls this once per photo,
+     * PUTs each file straight to storage, then sends the asset ids with
+     * `POST /refunds`. The same eligibility rules as the request itself run
+     * here, so a buyer is told "this order can't be refunded" before they
+     * spend time photographing it rather than after.
+     */
+    async createEvidenceUpload(
+        dto: ReturnEvidenceUploadDto,
+        callerId: string,
+        access: PaymentAccess,
+    ): Promise<ReturnEvidenceUploadView> {
+        const media = this.requireEvidenceMedia();
+        // Photos exist only for a return, so the return window applies.
+        await this.requireRaisable(dto.orderId, callerId, access, { physicalReturn: true });
+        const upload = await media.createUpload({
+            orderId: dto.orderId,
+            uploadedById: callerId,
+            fileName: dto.fileName,
+            mimeType: dto.mimeType,
+            sizeBytes: dto.sizeBytes,
+        });
+        return {
+            assetId: upload.assetId,
+            uploadUrl: upload.uploadUrl,
+            expiresIn: upload.expiresIn,
+            requiredHeaders: upload.requiredHeaders,
+        };
+    }
+
     // ── 1. Request ──────────────────────────────────────────────────────────
 
+    /**
+     * A refund is asked for. When the buyer is placing a **return** — a
+     * physical item going back — they must also say what is wrong
+     * (RETURN_DESCRIPTION_MIN_LENGTH characters) and show it (at least
+     * RETURN_EVIDENCE_MIN_PHOTOS photo). That is what the warehouse inspects
+     * the parcel against and what an approver decides on; a return with
+     * neither is unreviewable.
+     *
+     * Staff raising a return on a buyer's behalf may attach photos but are not
+     * made to — the buyer may have reported it by phone, and the warehouse
+     * inspection is the evidence there.
+     */
     async request(
         dto: RequestRefundDto,
         requestedById: string,
         access: PaymentAccess,
     ): Promise<RefundView> {
-        const order = await this.deps.orders.findOrderSummary(dto.orderId);
-        if (!order) {
-            throw AppError.notFound('Order not found.', PAYMENTS_ERROR_CODES.NOT_FOUND);
-        }
+        const order = await this.requireRaisable(dto.orderId, requestedById, access, {
+            physicalReturn: dto.physicalReturnRequired,
+        });
 
-        // A buyer may raise a refund on their own order; anyone else needs the
-        // refund grant. Support raising one on a buyer's behalf is the second
-        // case, not a special third one.
-        if (order.buyerId !== requestedById) {
-            requireRefund(access, 'raise a refund on another buyer’s order');
-        }
-
-        if (!['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(order.status)) {
-            throw AppError.badRequest(
-                `An order that is ${order.status} cannot be refunded.`,
-                PAYMENTS_ERROR_CODES.NOT_REFUNDABLE,
-                { status: order.status },
-            );
-        }
-
-        const open = await this.deps.refunds.findOpenForOrder(dto.orderId);
-        if (open) {
-            throw AppError.conflict(
-                'A refund is already in progress for this order.',
-                PAYMENTS_ERROR_CODES.INVALID_TRANSITION,
-                { refundRequestId: open.id, status: open.status },
-            );
+        const isBuyerReturn = dto.physicalReturnRequired && order.buyerId === requestedById;
+        if (isBuyerReturn) {
+            if (dto.reason.trim().length < RETURN_DESCRIPTION_MIN_LENGTH) {
+                throw AppError.badRequest(
+                    `Describe what is wrong with the item in at least ${RETURN_DESCRIPTION_MIN_LENGTH} characters.`,
+                    PAYMENTS_ERROR_CODES.RETURN_DESCRIPTION_TOO_SHORT,
+                    { minLength: RETURN_DESCRIPTION_MIN_LENGTH, length: dto.reason.trim().length },
+                );
+            }
+            if (dto.evidenceAssetIds.length < RETURN_EVIDENCE_MIN_PHOTOS) {
+                throw AppError.badRequest(
+                    'Add at least one photo of the item you are returning.',
+                    PAYMENTS_ERROR_CODES.RETURN_EVIDENCE_REQUIRED,
+                    { minPhotos: RETURN_EVIDENCE_MIN_PHOTOS },
+                );
+            }
         }
 
         const orderAmount = new Prisma.Decimal(order.amount);
@@ -152,23 +221,41 @@ export class RefundService {
             );
         }
 
+        await this.assertEvidenceUsable(dto.evidenceAssetIds, order, requestedById);
+
         const now = new Date();
-        const refund = await this.deps.refunds.create({
-            id: randomUUID(),
-            orderId: dto.orderId,
-            requestedById,
-            reason: dto.reason,
-            reasonCode: dto.reasonCode,
-            // A physical item goes straight to AWAITING_RETURN: there is no
-            // state in which someone has decided to approve it yet, and
-            // starting at REQUESTED would make the return look optional.
-            status: dto.physicalReturnRequired ? 'AWAITING_RETURN' : 'REQUESTED',
-            amount: requested,
-            currency: order.currency as never,
-            physicalReturnRequired: dto.physicalReturnRequired,
-            createdAt: now,
-            updatedAt: now,
-        });
+        let refund: RefundRow;
+        try {
+            refund = await this.deps.refunds.create(
+                {
+                    id: randomUUID(),
+                    orderId: dto.orderId,
+                    requestedById,
+                    reason: dto.reason,
+                    reasonCode: dto.reasonCode,
+                    // A physical item goes straight to AWAITING_RETURN: there is no
+                    // state in which someone has decided to approve it yet, and
+                    // starting at REQUESTED would make the return look optional.
+                    status: dto.physicalReturnRequired ? 'AWAITING_RETURN' : 'REQUESTED',
+                    amount: requested,
+                    currency: order.currency as never,
+                    physicalReturnRequired: dto.physicalReturnRequired,
+                    createdAt: now,
+                    updatedAt: now,
+                },
+                { mediaAssetIds: dto.evidenceAssetIds, attachedById: requestedById },
+            );
+        } catch (error) {
+            // Lost a race for a photo to another return between the check above
+            // and the insert — the unique index caught it.
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                throw AppError.conflict(
+                    'One of these photos was just attached to another return.',
+                    PAYMENTS_ERROR_CODES.RETURN_EVIDENCE_INVALID,
+                );
+            }
+            throw error;
+        }
 
         await this.deps.eventBus.publish(PAYMENT_EVENTS.REFUND_REQUESTED, {
             refundRequestId: refund.id,
@@ -176,13 +263,179 @@ export class RefundService {
             amount: requested.toFixed(2),
             currency: order.currency,
             reasonCode: dto.reasonCode,
+            evidenceCount: dto.evidenceAssetIds.length,
         });
         this.deps.logger.info(
-            { refundRequestId: refund.id, orderId: dto.orderId, reasonCode: dto.reasonCode },
+            {
+                refundRequestId: refund.id,
+                orderId: dto.orderId,
+                reasonCode: dto.reasonCode,
+                evidenceCount: dto.evidenceAssetIds.length,
+            },
             'refund requested',
         );
 
-        return this.toView(refund, access);
+        return this.toView(refund, access, await this.loadEvidence(refund.id));
+    }
+
+    /**
+     * The order behind a new refund, once it is established that this caller
+     * may raise one on it and that it is in a state to be refunded. Shared by
+     * the request and by the photo upload that precedes it.
+     */
+    private async requireRaisable(
+        orderId: string,
+        callerId: string,
+        access: PaymentAccess,
+        options: { physicalReturn: boolean },
+    ): Promise<OrderSummary> {
+        const order = await this.deps.orders.findOrderSummary(orderId);
+        if (!order) {
+            throw AppError.notFound('Order not found.', PAYMENTS_ERROR_CODES.NOT_FOUND);
+        }
+
+        // A buyer may raise a refund on their own order; anyone else needs the
+        // refund grant. Support raising one on a buyer's behalf is the second
+        // case, not a special third one.
+        if (order.buyerId !== callerId) {
+            requireRefund(access, 'raise a refund on another buyer’s order');
+        }
+
+        if (!['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(order.status)) {
+            throw AppError.badRequest(
+                `An order that is ${order.status} cannot be refunded.`,
+                PAYMENTS_ERROR_CODES.NOT_REFUNDABLE,
+                { status: order.status },
+            );
+        }
+
+        const open = await this.deps.refunds.findOpenForOrder(orderId);
+        if (open) {
+            throw AppError.conflict(
+                'A refund is already in progress for this order.',
+                PAYMENTS_ERROR_CODES.INVALID_TRANSITION,
+                { refundRequestId: open.id, status: open.status },
+            );
+        }
+
+        this.assertReturnWindow(order, callerId, options.physicalReturn);
+        return order;
+    }
+
+    /**
+     * RETURN_WINDOW_DAYS after delivery, then closed for good.
+     *
+     * Closed means two things:
+     *   - **no return**, for anyone — buyer or staff, there is no override;
+     *   - **no refund at all from the buyer** on that delivered order. Without
+     *     this a buyer past the window could ask for a refund with
+     *     `physicalReturnRequired: false` and keep the item.
+     *
+     * Staff may still raise a refund with nothing sent back (a goodwill
+     * gesture, settling a complaint) — that is a decision, not a return.
+     *
+     * The window starts at `deliveredAt`. An order not yet delivered (or never
+     * confirmed as delivered) has no window running yet.
+     */
+    private assertReturnWindow(order: OrderSummary, callerId: string, physicalReturn: boolean): void {
+        if (!order.deliveredAt) return;
+        const closesAt = new Date(order.deliveredAt.getTime() + this.deps.returnWindowDays * 86_400_000);
+        const now = this.deps.now?.() ?? new Date();
+        if (now < closesAt) return;
+        if (!physicalReturn && order.buyerId !== callerId) return;
+
+        throw AppError.badRequest(
+            `The ${this.deps.returnWindowDays}-day return window for this order closed on ${closesAt.toISOString().slice(0, 10)}.`,
+            PAYMENTS_ERROR_CODES.RETURN_WINDOW_CLOSED,
+            {
+                deliveredAt: order.deliveredAt.toISOString(),
+                returnWindowEndsAt: closesAt.toISOString(),
+                returnWindowDays: this.deps.returnWindowDays,
+            },
+        );
+    }
+
+    /**
+     * Every attached photo must be one the caller uploaded, for this order,
+     * whose bytes really are in storage, and that backs no other return.
+     *
+     * All problems are reported together, per asset, so a client can mark the
+     * exact thumbnails to retry instead of discovering them one at a time.
+     * Someone else's asset reports as NOT_FOUND — "that exists but is not
+     * yours" would let ids be probed.
+     */
+    private async assertEvidenceUsable(
+        assetIds: string[],
+        order: OrderSummary,
+        callerId: string,
+    ): Promise<void> {
+        if (assetIds.length === 0) return;
+        const media = this.requireEvidenceMedia();
+
+        const [assets, attached] = await Promise.all([
+            media.inspect(assetIds),
+            this.deps.refunds.findAttachedAssetIds(assetIds),
+        ]);
+        const byId = new Map(assets.map((asset) => [asset.id, asset]));
+        const taken = new Set(attached);
+
+        const problems: { assetId: string; problem: EvidenceProblem }[] = [];
+        for (const assetId of assetIds) {
+            const asset = byId.get(assetId);
+            const problem: EvidenceProblem | null =
+                !asset || asset.uploadedById !== callerId ? 'NOT_FOUND'
+                    : asset.orderId !== order.orderId ? 'WRONG_ORDER'
+                        : asset.archived ? 'ARCHIVED'
+                            : asset.infected ? 'REJECTED_BY_SCAN'
+                                : !asset.uploaded ? 'NOT_UPLOADED'
+                                    : taken.has(assetId) ? 'ALREADY_ATTACHED'
+                                        : null;
+            if (problem) problems.push({ assetId, problem });
+        }
+
+        if (problems.length > 0) {
+            throw AppError.badRequest(
+                'Some photos cannot be attached to this return.',
+                PAYMENTS_ERROR_CODES.RETURN_EVIDENCE_INVALID,
+                { problems },
+            );
+        }
+    }
+
+    private requireEvidenceMedia(): IReturnEvidenceMedia {
+        if (!this.deps.evidence) {
+            // A 400 with its own code, like GATEWAY_UNAVAILABLE: the error
+            // handler renders every 5xx AppError as an opaque 500, and the
+            // client needs to be able to say *why* the return cannot be placed.
+            throw AppError.badRequest(
+                'Photo uploads are not available on this deployment, so a return cannot be placed here.',
+                PAYMENTS_ERROR_CODES.EVIDENCE_STORAGE_UNAVAILABLE,
+            );
+        }
+        return this.deps.evidence;
+    }
+
+    /** A refund's photos with signed URLs, for a detail response. */
+    private async loadEvidence(refundRequestId: string): Promise<RefundEvidenceView[]> {
+        const rows = await this.deps.refunds.findEvidence(refundRequestId);
+        if (rows.length === 0) return [];
+        const files = this.deps.evidence
+            ? await this.deps.evidence.viewFiles(rows.map((row) => row.mediaAssetId))
+            : [];
+        const byId = new Map(files.map((file) => [file.assetId, file]));
+        return rows.map((row) => {
+            const file = byId.get(row.mediaAssetId);
+            return {
+                assetId: row.mediaAssetId,
+                position: row.position,
+                fileName: file?.fileName ?? null,
+                mimeType: file?.mimeType ?? null,
+                sizeBytes: file?.sizeBytes ?? null,
+                url: file?.url ?? null,
+                expiresIn: file?.expiresIn ?? null,
+                attachedAt: row.createdAt.toISOString(),
+            };
+        });
     }
 
     // ── 2. Physical return ──────────────────────────────────────────────────
@@ -784,12 +1037,14 @@ export class RefundService {
             page: query.page,
             limit: query.limit,
             total,
-            items: items.map((row) => this.toView(row, access)),
+            items: items.map((row) => this.toView(row, access, null)),
         };
     }
 
+    /** Detail: the refund plus its photos with signed URLs. */
     async getById(id: string, access: PaymentAccess): Promise<RefundView> {
-        return this.toView(await this.requireInScope(id, access), access);
+        const row = await this.requireInScope(id, access);
+        return this.toView(row, access, await this.loadEvidence(row.id));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -804,7 +1059,7 @@ export class RefundService {
         return { order: { buyerId: access.userId } };
     }
 
-    private async requireInScope(id: string, access: PaymentAccess): Promise<RefundRequest> {
+    private async requireInScope(id: string, access: PaymentAccess): Promise<RefundRow> {
         const { items } = await this.deps.refunds.list({
             page: 1,
             limit: 1,
@@ -819,7 +1074,11 @@ export class RefundService {
         return refund;
     }
 
-    private toView(row: RefundRequest, access: PaymentAccess): RefundView {
+    private toView(
+        row: RefundRow,
+        access: PaymentAccess,
+        evidence: RefundEvidenceView[] | null,
+    ): RefundView {
         return {
             id: row.id,
             orderId: row.orderId,
@@ -843,6 +1102,8 @@ export class RefundService {
             claimRevokedAt: row.claimRevokedAt?.toISOString() ?? null,
             resaleBlockedUntil: row.resaleBlockedUntil?.toISOString() ?? null,
             createdAt: row.createdAt.toISOString(),
+            evidenceCount: evidence?.length ?? row._count?.evidence ?? 0,
+            evidence,
             allowedTransitions: REFUND_TRANSITIONS[row.status],
             allowedActions: refundActions(row, access.canRefund),
         };

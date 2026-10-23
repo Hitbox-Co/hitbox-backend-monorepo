@@ -83,6 +83,8 @@ export class OrderLedgerAdapter {
             amount: order.amount.toFixed(2),
             currency: order.currency,
             gateway: order.gateway,
+            // Starts the return window — payments enforces RETURN_WINDOW_DAYS from it.
+            deliveredAt: order.deliveredAt,
         };
     }
 

@@ -11,6 +11,12 @@
 > - **the payments module** (`/admin/payments/*` and `/refunds`) runs the refund
 >   workflow, payment review, disputes and webhook logs.
 >
+> **Returns need photos.** A buyer sending an item back must upload at least
+> one photo of it and describe the problem (≥ 20 characters) — see
+> [6.0](#60-placing-a-return--photos-and-description). Every refund response
+> now carries `evidenceCount` and, on detail, `evidence[]` with signed photo
+> URLs.
+>
 > Deeper background: [finance/refunds-and-disputes.md](../finance/refunds-and-disputes.md)
 > (why the workflow is shaped this way, what `process` does to claims and
 > royalties), [finance/payments-and-webhooks.md](../finance/payments-and-webhooks.md)
@@ -48,7 +54,9 @@ records return `{ "data": {...} }`; errors return
 | Screen | Call(s) |
 |---|---|
 | **Order page → "Payments & refunds" card** | `GET /admin/orders/:orderId` → `money`, `payments`, `refunds` (2) |
-| Order page → **Refund** button | `POST /refunds` with the order's id (6.1) — show only when `money.canRequestRefund` |
+| Order page → **Refund** button | `POST /refunds` with the order's id (6.1) — show only when `money.canRequestRefund`. Photos optional for staff (6.0) |
+| **Buyer app → Return this item** | `POST /refunds/evidence/upload-url` per photo → `PUT` each to S3 → `POST /refunds` with `evidenceAssetIds` (6.0, 6.1) |
+| **Buyer app → My return** | `GET /refunds/:refundId` — the buyer's own refund with its photos (6.3) |
 | **Refunds queue** | `GET /admin/payments/refunds?status=…` (6.2) |
 | **Refund detail** + its action buttons | `GET /admin/payments/refunds/:refundId` → render one button per `allowedActions` entry (5, 6) |
 | **Payments list / review queue** | `GET /admin/payments/transactions?needsReview=true` (4) |
@@ -90,7 +98,9 @@ Every order has `paidAt` and `unitAssignedById`. The callers who can see money
       "refundable": "29.00",
       "canRequestRefund": false,
       "refundBlockedReason": "REFUND_IN_PROGRESS",
-      "openRefundId": "cf2e…"
+      "openRefundId": "cf2e…",
+      "returnWindowEndsAt": "2026-10-20T14:05:00.000Z",
+      "returnWindowOpen": true
     },
 
     "payments": [
@@ -157,6 +167,8 @@ and always in the order's own `currency`.
 | `refundInProgress` | Amount of the open refund (`REQUESTED`, `AWAITING_RETURN` or `APPROVED`), else `"0.00"` |
 | `refundable` | `charged − refunded − refundFailed`, never below zero — the most a new refund may ask for (a failed refund is fixed by an operator, not by a second request) |
 | `openRefundId` | The open refund's id, for a "View refund in progress" link |
+| `returnWindowEndsAt` | `deliveredAt` + `RETURN_WINDOW_DAYS` (10). `null` until delivered |
+| `returnWindowOpen` | `true` until `returnWindowEndsAt` (also before delivery). When `false`, no **return** can be placed by anyone — turn the "item must be returned" toggle off and disable it |
 | `canRequestRefund` | `true` only when **all** of the rules below pass |
 | `refundBlockedReason` | Which rule failed, when `canRequestRefund` is `false` |
 
@@ -165,6 +177,7 @@ and always in the order's own `currency`.
 | `NO_PERMISSION` | The caller lacks `order:refund:global` | Hide the button |
 | `ORDER_NOT_REFUNDABLE` | Order isn't `PAID`, `PROCESSING`, `SHIPPED` or `DELIVERED` (e.g. pending, cancelled, already `REFUNDED`) | Disable: "This order can't be refunded" |
 | `REFUND_IN_PROGRESS` | A refund is already open — only one at a time | Replace with "View refund in progress" → `openRefundId` |
+| `RETURN_WINDOW_CLOSED` | **Buyer screens only.** Delivered more than 10 days ago. Staff never get this — past the window they may still refund with nothing sent back | "Return window closed on …" |
 | `FULLY_REFUNDED` | `refundable` is `0.00` | Disable: "Fully refunded" |
 
 These are the same rules `POST /refunds` enforces (6.1), so a button shown as
@@ -263,6 +276,17 @@ back.** If a refund needs the physical item returned
 the return is confirmed — unless an admin explicitly overrides that, with a
 written reason, which is recorded.
 
+**A buyer's return starts with evidence.** When the buyer places a return
+(`physicalReturnRequired: true`), the request must carry at least one photo of
+the item and a description of at least 20 characters (6.0). Those photos are
+what the warehouse compares the parcel against at **confirm-return** and what
+the approver looks at before **approve** — show them on the refund detail
+(`evidence[]`, 6.3).
+
+A physical return starts at `AWAITING_RETURN`, not `REQUESTED`: nobody has
+decided anything yet, the item simply has to come back first. `REQUESTED` is
+the starting state only when nothing is being sent back.
+
 ### `allowedActions` — the buttons to show
 
 Every refund response carries `allowedActions`, computed for the **caller**
@@ -295,7 +319,106 @@ caller's permission.
 
 ## 6. Refund endpoints
 
-### 6.1 `POST /refunds` — start a refund
+### 6.0 Placing a return — photos and description
+
+A **return** is a refund where the item goes back
+(`physicalReturnRequired: true`, the default). When the **buyer** places one,
+two things are mandatory:
+
+| Requirement | Rule | Error if missing |
+|---|---|---|
+| **Description** | `reason`, at least **20 characters** after trimming (max 1000). Say what is wrong, not just "return" | `400 PAYMENTS_RETURN_DESCRIPTION_TOO_SHORT` — `details: { minLength, length }` |
+| **Photos** | `evidenceAssetIds`, **1 to 8** photos of the item, uploaded first | `400 PAYMENTS_RETURN_EVIDENCE_REQUIRED` — `details: { minPhotos }` |
+
+**The return window: 10 days from delivery, then closed.** Counted from
+`Order.deliveredAt` (`RETURN_WINDOW_DAYS`, default 10). Once it closes:
+
+| Who | Return (`physicalReturnRequired: true`) | Refund with nothing sent back |
+|---|---|---|
+| Buyer | ❌ `400 PAYMENTS_RETURN_WINDOW_CLOSED` | ❌ same — otherwise "refund me, I'll keep it" gets round the rule |
+| Staff (`order:refund:global`) | ❌ same — **there is no override** | ✅ allowed (goodwill, complaint settlement) |
+
+`details`: `{ deliveredAt, returnWindowEndsAt, returnWindowDays }`. The photo
+upload URL (below) is refused the same way, so the buyer is stopped before
+photographing anything. An order not yet delivered (`deliveredAt: null`) has
+no window running — a shipped order can still be returned. The order detail
+shows the deadline as `money.returnWindowEndsAt` (3).
+
+Neither photos nor a description are required when nothing is sent back (`physicalReturnRequired:
+false`, e.g. `NOT_DELIVERED`, `DUPLICATE_CHARGE`), and neither is forced on
+**staff** raising a return on a buyer's behalf (`order:refund:global`) — the
+buyer may have reported it by phone. Both may still attach photos.
+
+**The flow — three steps, client-side:**
+
+```
+1. POST /refunds/evidence/upload-url   { orderId, fileName, mimeType, sizeBytes }   ← once per photo
+       → { assetId, uploadUrl, expiresIn: 300, requiredHeaders: { "Content-Type": "image/jpeg" } }
+
+2. PUT  {uploadUrl}                    body = the file bytes, header Content-Type exactly as given
+       → 200 from S3 (no API call)
+
+3. POST /refunds                       { orderId, reasonCode, reason, evidenceAssetIds: [assetId, …] }
+       → 201, the refund with evidence[] (6.3)
+```
+
+#### `POST /refunds/evidence/upload-url`
+
+Same access as `POST /refunds`: the order's buyer, or a caller holding
+`order:refund:global`. The order must be refundable **now** and have no open
+refund — the same checks as step 3, so the buyer hears "this order can't be
+refunded" before taking photos, not after.
+
+```json
+{ "orderId": "8c1e…", "fileName": "IMG_0042.HEIC", "mimeType": "image/heic", "sizeBytes": 2481152 }
+```
+
+| Field | Rules |
+|---|---|
+| `orderId` | Required, uuid |
+| `fileName` | 1–255 chars. Only the extension is kept; the stored name is the asset id |
+| `mimeType` | `image/jpeg`, `image/png`, `image/webp`, `image/heic`, `image/heif` |
+| `sizeBytes` | Required, `file.size`, at most **15 MB** (15 728 640). Bound into the signature: S3 rejects a body of any other length |
+
+Response `201`:
+
+```json
+{
+  "data": {
+    "assetId": "a91f…",
+    "uploadUrl": "https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/return-evidence/orders/8c1e…/a91f….heic?X-Amz-…",
+    "expiresIn": 300,
+    "requiredHeaders": { "Content-Type": "image/heic" }
+  }
+}
+```
+
+Then `PUT` the file to `uploadUrl` within `expiresIn` seconds, with exactly
+`requiredHeaders` (the browser sets `Content-Length` itself). Keep the
+`assetId`s in the order the photos should display.
+
+| Error | When |
+|---|---|
+| `400 UNSUPPORTED_MIME_TYPE` | Not one of the image types above (`details.allowed`) |
+| `400 FILE_TOO_LARGE` | Over 15 MB (`details.maxBytes`) |
+| `400 PAYMENTS_NOT_REFUNDABLE` | Order isn't `PAID`/`PROCESSING`/`SHIPPED`/`DELIVERED` |
+| `409 PAYMENTS_INVALID_TRANSITION` | A refund is already open on the order |
+| `400 PAYMENTS_RETURN_WINDOW_CLOSED` | Delivered more than 10 days ago |
+| `403 PAYMENTS_FORBIDDEN` | Not your order, and no refund grant |
+| `404 PAYMENTS_NOT_FOUND` | No such order |
+| `400 PAYMENTS_EVIDENCE_STORAGE_UNAVAILABLE` | This deployment has no media bucket — returns can't be placed here at all |
+
+Photos are **private**: they live under `return-evidence/` in the bucket,
+which has no public read, and are only ever served through short-lived signed
+URLs on the refund (6.3). Brand and artist staff never see them — they are not
+organization-owned, so no organization-scoped media grant reaches them.
+
+**Uploads are checked, not trusted.** At step 3 the server asks S3 whether
+each object is actually there at the declared size. An `assetId` whose upload
+never completed is refused (`NOT_UPLOADED`, below) — requesting an upload URL
+is not the same as uploading.
+
+### 6.1 `POST /refunds` — start a refund (or place a return)
 
 A buyer can raise one on their own order; anyone raising it **for** a buyer
 (support, an admin) needs `order:refund:global`.
@@ -304,9 +427,10 @@ A buyer can raise one on their own order; anyone raising it **for** a buyer
 {
   "orderId": "8c1e…",
   "reasonCode": "DEFECTIVE_ITEM",
-  "reason": "Print peeled after the first wash — photos in the support ticket.",
+  "reason": "Print peeled after the first wash; the sleeve seam has split as well.",
   "amount": "29.00",
-  "physicalReturnRequired": true
+  "physicalReturnRequired": true,
+  "evidenceAssetIds": ["a91f…", "b20c…"]
 }
 ```
 
@@ -314,17 +438,53 @@ A buyer can raise one on their own order; anyone raising it **for** a buyer
 |---|---|
 | `orderId` | Required |
 | `reasonCode` | `DEFECTIVE_ITEM`, `DEFECTIVE_TAG`, `NOT_AS_DESCRIBED`, `NOT_DELIVERED`, `DUPLICATE_CHARGE`, `BUYER_CHANGED_MIND`, `FRAUDULENT_CHARGE`, `OTHER` |
-| `reason` | Free text, 1–1000 chars |
+| `reason` | The description. 1–1000 chars, trimmed; **≥ 20 on a buyer's return** (6.0) |
 | `amount` | Optional — omit for a full refund. A partial amount is allowed (never more than `money.refundable`), but **processing any refund marks the order `REFUNDED`**, so an order gets one refund — make it the right amount |
 | `physicalReturnRequired` | Default `true`. Set `false` for e.g. `NOT_DELIVERED` or `DUPLICATE_CHARGE`, where there's nothing to send back |
+| `evidenceAssetIds` | Photo asset ids from 6.0, in display order. 0–8, no duplicates. **At least 1 on a buyer's return** |
 
-Refused when the order isn't `PAID`/`PROCESSING`/`SHIPPED`/`DELIVERED`
+Each photo must have been uploaded **by the caller**, **for this order**, and
+actually reached storage, and must not already belong to another refund.
+Every bad photo is reported at once, so the UI can mark exactly which
+thumbnails to retry:
+
+```json
+{
+  "error": {
+    "code": "PAYMENTS_RETURN_EVIDENCE_INVALID",
+    "message": "Some photos cannot be attached to this return.",
+    "details": {
+      "problems": [
+        { "assetId": "a91f…", "problem": "NOT_UPLOADED" },
+        { "assetId": "c77d…", "problem": "NOT_FOUND" }
+      ]
+    }
+  }
+}
+```
+
+| `problem` | Meaning | What the UI should do |
+|---|---|---|
+| `NOT_UPLOADED` | An upload URL was issued but the `PUT` never completed (or was a different size) | Re-upload that photo (new upload URL) |
+| `NOT_FOUND` | Unknown id, not a return photo, or uploaded by someone else | Drop it; re-upload |
+| `WRONG_ORDER` | The photo was uploaded for a different order | Re-upload for this order |
+| `ALREADY_ATTACHED` | The photo already belongs to another refund | Re-upload |
+| `ARCHIVED` | The photo was removed | Re-upload |
+| `REJECTED_BY_SCAN` | The malware scanner flagged it (only when scanning is enabled) | Use a different file |
+
+The refund and its photos are written in one transaction — a return never
+exists without the photos it was placed with. Two returns racing for the same
+photo produce one success and a `409 PAYMENTS_RETURN_EVIDENCE_INVALID`.
+
+Also refused when the order isn't `PAID`/`PROCESSING`/`SHIPPED`/`DELIVERED`
 (`400 PAYMENTS_NOT_REFUNDABLE`), a refund is already open
 (`409 PAYMENTS_INVALID_TRANSITION`, `details.refundRequestId`), or the amount
 would over-refund (`400 PAYMENTS_AMOUNT_EXCEEDS_CAPTURE`, with
 `details.orderAmount`, `alreadyRefunded`, `requested`).
 
-Response `201`: the refund (6.3), status `REQUESTED`.
+Response `201`: the refund (6.3) including `evidence[]`. Status
+`AWAITING_RETURN` when `physicalReturnRequired` is `true`, `REQUESTED` when it
+is `false`.
 
 ### 6.2 `GET /admin/payments/refunds` — the queue
 
@@ -342,7 +502,15 @@ Processed · Rejected**, plus a red **Failed at Stripe** tab
 (`gatewayStatus=FAILED`). Each item carries `allowedActions`, so the queue can
 offer inline actions.
 
+List items carry `evidenceCount` (show a 📷 2 badge) but **`evidence: null`**
+— photo URLs are only minted on the detail, so a 20-row page doesn't sign 160
+URLs nobody looks at. Open the detail to see the photos.
+
 ### 6.3 `GET /admin/payments/refunds/:refundId` — detail
+
+The buyer reads their own refund at **`GET /refunds/:refundId`** — same
+response, scoped to refunds on their own orders (anyone else's is a `404`),
+with `allowedActions: []`.
 
 ```json
 {
@@ -352,7 +520,7 @@ offer inline actions.
     "requestedById": "5a1f…",
     "reason": "Wrong size — would like to return it.",
     "reasonCode": "BUYER_CHANGED_MIND",
-    "status": "REQUESTED",
+    "status": "AWAITING_RETURN",
     "amount": "29.00",
     "currency": "GBP",
     "physicalReturnRequired": true,
@@ -369,7 +537,30 @@ offer inline actions.
     "claimRevokedAt": null,
     "resaleBlockedUntil": null,
     "createdAt": "2026-10-11T12:00:00.000Z",
-    "allowedTransitions": ["AWAITING_RETURN", "APPROVED", "REJECTED"],
+    "evidenceCount": 2,
+    "evidence": [
+      {
+        "assetId": "a91f…",
+        "position": 0,
+        "fileName": "IMG_0042.HEIC",
+        "mimeType": "image/heic",
+        "sizeBytes": 2481152,
+        "url": "https://hitbox-media-prod.s3.ap-south-1.amazonaws.com/return-evidence/orders/8c1e…/a91f….heic?X-Amz-Expires=300&…",
+        "expiresIn": 300,
+        "attachedAt": "2026-10-11T12:00:00.000Z"
+      },
+      {
+        "assetId": "b20c…",
+        "position": 1,
+        "fileName": "label.jpg",
+        "mimeType": "image/jpeg",
+        "sizeBytes": 911204,
+        "url": null,
+        "expiresIn": null,
+        "attachedAt": "2026-10-11T12:00:00.000Z"
+      }
+    ],
+    "allowedTransitions": ["APPROVED", "REJECTED"],
     "allowedActions": ["CONFIRM_RETURN", "APPROVE_WITH_OVERRIDE", "REJECT"]
   }
 }
@@ -377,6 +568,11 @@ offer inline actions.
 
 | Field | Meaning |
 |---|---|
+| `evidenceCount` | Photos the buyer attached. On list rows too |
+| `evidence[]` | The photos, in the buyer's order (`position` 0…). Detail responses only — `null` on list rows. Every write that returns the refund (confirm-return, approve, reject, process) returns it too |
+| `evidence[].url` | Signed GET, valid **`expiresIn` = 300 s**. Render it directly (`<img src>`); don't store it. Re-fetch the refund for fresh URLs once they expire (e.g. on a 403 from S3 when the operator comes back to the tab) |
+| `evidence[].url: null` | The photo is still attached but can't be shown — removed, flagged by a scanner, or no storage on this deployment. Show a "photo unavailable" placeholder; it still counts in `evidenceCount` |
+| `evidence[].mimeType` | `image/heic` won't render in most desktop browsers outside Safari — show a download link or convert client-side for those |
 | `nfcTagCondition` | Recorded at the return: `INTACT`, `DAMAGED`, `MISSING`, `TAMPERED` |
 | `claimRevokedAt` | Set if the buyer had claimed the item and the refund took ownership back (7) |
 | `resaleBlockedUntil` | Set when the returned tag wasn't intact — the unit can't be resold until then |
@@ -400,6 +596,10 @@ while it's in hand.
 
 `nfcTagCondition` is required. Moves the refund to `AWAITING_RETURN` with the
 return confirmed — after which `allowedActions` offers plain `APPROVE`.
+
+Show the buyer's `evidence[]` photos beside this dialog: the warehouse is
+checking that what arrived is what the buyer photographed, and a mismatch
+(different item, different damage) is grounds to **reject**.
 
 ### 6.5 `POST /admin/payments/refunds/:refundId/approve` 🔒
 
@@ -544,7 +744,7 @@ Checked by capability, never role name.
 | `payment-royalty:read` | See `money`/`payments`/`refunds` on orders; read transactions, refunds, disputes | System Admin, Finance Admin |
 | `order:refund:global` | Raise a refund for any buyer; confirm return, approve, reject, process | System Admin, Order Manager |
 | `payment-royalty:manage:global` | Review payments, run disputes, read webhook logs | System Admin |
-| *(none)* | A buyer raising a refund on **their own** order | Any signed-in buyer |
+| *(none)* | A buyer raising a refund on **their own** order, uploading its return photos, and reading it back (`GET /refunds/:refundId`) | Any signed-in buyer |
 
 Artists and brand staff can't see refunds or disputes. A caller who can read
 but not refund sees every number, gets `money.refundBlockedReason:
@@ -562,6 +762,13 @@ but not refund sees every number, gets `money.refundBlockedReason:
 | `400` | `PAYMENTS_GATEWAY_UNAVAILABLE` | Processing with no adapter wired (or no key for this config's `credentialsRef`) and no `gatewayRefundId` |
 | `400` | `PAYMENTS_GATEWAY_REJECTED` | Stripe refused — e.g. already refunded, unknown charge. `details.providerCode` has Stripe's code. Nothing changed; refund stays `APPROVED` |
 | `400` | `PAYMENTS_GATEWAY_UNREACHABLE` | Stripe down, timed out or rate-limited. Nothing changed — press Process again |
+| `400` | `PAYMENTS_RETURN_WINDOW_CLOSED` | More than 10 days since delivery: no return by anyone, no refund by the buyer (6.0). `details.returnWindowEndsAt` |
+| `400` | `PAYMENTS_RETURN_EVIDENCE_REQUIRED` | A buyer's return with no photos (6.0) |
+| `400` | `PAYMENTS_RETURN_DESCRIPTION_TOO_SHORT` | A buyer's return whose `reason` is under 20 characters (`details.minLength`, `details.length`) |
+| `400` | `PAYMENTS_RETURN_EVIDENCE_INVALID` | One or more photos can't be attached — `details.problems[]` per asset (6.1) |
+| `409` | `PAYMENTS_RETURN_EVIDENCE_INVALID` | A photo was attached to another return at the same moment — re-upload it |
+| `400` | `PAYMENTS_EVIDENCE_STORAGE_UNAVAILABLE` | No media bucket on this deployment, so return photos (and so buyer returns) aren't possible |
+| `400` | `UNSUPPORTED_MIME_TYPE` / `FILE_TOO_LARGE` | Photo upload URL: not a JPEG/PNG/WebP/HEIC/HEIF, or over 15 MB |
 | `403` | `PAYMENTS_FORBIDDEN` | Missing the capability for the action |
 | `404` | `PAYMENTS_NOT_FOUND` | Refund, payment, dispute or order not found (or outside your scope) |
 | `409` | `PAYMENTS_INVALID_TRANSITION` | The action isn't possible from the current status, a refund is already open, or someone changed it concurrently — reload |
@@ -578,9 +785,23 @@ race with another admin — show the message and reload.
 ### A damaged T-shirt, returned and refunded
 
 ```http
+# Buyer app — one upload URL per photo, then PUT each straight to S3
+POST /api/v1/refunds/evidence/upload-url
+{ "orderId": "8c1e…", "fileName": "print.jpg", "mimeType": "image/jpeg", "sizeBytes": 911204 }
+→ 201 { assetId: "a91f…", uploadUrl: "https://…s3…", expiresIn: 300, requiredHeaders: { Content-Type: image/jpeg } }
+
+PUT https://…s3…   (Content-Type: image/jpeg, body = the file)
+→ 200
+
 POST /api/v1/refunds
-{ "orderId": "8c1e…", "reasonCode": "DEFECTIVE_ITEM", "reason": "Print peeling." }
-→ 201, status REQUESTED, allowedActions [CONFIRM_RETURN, APPROVE_WITH_OVERRIDE, REJECT]
+{ "orderId": "8c1e…", "reasonCode": "DEFECTIVE_ITEM",
+  "reason": "Print is peeling off the front after one wash.",
+  "evidenceAssetIds": ["a91f…"] }
+→ 201, status AWAITING_RETURN, evidenceCount 1, evidence[0].url signed for 300 s
+
+# Admin app (allowedActions as seen by an order:refund:global holder)
+GET /api/v1/admin/payments/refunds/cf2e…
+→ allowedActions [CONFIRM_RETURN, APPROVE_WITH_OVERRIDE, REJECT], evidence[] with the photo
 
 POST /api/v1/admin/payments/refunds/cf2e…/confirm-return
 { "nfcTagCondition": "INTACT" }
@@ -595,6 +816,19 @@ POST /api/v1/admin/payments/refunds/cf2e…/process
 → status PROCESSED, gatewayRefundId "re_…"; order → REFUNDED,
   money.refunded "29.00", money.refundable "0.00", canRequestRefund false (ORDER_NOT_REFUNDABLE)
 ```
+
+### A return refused for a photo that never uploaded
+
+```http
+POST /api/v1/refunds
+{ "orderId": "8c1e…", "reasonCode": "NOT_AS_DESCRIBED",
+  "reason": "Colour is navy, the listing showed black.", "evidenceAssetIds": ["a91f…", "b20c…"] }
+→ 400 PAYMENTS_RETURN_EVIDENCE_INVALID
+  details.problems [{ assetId: "b20c…", problem: "NOT_UPLOADED" }]
+```
+
+Re-upload `b20c…`'s file (new upload URL → new `assetId`), then resend with
+`["a91f…", "<new id>"]`. Nothing was created by the failed attempt.
 
 ### Parcel lost in transit — no return possible
 
@@ -631,6 +865,15 @@ REJECTED — plus **G**, a PROCESSED refund whose Stripe refund FAILED
 paid" UI — and lists orders you can start a new refund on. Non-destructive;
 re-running uses the next orders without refunds.
 
+Every buyer-placed return in the demo data carries **two return photos**
+(`RefundEvidence` rows + `RETURN_EVIDENCE` media assets) — `db:seed:demo` adds
+them to its open returns, `db:seed:test-refunds` to each scenario with
+`physicalReturnRequired: true`. They are registry rows only — no bytes were
+uploaded — so their signed URLs come back as `404` from S3. Use them to build
+the gallery and its broken-image state; upload a real photo through 6.0 to see
+one render. Demo refunds that were already `PROCESSED` before photos existed
+have none (`evidenceCount: 0`).
+
 Run from the repo root. Processing those refunds:
 
 - **No `STRIPE_SECRET_KEY`:** send `{ "gatewayRefundId": "re_test_…" }`.
@@ -651,13 +894,20 @@ packages/orders/tests/order-money.test.ts
 
 packages/payments/src/
   domain/refund-workflow.ts        ← REFUND_TRANSITIONS + refundActions() (allowedActions)
-  service/refund.service.ts        ← request / confirm-return / approve / reject / process
+  service/refund.service.ts        ← evidence upload / request / confirm-return / approve / reject / process
+  domain/interfaces/return-evidence.interface.ts ← the port media implements (upload, inspect, signed views)
+  repository/refund.repository.ts  ← refund + RefundEvidence rows in one transaction
   service/…                        ← payments, disputes, gateway configs, webhooks
   module.ts                        ← routes under /admin/payments and /refunds
   adapters/stripe-gateway.ts       ← the Stripe adapter (refunds + PaymentIntents)
   domain/gateway-error.ts          ← Stripe failures → PAYMENTS_GATEWAY_* errors
 packages/payments/tests/refund-actions.test.ts
+packages/payments/tests/return-evidence.test.ts ← photos + description rules, per-asset problems
 packages/payments/tests/stripe-gateway.test.ts
+
+packages/media/src/
+  service/return-evidence.service.ts ← createUpload / inspect (S3 HEAD) / viewFiles (300 s signed GETs)
+  domain/storage-key.ts            ← return-evidence/orders/{orderId}/{assetId}.{ext}
 
 apps/backend/src/adapters/stripe-secrets.ts ← credentialsRef → Stripe key
 
@@ -678,12 +928,24 @@ both are covered by tests.
 - [ ] Payments table from `payments[]`: status chip, amount, `gatewayRef` (link to Stripe), `failureReason` on failed rows, a "Needs review" flag.
 - [ ] Refunds table from `refunds[]`: status chip, reason code, amount, dates; row click → refund detail.
 - [ ] **Refund** button: enabled only when `money.canRequestRefund`; otherwise map `refundBlockedReason` (hide for `NO_PERMISSION`; "View refund in progress" → `openRefundId` for `REFUND_IN_PROGRESS`).
-- [ ] Refund form: reason code select, reason text, optional partial amount (max `money.refundable`), "Item must be returned" toggle (default on).
+- [ ] Refund form: reason code select, reason text, optional partial amount (max `money.refundable`), "Item must be returned" toggle (default on; **forced off and disabled when `money.returnWindowOpen` is `false`**, with "Return window closed on {returnWindowEndsAt}"), optional photos (staff aren't required to attach any).
+
+**Buyer app — Return this item**
+- [ ] On delivered orders show "Return by {actions.returnWindowEndsAt}"; hide the Return button when `refundBlockedReason` is `RETURN_WINDOW_CLOSED`. Use the server's date, never `deliveredAt + 10` computed in the app.
+- [ ] Photo picker: 1–8 images, JPEG/PNG/WebP/HEIC/HEIF, ≤ 15 MB each. Disable **Submit** until at least one has finished uploading.
+- [ ] Description box with a live counter; disable **Submit** under 20 characters (after trimming). Placeholder: "What's wrong with it? e.g. the tag won't scan and the seam is split".
+- [ ] Per photo: `POST /refunds/evidence/upload-url` → `PUT` the file with `requiredHeaders` → mark the thumbnail done. Upload in parallel; show progress per thumbnail.
+- [ ] On `PAYMENTS_RETURN_EVIDENCE_INVALID`, mark each `details.problems[].assetId` thumbnail red with a **Retry** that re-uploads it. Don't resend the request until they're replaced.
+- [ ] On `PAYMENTS_NOT_REFUNDABLE` / `PAYMENTS_INVALID_TRANSITION` from the upload-URL call, stop before the camera opens — the order can't take a return.
+- [ ] After submit, the response already has `evidence[]` — show the confirmation with the photos. "My return" later: `GET /refunds/:refundId`.
 
 **Refunds queue**
 - [ ] Tabs by status; filters for reason code and date range; pagination.
+- [ ] 📷 badge from `evidenceCount` (list rows have `evidence: null` — don't try to render photos here).
 
 **Refund detail**
+- [ ] Photo gallery from `evidence[]` (by `position`), with a lightbox. `url: null` → "photo unavailable" tile. URLs last 300 s: refetch the refund when an image fails to load after the tab sat idle.
+- [ ] Put the gallery next to the **Confirm return** dialog — the warehouse checks the parcel against it.
 - [ ] One button per `allowedActions` entry:
   - `CONFIRM_RETURN` → dialog with tag condition (INTACT / DAMAGED / MISSING / TAMPERED) + note.
   - `APPROVE` → confirm + optional note.

@@ -585,6 +585,7 @@ export class OrderWriteRepository {
                 amount: true,
                 currency: true,
                 gateway: true,
+                deliveredAt: true,
                 drop: { select: { collectionId: true, artistId: true } },
             },
         });

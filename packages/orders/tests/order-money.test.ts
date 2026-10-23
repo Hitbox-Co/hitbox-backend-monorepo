@@ -24,6 +24,8 @@ describe('buildMoneySummary', () => {
             canRequestRefund: true,
             refundBlockedReason: null,
             openRefundId: null,
+            returnWindowEndsAt: null,
+            returnWindowOpen: true,
         });
     });
 
@@ -96,5 +98,32 @@ describe('buildMoneySummary — refunds the provider failed', () => {
             refunds: [{ id: 'r1', status: 'PROCESSED', amount: '500.00', gatewayStatus: 'PENDING' }],
         });
         expect(s).toMatchObject({ refunded: '500.00', refundFailed: '0.00' });
+    });
+});
+
+describe('buildMoneySummary — the return window', () => {
+    const now = new Date('2026-10-23T12:00:00Z');
+    const deliveredDaysAgo = (d: number) => new Date(now.getTime() - d * 86_400_000);
+
+    it('ends RETURN_WINDOW_DAYS after delivery and is open until then', () => {
+        const s = buildMoneySummary({ ...base, callerIsBuyer: true, deliveredAt: deliveredDaysAgo(3), returnWindowDays: 10, now });
+        expect(s.returnWindowEndsAt).toBe('2026-10-30T12:00:00.000Z');
+        expect(s.returnWindowOpen).toBe(true);
+        expect(s.canRequestRefund).toBe(true);
+    });
+
+    it('blocks the buyer once it has closed', () => {
+        const s = buildMoneySummary({ ...base, callerIsBuyer: true, deliveredAt: deliveredDaysAgo(10), returnWindowDays: 10, now });
+        expect(s).toMatchObject({ returnWindowOpen: false, canRequestRefund: false, refundBlockedReason: 'RETURN_WINDOW_CLOSED' });
+    });
+
+    it('leaves staff able to refund (nothing sent back) after it closes', () => {
+        const s = buildMoneySummary({ ...base, deliveredAt: deliveredDaysAgo(30), returnWindowDays: 10, now });
+        expect(s).toMatchObject({ returnWindowOpen: false, canRequestRefund: true, refundBlockedReason: null });
+    });
+
+    it('has not started before delivery', () => {
+        const s = buildMoneySummary({ ...base, orderStatus: 'SHIPPED', callerIsBuyer: true, deliveredAt: null, now });
+        expect(s).toMatchObject({ returnWindowEndsAt: null, returnWindowOpen: true, canRequestRefund: true });
     });
 });

@@ -31,7 +31,42 @@ export const PAYMENTS_ERROR_CODES = {
     GATEWAY_REJECTED: 'PAYMENTS_GATEWAY_REJECTED',
     /** The provider could not be reached, or failed on its side. Safe to retry. */
     GATEWAY_UNREACHABLE: 'PAYMENTS_GATEWAY_UNREACHABLE',
+    /** A buyer placing a return must attach at least one photo. */
+    RETURN_EVIDENCE_REQUIRED: 'PAYMENTS_RETURN_EVIDENCE_REQUIRED',
+    /** A buyer placing a return must describe the problem properly. */
+    RETURN_DESCRIPTION_TOO_SHORT: 'PAYMENTS_RETURN_DESCRIPTION_TOO_SHORT',
+    /** One or more attached photos cannot be used; `details.problems` says why. */
+    RETURN_EVIDENCE_INVALID: 'PAYMENTS_RETURN_EVIDENCE_INVALID',
+    /** No media bucket on this deployment, so photos cannot be taken. */
+    EVIDENCE_STORAGE_UNAVAILABLE: 'PAYMENTS_EVIDENCE_STORAGE_UNAVAILABLE',
+    /** More than RETURN_WINDOW_DAYS since delivery: no return, and no buyer refund. */
+    RETURN_WINDOW_CLOSED: 'PAYMENTS_RETURN_WINDOW_CLOSED',
 } as const;
+
+// ── Return evidence ─────────────────────────────────────────────────────────
+
+/**
+ * Photos on a return. At least one, because "it arrived damaged" with no
+ * picture is unreviewable; at most eight, because more than that is a
+ * gallery nobody reads and eight parallel HEADs is already the cost of a
+ * request.
+ */
+export const RETURN_EVIDENCE_MIN_PHOTOS = 1;
+export const RETURN_EVIDENCE_MAX_PHOTOS = 8;
+
+/**
+ * Minimum description length on a buyer-placed return, after trimming. The
+ * generic refund `reason` accepts one character; a return needs enough words
+ * for the warehouse to know what to look for ("Tag doesn't scan, sleeve
+ * seam split" is 33).
+ */
+export const RETURN_DESCRIPTION_MIN_LENGTH = 20;
+
+/**
+ * Default return window, in days after delivery. Bootstrap passes
+ * RETURN_WINDOW_DAYS from the environment; this is only the fallback.
+ */
+export const DEFAULT_RETURN_WINDOW_DAYS = 10;
 
 // ── Capabilities (all already in the permission catalog) ────────────────────
 

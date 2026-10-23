@@ -80,6 +80,10 @@ const detailSelect = {
             id: true, status: true, reasonCode: true, reason: true, amount: true, currency: true,
             physicalReturnRequired: true, physicalReturnConfirmedAt: true, rejectionReason: true,
             processedAt: true, gatewayStatus: true, createdAt: true,
+            // How many photos the buyer attached. The photos themselves (with
+            // signed URLs) come from GET /refunds/:refundId — orders has no
+            // business minting URLs into the media bucket.
+            _count: { select: { evidence: true } },
         },
     },
     shipments: {

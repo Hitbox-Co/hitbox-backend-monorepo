@@ -51,6 +51,8 @@ export interface OrderServiceDeps {
     audit: IOrdersAuditRecorder;
     eventBus: IEventBus;
     logger: Logger;
+    /** RETURN_WINDOW_DAYS, for `money.returnWindowEndsAt`. */
+    returnWindowDays: number;
 }
 
 export class OrderService {
@@ -157,6 +159,9 @@ export class OrderService {
                 payments: order.paymentTransactions,
                 refunds: order.refundRequests,
                 callerCanRefund: view.canRefund === true,
+                // Staff: a closed window means "no return", not "no refund".
+                deliveredAt: order.deliveredAt,
+                returnWindowDays: this.deps.returnWindowDays,
             });
             detail.payments = order.paymentTransactions.map((payment) => ({
                 id: payment.id,

@@ -30,6 +30,8 @@ export interface BuyerOrderServiceDeps {
     mediaUrls?: IMediaUrlResolver | undefined;
     eventBus: IEventBus;
     logger: Logger;
+    /** RETURN_WINDOW_DAYS — after it closes the buyer can't return or refund a delivered order. */
+    returnWindowDays: number;
 }
 
 const REFUND_LABELS: Record<string, string> = {
@@ -193,6 +195,9 @@ export class BuyerOrderService {
             payments: order.paymentTransactions,
             refunds: order.refundRequests,
             callerCanRefund: true,
+            callerIsBuyer: true,
+            deliveredAt: order.deliveredAt,
+            returnWindowDays: this.deps.returnWindowDays,
         });
 
         const timeline: { status: string; at: string }[] = [];
@@ -253,6 +258,8 @@ export class BuyerOrderService {
                 requestedAt: r.createdAt.toISOString(),
                 returnRequired: r.physicalReturnRequired,
                 returnReceivedAt: r.physicalReturnConfirmedAt?.toISOString() ?? null,
+                // Open GET /refunds/:id to see the photos themselves.
+                photoCount: r._count.evidence,
                 rejectionReason: r.rejectionReason,
                 processedAt: r.processedAt?.toISOString() ?? null,
                 failed: r.gatewayStatus === 'FAILED' || r.gatewayStatus === 'CANCELED',
@@ -282,6 +289,8 @@ export class BuyerOrderService {
                 canResumePayment: order.status === 'PENDING_PAYMENT' && holdLive,
                 canRequestRefund: money.canRequestRefund,
                 refundBlockedReason: money.refundBlockedReason,
+                // "Return by 2 Nov" on the order screen; null until delivered.
+                returnWindowEndsAt: money.returnWindowEndsAt,
                 canTrack: shipment !== null,
                 canDownloadInvoice: order.invoice !== null,
             },

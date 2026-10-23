@@ -22,15 +22,22 @@ export type {
     ArtistImageUpload,
     IArtistProfileImages,
     IAssetLookup,
+    IReturnEvidenceMedia,
     MediaModule,
     MediaModuleDeps,
     MediaPermissionGuard,
 } from './module';
 export type { AssetRef } from './repository/media.repository';
+export type {
+    ReturnEvidenceAsset,
+    ReturnEvidenceFile,
+    ReturnEvidenceUpload,
+} from './service/return-evidence.service';
 
 export {
     ALLOWED_MIME_TYPES,
     DOWNLOAD_URL_TTL_SECONDS,
+    EVIDENCE_VIEW_URL_TTL_SECONDS,
     MAX_SIZE_BYTES,
     MEDIA_CAPABILITY,
     MEDIA_ERROR_CODES,
@@ -51,6 +58,7 @@ export {
     extensionOf,
     isOwnerAllowed,
     isPublicKey,
+    orderOfEvidenceKey,
     ownerColumn,
 } from './domain/storage-key';
 

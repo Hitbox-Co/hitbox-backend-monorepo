@@ -4,6 +4,7 @@ import type { PrismaClient } from '@hitbox/database';
 import { createModuleLogger } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import {
+    DEFAULT_RETURN_WINDOW_DAYS,
     ORDER_CREATE_CAPABILITY,
     ORDER_REFUND_CAPABILITY,
     PAYMENTS_MODULE,
@@ -26,6 +27,7 @@ import type {
 } from './domain/interfaces/finance-postings.interface';
 import type { IOrderLedger } from './domain/interfaces/order-ledger.interface';
 import type { IPaymentGateway } from './domain/interfaces/payment-gateway.interface';
+import type { IReturnEvidenceMedia } from './domain/interfaces/return-evidence.interface';
 import { DisputeRepository } from './repository/dispute.repository';
 import { GatewayConfigRepository } from './repository/gateway-config.repository';
 import { PaymentRepository } from './repository/payment.repository';
@@ -62,6 +64,12 @@ export interface PaymentsModuleDeps {
     royalties: IRoyaltyReversal;
     /** Claims: revoke ownership and quarantine the tag on a refund. */
     claims: IClaimRevocation;
+    /**
+     * Media: buyer photos on a return. Optional — without a bucket a buyer
+     * cannot place a physical return (it requires photos), and existing
+     * photos are listed without URLs.
+     */
+    returnEvidence?: IReturnEvidenceMedia | undefined;
 
     /**
      * The provider adapter. Optional: without one the platform still records
@@ -81,11 +89,19 @@ export interface PaymentsModuleDeps {
     webhookToleranceSeconds?: number;
     /** How long a checkout holds a unit. Defaults to 15 minutes. */
     holdSeconds?: number;
+    /**
+     * Days after delivery a return may be placed (RETURN_WINDOW_DAYS).
+     * Defaults to 10. The orders module is given the same number to display.
+     */
+    returnWindowDays?: number;
     audit?: IPaymentsAuditRecorder;
 }
 
 export interface PaymentsModule {
-    /** Buyer-facing: POST /checkout, POST /refunds. */
+    /**
+     * Buyer-facing: POST /checkout, POST /refunds/evidence/upload-url,
+     * POST /refunds, GET /refunds/:refundId.
+     */
     createBuyerRouter(requireAuth: RequestHandler): Router;
     /** Operator-facing: transactions, refund workflow, disputes, gateways. */
     createAdminRouter(requireAuth: RequestHandler): Router;
@@ -136,6 +152,8 @@ export function createPaymentsModule(deps: PaymentsModuleDeps): PaymentsModule {
         royalties: deps.royalties,
         claims: deps.claims,
         gateway: deps.gateway,
+        evidence: deps.returnEvidence,
+        returnWindowDays: deps.returnWindowDays ?? DEFAULT_RETURN_WINDOW_DAYS,
         eventBus: deps.eventBus,
         audit,
         logger,
@@ -209,7 +227,15 @@ export function createPaymentsModule(deps: PaymentsModuleDeps): PaymentsModule {
             // A buyer raising a refund on their own order needs no operator
             // grant; the service checks ownership and demands `order:refund`
             // only when the requester is not the buyer.
+            //
+            // A return is two steps: one upload URL per photo, then the
+            // request carrying their ids. Same ownership rule on both.
+            // Registered before `/refunds/:refundId` so "evidence" is never
+            // read as a refund id.
+            router.post('/refunds/evidence/upload-url', controller.createReturnEvidenceUpload);
             router.post('/refunds', controller.requestRefund);
+            // The caller's own refund with its photos — OWN scope for a buyer.
+            router.get('/refunds/:refundId', controller.getOwnRefund);
 
             return router;
         },

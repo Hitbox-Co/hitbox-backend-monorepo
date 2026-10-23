@@ -49,6 +49,7 @@ function build(opts: {
         finance: {} as never,
         royalties: {} as never,
         claims: {} as never,
+        returnWindowDays: 10,
         eventBus: eventBus as never,
         audit: audit as never,
         logger: silentLogger,

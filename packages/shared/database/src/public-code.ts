@@ -166,6 +166,7 @@ export const PUBLIC_CODE_PREFIXES: Record<string, string> = {
     PaymentGatewayConfig: 'pgc',
     PaymentWebhookEvent: 'pwh',
     RefundRequest: 'rfd',
+    RefundEvidence: 'rfe',
     DisputeCase: 'dsp',
     // platform
     PlatformConfig: 'pcf',

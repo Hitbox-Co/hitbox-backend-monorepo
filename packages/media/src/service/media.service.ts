@@ -83,7 +83,7 @@ export interface MediaServiceDeps {
 }
 
 /** Statuses that may be served. `SKIPPED` means "no scanner ran, by design". */
-const SERVABLE_STATUSES: VirusScanStatus[] = [
+export const SERVABLE_STATUSES: VirusScanStatus[] = [
     VirusScanStatus.CLEAN,
     VirusScanStatus.SKIPPED,
 ];

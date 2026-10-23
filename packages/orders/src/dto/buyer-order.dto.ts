@@ -120,8 +120,16 @@ export interface BuyerOrderActions {
     canResumePayment: boolean;
     /** → `POST /refunds` with this orderId. */
     canRequestRefund: boolean;
-    /** Why not, when `canRequestRefund` is false: ORDER_NOT_REFUNDABLE, REFUND_IN_PROGRESS, FULLY_REFUNDED. */
+    /**
+     * Why not, when `canRequestRefund` is false: ORDER_NOT_REFUNDABLE,
+     * REFUND_IN_PROGRESS, RETURN_WINDOW_CLOSED, FULLY_REFUNDED.
+     */
     refundBlockedReason: string | null;
+    /**
+     * Last moment a return can be placed (delivery + RETURN_WINDOW_DAYS).
+     * Null until the order is delivered — the window hasn't started.
+     */
+    returnWindowEndsAt: string | null;
     /** A shipment exists → `GET /orders/:orderId/tracking` (also included below). */
     canTrack: boolean;
     /** An invoice exists → `GET /invoices/:invoiceId/download`. */

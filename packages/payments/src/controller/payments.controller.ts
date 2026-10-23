@@ -16,6 +16,7 @@ import {
     rejectRefundSchema,
     requestRefundSchema,
     resolveDisputeSchema,
+    returnEvidenceUploadSchema,
     reviewPaymentSchema,
     submitEvidenceSchema,
     updateGatewayConfigSchema,
@@ -67,6 +68,26 @@ export class PaymentsController {
         const access = await this.deps.resolveAccess(req);
         res.status(201).json({
             data: await this.deps.refunds.request(dto, access.userId, access),
+        });
+    });
+
+    /** POST /refunds/evidence/upload-url — one photo of the item being returned. */
+    createReturnEvidenceUpload: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = returnEvidenceUploadSchema.parse(req.body);
+        const access = await this.deps.resolveAccess(req);
+        res.status(201).json({
+            data: await this.deps.refunds.createEvidenceUpload(dto, access.userId, access),
+        });
+    });
+
+    /**
+     * GET /refunds/:refundId — the caller's own refund, with its photos. A
+     * buyer's access is OWN scope, so this cannot reach anyone else's.
+     */
+    getOwnRefund: RequestHandler = asyncHandler(async (req, res) => {
+        const access = await this.deps.resolveAccess(req);
+        res.json({
+            data: await this.deps.refunds.getById(req.params.refundId as string, access),
         });
     });
 

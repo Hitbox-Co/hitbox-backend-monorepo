@@ -4,10 +4,25 @@ import { MEDIA_DEFAULT_LIMIT, MEDIA_MAX_LIMIT } from '../constants/media.constan
 import { OwnerType } from '../domain/storage-key';
 
 export const createUploadUrlSchema = z.object({
-    assetType: z.nativeEnum(AssetType),
+    /**
+     * Every type except RETURN_EVIDENCE. Return photos are uploaded by the
+     * buyer through `POST /refunds/evidence/upload-url`, which proves they own
+     * the order first; letting this staff route mint them too would create
+     * evidence nobody can attach (the uploader must be the requester) and a
+     * second path into a prefix that exists to stay narrow.
+     */
+    assetType: z
+        .nativeEnum(AssetType)
+        .refine((type): boolean => type !== AssetType.RETURN_EVIDENCE, {
+            message: 'Return photos are uploaded through POST /refunds/evidence/upload-url.',
+        }),
     fileName: z.string().min(1).max(255),
     mimeType: z.string().min(1).max(255),
-    ownerType: z.nativeEnum(OwnerType),
+    ownerType: z
+        .nativeEnum(OwnerType)
+        .refine((owner): boolean => owner !== OwnerType.order, {
+            message: 'Orders own return photos only — see POST /refunds/evidence/upload-url.',
+        }),
     ownerId: z.string().uuid(),
     /**
      * Required, not optional.

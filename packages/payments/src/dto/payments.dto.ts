@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { PAYMENTS_DEFAULT_LIMIT, PAYMENTS_MAX_LIMIT } from '../constants/payments.constant';
+import {
+    PAYMENTS_DEFAULT_LIMIT,
+    PAYMENTS_MAX_LIMIT,
+    RETURN_EVIDENCE_MAX_PHOTOS,
+} from '../constants/payments.constant';
 
 /** Money crosses the wire as a string, in and out. See finance's DTO note. */
 const money = z
@@ -124,13 +128,44 @@ export const requestRefundSchema = z.object({
         'FRAUDULENT_CHARGE',
         'OTHER',
     ]),
-    reason: z.string().min(1).max(1000),
+    /**
+     * The buyer's description of the problem. On a buyer-placed return
+     * (`physicalReturnRequired: true`) the service additionally requires
+     * RETURN_DESCRIPTION_MIN_LENGTH characters after trimming — checked there
+     * rather than here because it depends on who is asking.
+     */
+    reason: z.string().trim().min(1).max(1000),
     /** Defaults to the order's full amount. */
     amount: money.optional(),
     /** Digital-only orders skip the AWAITING_RETURN hold. */
     physicalReturnRequired: z.boolean().default(true),
+    /**
+     * Photos of the item, from `POST /refunds/evidence/upload-url`, in display
+     * order. Required (at least one) when the buyer places a physical return;
+     * optional otherwise. Each must have been uploaded by the caller, for this
+     * order, and actually PUT to storage.
+     */
+    evidenceAssetIds: z
+        .array(uuid)
+        .max(RETURN_EVIDENCE_MAX_PHOTOS, `At most ${RETURN_EVIDENCE_MAX_PHOTOS} photos.`)
+        .refine((ids) => new Set(ids).size === ids.length, 'The same photo is listed twice.')
+        .default([]),
 });
 export type RequestRefundDto = z.infer<typeof requestRefundSchema>;
+
+/**
+ * `POST /refunds/evidence/upload-url` — one photo per call. MIME and size
+ * rules are media's (`ALLOWED_MIME_TYPES.RETURN_EVIDENCE`, 15 MB) and are
+ * enforced there; this only shapes the request.
+ */
+export const returnEvidenceUploadSchema = z.object({
+    orderId: uuid,
+    fileName: z.string().min(1).max(255),
+    mimeType: z.string().min(1).max(255),
+    /** `file.size`. Bound into the signature — S3 rejects any other length. */
+    sizeBytes: z.coerce.number().int().positive(),
+});
+export type ReturnEvidenceUploadDto = z.infer<typeof returnEvidenceUploadSchema>;
 
 export const confirmReturnSchema = z.object({
     nfcTagCondition: z.enum(['INTACT', 'DAMAGED', 'MISSING', 'TAMPERED']),
@@ -342,6 +377,15 @@ export interface RefundView {
     claimRevokedAt: string | null;
     resaleBlockedUntil: string | null;
     createdAt: string;
+    /** How many photos the buyer attached. Present on list and detail. */
+    evidenceCount: number;
+    /**
+     * The photos themselves, with 5-minute signed URLs. Detail responses only
+     * (`GET …/refunds/:id`, and every write that returns the refund); `null`
+     * on list rows, where minting a URL per photo per row would be wasted —
+     * open the detail to see them.
+     */
+    evidence: RefundEvidenceView[] | null;
     /** What this request may do next, so the UI enables the right buttons. */
     allowedTransitions: string[];
     /**
@@ -350,6 +394,31 @@ export interface RefundView {
      * refund grant. Prefer this over `allowedTransitions` for buttons.
      */
     allowedActions: string[];
+}
+
+export interface RefundEvidenceView {
+    assetId: string;
+    position: number;
+    /** Null only when this deployment has no media storage to ask. */
+    fileName: string | null;
+    mimeType: string | null;
+    sizeBytes: number | null;
+    /**
+     * Signed GET, valid for `expiresIn` seconds. Null when the photo cannot be
+     * served (archived, failed a scan, or no storage on this deployment) —
+     * show a placeholder, the photo still counts as attached.
+     */
+    url: string | null;
+    expiresIn: number | null;
+    attachedAt: string;
+}
+
+export interface ReturnEvidenceUploadView {
+    assetId: string;
+    /** PUT the file here, with exactly `requiredHeaders`. */
+    uploadUrl: string;
+    expiresIn: number;
+    requiredHeaders: { 'Content-Type': string };
 }
 
 export interface DisputeView {

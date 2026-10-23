@@ -59,6 +59,11 @@ export interface OrdersModuleDeps {
     resolveBuyer: OrderBuyerResolver;
     /** Product images on the buyer's order screens. Optional: without it, `imageUrl` is null. */
     mediaUrls?: IMediaUrlResolver | undefined;
+    /**
+     * RETURN_WINDOW_DAYS — shown on order screens (`money.returnWindowEndsAt`).
+     * Enforced by payments, which bootstrap gives the same number. Default 10.
+     */
+    returnWindowDays?: number;
 }
 
 /** The claim event orders links back to the order. Matches @hitbox/claims. */
@@ -103,7 +108,10 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
     const logger = createModuleLogger(ORDERS_MODULE);
     const orders = new OrderRepository(deps.prisma);
     const writes = new OrderWriteRepository(deps.prisma);
-    const service = new OrderService({ orders, writes, audit: deps.audit, eventBus: deps.eventBus, logger });
+    const service = new OrderService({
+        orders, writes, audit: deps.audit, eventBus: deps.eventBus, logger,
+        returnWindowDays: deps.returnWindowDays ?? 10,
+    });
     const shipping = new OrderShipmentController(
         new OrderShipmentService({
             shipments: new OrderShipmentRepository(deps.prisma),
@@ -122,6 +130,7 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
             mediaUrls: deps.mediaUrls,
             eventBus: deps.eventBus,
             logger,
+            returnWindowDays: deps.returnWindowDays ?? 10,
         }),
         deps.resolveBuyer,
     );

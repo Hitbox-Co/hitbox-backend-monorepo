@@ -96,7 +96,7 @@ describe('GET /orders/:orderId — detail', () => {
         expect(d.invoice).toMatchObject({ number: 'HB/2026-27/0001', totalAmount: '2499.00' });
         expect(d.actions).toEqual({
             canCancel: false, canResumePayment: false, canRequestRefund: true, refundBlockedReason: null,
-            canTrack: true, canDownloadInvoice: true,
+            returnWindowEndsAt: null, canTrack: true, canDownloadInvoice: true,
         });
         expect(d.timeline.map((t) => t.status)).toEqual(['PENDING_PAYMENT', 'PAID', 'PROCESSING', 'SHIPPED']);
     });
@@ -117,9 +117,10 @@ describe('GET /orders/:orderId — detail', () => {
         const { service } = build({ detail: detailRow({ refundRequests: [{
             id: 'r1', status: 'AWAITING_RETURN', reasonCode: 'DEFECTIVE_ITEM', reason: 'Torn seam', amount: dec('2499.00'), currency: 'INR',
             physicalReturnRequired: true, physicalReturnConfirmedAt: null, rejectionReason: null, processedAt: null, gatewayStatus: null, createdAt: at(8),
+            _count: { evidence: 2 },
         }] }) });
         const d = await service.get('buyer-1', 'o1');
-        expect(d.refunds[0]).toMatchObject({ statusLabel: 'Waiting for your return', returnRequired: true, failed: false });
+        expect(d.refunds[0]).toMatchObject({ statusLabel: 'Waiting for your return', returnRequired: true, photoCount: 2, failed: false });
         expect(d.actions).toMatchObject({ canRequestRefund: false, refundBlockedReason: 'REFUND_IN_PROGRESS' });
     });
 

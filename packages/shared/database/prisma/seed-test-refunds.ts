@@ -137,6 +137,28 @@ async function main(): Promise<void> {
                 ...(extra as object),
             } as never,
         });
+        // A buyer's return carries photos (order-payments-and-refunds-api.md
+        // §6.0). Registry rows only — no bytes — so their signed URLs 404.
+        if (extra.physicalReturnRequired === true) {
+            const at = (extra.createdAt as Date | undefined) ?? new Date();
+            for (const n of [0, 1]) {
+                const assetId = uuidFrom(`${s.label}:${order.id}:photo:${n}`);
+                await prisma.mediaAsset.create({
+                    data: {
+                        id: assetId, assetType: 'RETURN_EVIDENCE',
+                        storageRef: `return-evidence/orders/${order.id}/${assetId}.jpg`,
+                        fileName: `[TEST] return-${n + 1}.jpg`, mimeType: 'image/jpeg', sizeBytes: 850000 + n,
+                        virusScanStatus: 'SKIPPED', uploadedById: order.buyerId, createdAt: at,
+                    },
+                });
+                await prisma.refundEvidence.create({
+                    data: {
+                        id: uuidFrom(`${s.label}:${order.id}:evidence:${n}`), refundRequestId: refundId,
+                        mediaAssetId: assetId, position: n, attachedById: order.buyerId, createdAt: at,
+                    },
+                });
+            }
+        }
         created.push({
             label: s.label, refundId, orderId: order.id, product: order.drop.name,
             amount: `${order.amount.toFixed(2)} ${order.currency}`, status: String(extra.status), next: s.next,

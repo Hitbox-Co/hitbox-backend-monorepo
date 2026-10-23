@@ -46,6 +46,8 @@ model MediaAsset {
   // ── Cross-module back-relations ───────────────────────────────────────────
   dropImages         DropImage[]
   contentBundleItems ContentBundleItem[]
+  /// Set when this is a photo attached to a return (payments module).
+  refundEvidence     RefundEvidence?
 }
 
 /// What the file is for. Drives storage tier, retention and who may read it —
@@ -56,6 +58,9 @@ enum AssetType {
   EXCLUSIVE_CONTENT
   LEGAL_DOCUMENT
   SUPPLY_SPREADSHEET
+  /// A buyer's photo of an item they are returning. Private, never public:
+  /// customer photos can show their home, their face, their address label.
+  RETURN_EVIDENCE
   OTHER
 }
 

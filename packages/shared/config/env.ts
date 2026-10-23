@@ -182,6 +182,14 @@ const envSchema = z.object({
      */
     INVENTORY_HOLD_SECONDS: z.coerce.number().int().positive().default(900),
     /**
+     * Days after delivery (`Order.deliveredAt`) during which an item may be
+     * returned. After it closes no return can be placed — by the buyer or by
+     * staff — and a buyer cannot request any refund on that delivered order.
+     * Read by both the payments module (which enforces it) and the orders
+     * module (which shows it), so the two can never disagree.
+     */
+    RETURN_WINDOW_DAYS: z.coerce.number().int().positive().default(10),
+    /**
      * How long an unpaid order survives after its hold expires before the
      * checkout sweep cancels it. A card payment that settles inside this
      * window is still honoured if nobody else took the unit.

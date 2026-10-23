@@ -610,7 +610,13 @@ call. It is `null` for every other asset type; those need
 | `EXCLUSIVE_CONTENT` | `product`, `collection` | images, mp4, mpeg, pdf | 500 MB |
 | `LEGAL_DOCUMENT` | `organization` | pdf | 25 MB |
 | `SUPPLY_SPREADSHEET` | `vendor` | csv, xls, xlsx | 25 MB |
-| `OTHER` | any | any | 25 MB |
+| `RETURN_EVIDENCE` | `order` | jpeg, png, webp, heic, heif | 15 MB — **not on this route** (422). Buyers upload return photos via `POST /refunds/evidence/upload-url`; see [order-payments-and-refunds-api.md §6.0](../orders/order-payments-and-refunds-api.md#60-placing-a-return--photos-and-description) |
+| `OTHER` | any except `order` | any | 25 MB |
+
+Return photos are listed by `GET /admin/media?assetType=RETURN_EVIDENCE` for
+platform-wide media readers only — they carry no organization, so an
+organization-scoped grant never reaches them. Show them to operators from the
+refund detail (`evidence[]`) rather than the media library.
 
 Errors: `UNSUPPORTED_MIME_TYPE`, `FILE_TOO_LARGE`, `INVALID_OWNER` (wrong owner
 type for that asset type), `SCOPE_MISMATCH` (owner outside your organization) —

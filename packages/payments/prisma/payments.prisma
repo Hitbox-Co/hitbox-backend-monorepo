@@ -3,7 +3,7 @@
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
 // Owns: PaymentTransaction, PaymentGatewayConfig, PaymentWebhookEvent,
-//       RefundRequest, DisputeCase
+//       RefundRequest, RefundEvidence, DisputeCase
 //
 // Everything that talks to a payment provider. No card data or credentials are
 // ever stored — only opaque gateway references and a secrets-manager pointer.
@@ -136,10 +136,40 @@ model RefundRequest {
   createdAt                 DateTime
   updatedAt                 DateTime
 
+  /// The buyer's photos of the item, attached when the return was placed.
+  evidence                  RefundEvidence[]
+
   @@index([orderId])
   @@index([status, createdAt])
   @@index([gatewayStatus])
   @@index([gatewayRefundId])
+}
+
+/// One photo a buyer attached to a return — what the item looked like before
+/// it was sent back. Written in the same transaction as the RefundRequest and
+/// never edited: it is the buyer's account of the item's condition, and the
+/// warehouse's `nfcTagCondition` is later compared against it.
+///
+/// The bytes live in the media registry (`MediaAsset`, `return-evidence/`
+/// prefix, private). `mediaAssetId` is unique so one photo can never back two
+/// returns.
+model RefundEvidence {
+  id              String        @id @db.Uuid
+  /// Human-readable record id (`rfe…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode      String?       @unique @db.VarChar(32)
+  refundRequestId String        @db.Uuid
+  refundRequest   RefundRequest @relation(fields: [refundRequestId], references: [id])
+  mediaAssetId    String        @unique @db.Uuid
+  mediaAsset      MediaAsset    @relation(fields: [mediaAssetId], references: [id])
+  /// Display order, as the buyer supplied the ids. 0-based.
+  position        Int
+  /// Who attached it. No foreign key — like other actor ids, the record must
+  /// outlive the account.
+  attachedById    String        @db.Uuid
+  createdAt       DateTime
+
+  @@index([refundRequestId, position])
 }
 
 /// A chargeback or payment dispute raised at the provider.
