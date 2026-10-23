@@ -96,6 +96,15 @@ export const reorderCollectionsSchema = z
     .strict();
 export type ReorderCollectionsDto = z.infer<typeof reorderCollectionsSchema>;
 
+/**
+ * POST /artist/collections/:collectionId/restore — body optional. Send a new
+ * `name` when the old one has since been reused by another live collection.
+ */
+export const restoreCollectionSchema = z
+    .object({ name: z.string().trim().min(1).max(COLLECTION_NAME_MAX).optional() })
+    .strict();
+export type RestoreCollectionDto = z.infer<typeof restoreCollectionSchema>;
+
 /** GET /artist/collections */
 export const listMyCollectionsQuerySchema = z.object({
     /** `live` (default) hides archived collections. */
@@ -139,8 +148,16 @@ export interface CollectionView {
     counts: {
         /** Every drop ever filed under it, retired ones included. */
         drops: number;
-        /** Drops not archived — the ones that block archiving the collection. */
+        /**
+         * Drops not archived, in any status (draft, in review, on sale…) —
+         * the ones that block deleting the collection.
+         */
         liveDrops: number;
+        /**
+         * Drops the artist is shown: status ACTIVE, switched on, not archived,
+         * and by this collection's own artist.
+         */
+        activeDrops: number;
     };
     createdAt: string;
     updatedAt: string;
@@ -148,18 +165,60 @@ export interface CollectionView {
 
 /** The artist's view adds what they may do right now. */
 export interface MyCollectionView extends CollectionView {
-    actions: { canEdit: boolean; canArchive: boolean; archiveBlockedReason: 'HAS_DROPS' | 'ARCHIVED' | null };
+    actions: {
+        canEdit: boolean;
+        canArchive: boolean;
+        archiveBlockedReason: 'HAS_DROPS' | 'ARCHIVED' | null;
+        /** True for an archived collection — `POST …/restore`. */
+        canRestore: boolean;
+    };
+}
+
+/** A drop as the artist sees it inside their collection. */
+export interface ArtistDropView {
+    id: string;
+    publicCode: string | null;
+    name: string;
+    groupCode: string;
+    totalSupply: number;
+    publishedAt: string | null;
+    releaseStart: string | null;
+    releaseEnd: string | null;
+}
+
+/** GET /artist/collections/:id — the collection plus its active drops. */
+export interface MyCollectionDetailView extends MyCollectionView {
+    /** Active drops by this artist only (at most 100). See `counts.activeDrops`. */
+    drops: ArtistDropView[];
 }
 
 /** The monitoring view adds who it belongs to. */
 export interface AdminCollectionView extends CollectionView {
-    artist: { id: string; name: string; slug: string; isActive: boolean; archived: boolean };
+    artist: {
+        id: string;
+        /** The artist's account — the `actorId` on their audit events. Null if not yet linked. */
+        userId: string | null;
+        name: string;
+        slug: string;
+        isActive: boolean;
+        archived: boolean;
+    };
     organization: { id: string; name: string } | null;
 }
 
 export interface AdminCollectionDetailView extends AdminCollectionView {
     /** The drops filed under it, newest first (at most 100). */
-    drops: { id: string; name: string; status: string; archivedAt: string | null; createdAt: string }[];
+    drops: {
+        id: string;
+        name: string;
+        status: string;
+        archivedAt: string | null;
+        createdAt: string;
+        /** Whether the artist sees it: active and by the collection's own artist. */
+        shownToArtist: boolean;
+        /** False flags a legacy drop by another artist (new ones are refused). */
+        sameArtist: boolean;
+    }[];
 }
 
 export interface CollectionSummaryView {

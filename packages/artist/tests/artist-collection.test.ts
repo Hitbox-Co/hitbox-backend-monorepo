@@ -1,6 +1,7 @@
 import pino from 'pino';
 import { AppError } from '@hitbox/shared';
 import {
+    ARTIST_AUDIT_EVENTS,
     ARTIST_COLLECTION_ERROR_CODES,
     ARTIST_COLLECTION_EVENTS,
     MAX_LIVE_COLLECTIONS_PER_ARTIST,
@@ -44,6 +45,8 @@ function setup(opts: {
     me?: ArtistSelfRow | null;
     existing?: Partial<Stored>[];
     liveDrops?: Record<string, number>;
+    /** Per collection: drops shown to the artist (active, same artist). */
+    activeDrops?: Record<string, { id: string; name: string }[]>;
     asset?: Partial<ArtistImageAssetRef> | null;
     images?: boolean;
 } = {}) {
@@ -55,6 +58,7 @@ function setup(opts: {
         isActive: true, archivedAt: null, createdAt: now, updatedAt: now, _count: { drops: 0 }, ...row,
     }) as Stored);
     const liveDrops = opts.liveDrops ?? {};
+    const activeDrops = opts.activeDrops ?? {};
 
     const collections = {
         listForArtist: async (artistId: string, status: string) =>
@@ -65,6 +69,16 @@ function setup(opts: {
         findForArtist: async (artistId: string, id: string) => table.find((r) => r.id === id && r.artistId === artistId) ?? null,
         countLive: async (artistId: string) => table.filter((r) => r.artistId === artistId && !r.archivedAt).length,
         liveDropCounts: async (ids: string[]) => new Map(ids.filter((id) => liveDrops[id]).map((id) => [id, liveDrops[id]!])),
+        activeDropCounts: async (rows: { id: string }[]) => new Map(rows.filter((r) => activeDrops[r.id]).map((r) => [r.id, activeDrops[r.id]!.length])),
+        activeDropsOf: async (id: string) => (activeDrops[id] ?? []).map((d) => ({
+            ...d, publicCode: null, groupCode: 'G', totalSupply: 10, publishedAt: null, releaseStart: null, releaseEnd: null,
+        })),
+        restore: async (id: string, data: { position: number; name?: string }) => {
+            const row = table.find((r) => r.id === id && r.archivedAt);
+            if (!row) return 0;
+            Object.assign(row, data, { archivedAt: null, isActive: true, isPublic: false });
+            return 1;
+        },
         slugTaken: async (slug: string, exceptId?: string) => table.some((r) => r.slug === slug && r.id !== exceptId),
         nameTaken: async (artistId: string, name: string, exceptId?: string) =>
             table.some((r) => r.artistId === artistId && !r.archivedAt && r.id !== exceptId && r.name.toLowerCase() === name.toLowerCase()),
@@ -106,14 +120,16 @@ function setup(opts: {
     };
 
     const published: { event: string; payload: unknown }[] = [];
+    const audited: Record<string, unknown>[] = [];
     const service = new ArtistCollectionService({
         collections,
         artists,
+        audit: { record: async (input) => { audited.push(input as unknown as Record<string, unknown>); } },
         images: opts.images === false ? undefined : images,
         eventBus: { publish: async (event: string, payload: unknown) => { published.push({ event, payload }); }, subscribe: () => undefined } as never,
         logger: pino({ level: 'silent' }),
     });
-    return { service, table, published };
+    return { service, table, published, audited };
 }
 
 async function errorOf(promise: Promise<unknown>): Promise<AppError> {
@@ -134,7 +150,7 @@ describe('creating a collection', () => {
         const view = await service.create(USER, create({ name: 'Season Two' }));
 
         expect(view).toMatchObject({ name: 'Season Two', slug: 'kaze-season-two', isPublic: false, position: 2, status: 'LIVE' });
-        expect(view.actions).toEqual({ canEdit: true, canArchive: true, archiveBlockedReason: null });
+        expect(view.actions).toEqual({ canEdit: true, canArchive: true, archiveBlockedReason: null, canRestore: false });
         expect(table.at(-1)).toMatchObject({ artistId: ARTIST, organizationId: ORG });
         expect(published).toEqual([{ event: ARTIST_COLLECTION_EVENTS.CREATED, payload: { collectionId: view.id, artistId: ARTIST } }]);
     });
@@ -220,7 +236,7 @@ describe('deleting (archiving)', () => {
         const view = await service.archive(USER, b!.id);
 
         expect(view).toMatchObject({ status: 'ARCHIVED', isPublic: false, isActive: false });
-        expect(view.actions).toEqual({ canEdit: false, canArchive: false, archiveBlockedReason: 'ARCHIVED' });
+        expect(view.actions).toEqual({ canEdit: false, canArchive: false, archiveBlockedReason: 'ARCHIVED', canRestore: true });
         expect([a!.position, c!.position]).toEqual([0, 1]);
         expect(published.at(-1)?.event).toBe(ARTIST_COLLECTION_EVENTS.ARCHIVED);
     });
@@ -288,5 +304,92 @@ describe('monitoring query', () => {
         expect(adminListCollectionsQuerySchema.parse({ isPublic: 'false', empty: 'true', q: 'season', page: '2' })).toMatchObject({
             isPublic: false, empty: true, q: 'season', page: 2, limit: 20, status: 'all', sort: 'newest',
         });
+    });
+});
+
+describe('what the artist is shown', () => {
+    it('lists only active drops of their own on the detail, and counts them apart from blocking drops', async () => {
+        const id = '77777777-7777-4777-8777-777777777777';
+        const { service } = setup({
+            existing: [{ id }],
+            liveDrops: { [id]: 4 },
+            activeDrops: { [id]: [{ id: 'd1', name: 'Neon Nights Tee' }, { id: 'd2', name: 'Genesis Card' }] },
+        });
+        const view = await service.getMine(USER, id);
+        expect(view.drops.map((d) => d.name)).toEqual(['Neon Nights Tee', 'Genesis Card']);
+        // 4 drops still block deleting it — two are drafts the artist isn't shown.
+        expect(view.counts).toMatchObject({ activeDrops: 2, liveDrops: 4 });
+        expect(view.actions.archiveBlockedReason).toBe('HAS_DROPS');
+    });
+});
+
+describe('restoring a deleted collection', () => {
+    it('brings it back live, private and at the end of the list, keeping its slug', async () => {
+        const { service, table, published } = setup({
+            existing: [{ name: 'A' }, { name: 'B', slug: 'kaze-b', isPublic: true }],
+        });
+        const b = table[1]!;
+        await service.archive(USER, b.id);
+        const view = await service.restore(USER, b.id, {});
+        expect(view).toMatchObject({ status: 'LIVE', isPublic: false, isActive: true, slug: 'kaze-b', position: 1 });
+        expect(view.actions.canRestore).toBe(false);
+        expect(published.at(-1)?.event).toBe(ARTIST_COLLECTION_EVENTS.RESTORED);
+    });
+
+    it('needs a new name when the old one has been reused, and accepts one', async () => {
+        const { service, table } = setup({ existing: [{ name: 'Season One', archivedAt: new Date() }, { name: 'Season One' }] });
+        const archived = table[0]!;
+        expect((await errorOf(service.restore(USER, archived.id, {}))).code).toBe(ARTIST_COLLECTION_ERROR_CODES.NAME_TAKEN);
+        await expect(service.restore(USER, archived.id, { name: 'Season One (2025)' })).resolves.toMatchObject({ name: 'Season One (2025)' });
+    });
+
+    it('refuses a collection that is not deleted, and one over the limit', async () => {
+        const live = setup({ existing: [{}] });
+        expect((await errorOf(live.service.restore(USER, live.table[0]!.id, {}))).code).toBe(ARTIST_COLLECTION_ERROR_CODES.NOT_ARCHIVED);
+        const full = setup({
+            existing: [{ archivedAt: new Date() }, ...Array.from({ length: MAX_LIVE_COLLECTIONS_PER_ARTIST }, () => ({}))],
+        });
+        expect((await errorOf(full.service.restore(USER, full.table[0]!.id, {}))).code).toBe(ARTIST_COLLECTION_ERROR_CODES.LIMIT_REACHED);
+    });
+});
+
+describe('audit trail', () => {
+    it('records every change with the artist as actor and before/after snapshots', async () => {
+        const { service, table, audited } = setup({ existing: [{ name: 'A' }] });
+        const created = await service.create(USER, create({ name: 'Season Two' }));
+        await service.update(USER, created.id, updateCollectionSchema.parse({ isPublic: true }));
+        await service.setHero(USER, created.id, { assetId: ASSET });
+        await service.reorder(USER, { collectionIds: [created.id, table[0]!.id] });
+        await service.removeHero(USER, created.id);
+        await service.archive(USER, created.id);
+        await service.restore(USER, created.id, {});
+
+        expect(audited.map((a) => a.eventType)).toEqual([
+            ARTIST_AUDIT_EVENTS.COLLECTION_CREATE,
+            ARTIST_AUDIT_EVENTS.COLLECTION_UPDATE,
+            ARTIST_AUDIT_EVENTS.COLLECTION_UPDATE,
+            ARTIST_AUDIT_EVENTS.COLLECTION_REORDER,
+            ARTIST_AUDIT_EVENTS.COLLECTION_UPDATE,
+            ARTIST_AUDIT_EVENTS.COLLECTION_ARCHIVE,
+            ARTIST_AUDIT_EVENTS.COLLECTION_RESTORE,
+        ]);
+        for (const entry of audited) {
+            expect(entry).toMatchObject({ actor: { type: 'ARTIST', id: USER }, result: 'SUCCESS', organizationId: ORG });
+            expect(typeof entry.correlationId).toBe('string');
+        }
+        expect(audited[1]).toMatchObject({
+            resource: { type: 'ArtistCollection', id: created.id },
+            beforeState: expect.objectContaining({ isPublic: false }),
+            afterState: expect.objectContaining({ isPublic: true }),
+            metadata: { artistId: ARTIST, fields: ['isPublic'] },
+        });
+        expect(audited[2]).toMatchObject({ metadata: expect.objectContaining({ assetId: ASSET, fields: ['heroImageUrl'] }) });
+        expect(audited[3]).toMatchObject({ resource: { type: 'Artist', id: ARTIST }, afterState: { order: [created.id, table[0]!.id] } });
+    });
+
+    it('records nothing for a refused change', async () => {
+        const { service, audited } = setup({ existing: [{ name: 'Season One' }] });
+        await errorOf(service.create(USER, create({ name: 'season one' })));
+        expect(audited).toEqual([]);
     });
 });

@@ -2,6 +2,12 @@ export const PRODUCTS_MODULE = 'products' as const;
 
 export const PRODUCTS_ERROR_CODES = {
     PRODUCT_NOT_FOUND: 'PRODUCTS_NOT_FOUND',
+    /** `collectionId` names no collection. */
+    COLLECTION_NOT_FOUND: 'PRODUCTS_COLLECTION_NOT_FOUND',
+    /** The collection was archived by its artist — nothing new may be filed under it. */
+    COLLECTION_ARCHIVED: 'PRODUCTS_COLLECTION_ARCHIVED',
+    /** A drop may only sit in a collection of its own artist. */
+    COLLECTION_ARTIST_MISMATCH: 'PRODUCTS_COLLECTION_ARTIST_MISMATCH',
     PRODUCT_CODE_TAKEN: 'PRODUCTS_CODE_TAKEN',
     TAG_TAKEN: 'PRODUCTS_TAG_TAKEN',
     /** A `skus` block arrived but no minting provider is wired in. */

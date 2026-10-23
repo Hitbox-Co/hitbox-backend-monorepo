@@ -1,7 +1,8 @@
 # Artist collections API — artist dashboard
 
-> Everything the artist dashboard needs to list, create, edit, reorder and
-> delete the signed-in artist's collections. Background and rules:
+> Everything the artist dashboard needs to list, create, edit, reorder,
+> delete and restore the signed-in artist's collections, and see the active
+> drops inside them. Every change is audited ([README §6](README.md#6-audit-trail)). Background and rules:
 > [README.md](README.md). Monitoring for HitBox staff:
 > [admin-monitoring-api.md](admin-monitoring-api.md).
 
@@ -14,9 +15,10 @@ it is always the signed-in artist.
 |---|---|---|
 | 1 | `GET /artist/collections` | My collections, in display order |
 | 2 | `POST /artist/collections` | Create one |
-| 3 | `GET /artist/collections/:collectionId` | One of mine |
+| 3 | `GET /artist/collections/:collectionId` | One of mine, **with its active drops** |
 | 4 | `PATCH /artist/collections/:collectionId` | Edit name, slug, description, visibility |
 | 5 | `DELETE /artist/collections/:collectionId` | Delete (archive) |
+| 5a | `POST /artist/collections/:collectionId/restore` | Undo a delete |
 | 6 | `PUT /artist/collections/order` | Reorder all live collections |
 | 7 | `POST /artist/collections/:collectionId/hero/upload-url` | Upload URL for a hero image |
 | 8 | `PUT /artist/collections/:collectionId/hero` | Use the uploaded image |
@@ -42,10 +44,10 @@ array of them).
   "isActive": true,
   "archivedAt": null,
   "status": "LIVE",
-  "counts": { "drops": 4, "liveDrops": 4 },
+  "counts": { "drops": 4, "liveDrops": 4, "activeDrops": 2 },
   "createdAt": "2026-10-23T10:00:00.000Z",
   "updatedAt": "2026-10-23T10:00:00.000Z",
-  "actions": { "canEdit": true, "canArchive": false, "archiveBlockedReason": "HAS_DROPS" }
+  "actions": { "canEdit": true, "canArchive": false, "archiveBlockedReason": "HAS_DROPS", "canRestore": false }
 }
 ```
 
@@ -56,10 +58,12 @@ array of them).
 | `isPublic` | On the storefront. New collections start `false` (draft) |
 | `status` | `LIVE` or `ARCHIVED` |
 | `counts.drops` | Every drop ever filed under it, retired ones included |
-| `counts.liveDrops` | Drops not retired. While this is above 0 the collection can't be deleted |
+| `counts.liveDrops` | Drops not archived, **in any status** (drafts, in review, on sale…). While this is above 0 the collection can't be deleted |
+| `counts.activeDrops` | Drops **you are shown**: on sale (`ACTIVE`, switched on, not archived) and yours. Can be lower than `liveDrops` — drafts and drops in review count toward blocking delete but aren't listed |
 | `actions.canEdit` | `false` once archived |
 | `actions.canArchive` | Whether **Delete** will work right now |
 | `actions.archiveBlockedReason` | `HAS_DROPS` (ask your brand team / HitBox to move or retire its drops), `ARCHIVED`, or `null` |
+| `actions.canRestore` | `true` for a deleted collection — show **Restore** (5a) |
 
 ---
 
@@ -97,8 +101,42 @@ Response `201`: the collection.
 
 ## 3. `GET /artist/collections/:collectionId`
 
-Response: the collection. Archived ones are returned too. Someone else's id
-is `404`.
+The collection plus `drops`: the drops in it that are **active and yours**,
+newest first (at most 100). Archived collections are returned too. Someone
+else's id is `404`.
+
+```json
+{
+  "data": {
+    "id": "8e02…",
+    "name": "Kaze — Season One",
+    "…": "…every collection field above…",
+    "counts": { "drops": 4, "liveDrops": 4, "activeDrops": 2 },
+    "drops": [
+      {
+        "id": "d1a0…",
+        "publicCode": "drp0…",
+        "name": "Kaze Genesis — Single Card",
+        "groupCode": "1001-0001",
+        "totalSupply": 500,
+        "publishedAt": "2026-09-10T12:00:00.000Z",
+        "releaseStart": "2026-09-10T12:00:00.000Z",
+        "releaseEnd": null
+      }
+    ]
+  }
+}
+```
+
+A drop appears here only when **all** of these hold:
+
+- `status` is `ACTIVE`, it's switched on, and it isn't archived — the same
+  rule the public catalog uses. Drafts, drops in review, approved but not yet
+  live, ended and rejected drops are not listed;
+- it's **your** drop (`artistId` is you). Drop managers can't put another
+  artist's drop in your collection any more — products refuses it.
+
+Only this route lists drops; the list (1) and every write return `counts` only.
 
 ## 4. `PATCH /artist/collections/:collectionId`
 
@@ -135,7 +173,31 @@ Refused while it still holds drops that aren't retired:
 ```
 
 Response `200`: the collection, now `status: "ARCHIVED"`. Deleting it again
-is `409 ARTIST_COLLECTION_ARCHIVED`. There is no undo yet.
+is `409 ARTIST_COLLECTION_ARCHIVED`. Undo it with **restore** (5a).
+
+## 5a. `POST /artist/collections/:collectionId/restore`
+
+Undoes a delete. Body optional:
+
+```json
+{}
+```
+or, when the old name has been taken by another of your collections since:
+```json
+{ "name": "Season One (2025)" }
+```
+
+The collection comes back **live**, **private** (`isPublic: false` — publish
+it again with PATCH when you're ready), at the **end** of your list, with the
+same slug.
+
+| Error | When |
+|---|---|
+| `409 ARTIST_COLLECTION_NOT_ARCHIVED` | It isn't deleted (or was restored a moment ago) |
+| `409 ARTIST_COLLECTION_NAME_TAKEN` | You have another live collection with that name — resend with `name` |
+| `409 ARTIST_COLLECTION_LIMIT_REACHED` | You already have 50 live collections |
+
+Response: the collection, `status: "LIVE"`.
 
 ## 6. `PUT /artist/collections/order`
 
@@ -185,7 +247,8 @@ with no storage configured, step 1 returns `400 ARTIST_IMAGES_UNAVAILABLE`.
 | `404` | `ARTIST_COLLECTION_NOT_FOUND` | No such collection of yours |
 | `409` | `ARTIST_COLLECTION_NAME_TAKEN` | You already have a live collection with that name |
 | `409` | `ARTIST_COLLECTION_SLUG_TAKEN` | That slug is used by another collection (any artist's) |
-| `409` | `ARTIST_COLLECTION_ARCHIVED` | Editing or deleting an archived collection |
+| `409` | `ARTIST_COLLECTION_ARCHIVED` | Editing or deleting an archived collection — restore it first |
+| `409` | `ARTIST_COLLECTION_NOT_ARCHIVED` | Restoring a collection that isn't deleted |
 | `409` | `ARTIST_COLLECTION_HAS_DROPS` | Deleting a collection that still has live drops (`details.liveDrops`) |
 | `409` | `ARTIST_COLLECTION_LIMIT_REACHED` | Already 50 live collections (`details.max`) |
 | `409` | `ARTIST_PROFILE_LOCKED` | Your profile is archived or deactivated — read-only |
@@ -198,7 +261,7 @@ with no storage configured, step 1 returns `400 ARTIST_IMAGES_UNAVAILABLE`.
 **Collections page**
 - [ ] `GET /artist/collections` → cards in `position` order: hero image, name, `counts.liveDrops` drops, a **Draft** chip when `isPublic` is `false`.
 - [ ] Drag-and-drop reorder → `PUT /artist/collections/order` with the full id list; replace the list with the response. On `ORDER_MISMATCH`, reload.
-- [ ] An **Archived** tab → `?status=archived` (read-only cards).
+- [ ] An **Archived** tab → `?status=archived`: read-only cards with a **Restore** button (`actions.canRestore`). On `NAME_TAKEN`, ask for a new name and resend with `{ name }`. Tell the artist it comes back as a draft.
 - [ ] Hide **New collection** at 50 live collections, or show the `LIMIT_REACHED` message.
 
 **Create / edit form**
@@ -209,7 +272,11 @@ with no storage configured, step 1 returns `400 ARTIST_IMAGES_UNAVAILABLE`.
 
 **Delete**
 - [ ] Enable only when `actions.canArchive`. When `archiveBlockedReason` is `HAS_DROPS`: "This collection still has {counts.liveDrops} drops — ask your brand team or HitBox to move or retire them first."
-- [ ] Confirm dialog: "This removes the collection from your page. It can't be undone."
+- [ ] Confirm dialog: "This removes the collection from your page. You can restore it later from Archived."
+
+**Collection detail**
+- [ ] Drops grid from `drops` (active and yours only). Show `counts.activeDrops` as "N on sale".
+- [ ] When `counts.liveDrops` > `counts.activeDrops`: "{liveDrops − activeDrops} more drops are being prepared" — they're why Delete is blocked even if the grid looks short.
 
 **Profile locked**
 - [ ] On `ARTIST_PROFILE_LOCKED`, switch the whole section to read-only.

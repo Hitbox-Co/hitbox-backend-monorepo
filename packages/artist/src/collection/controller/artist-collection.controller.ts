@@ -5,6 +5,7 @@ import {
     createCollectionSchema,
     listMyCollectionsQuerySchema,
     reorderCollectionsSchema,
+    restoreCollectionSchema,
     updateCollectionSchema,
 } from '../dto/artist-collection.dto';
 import { imageUploadRequestSchema, setImageSchema } from '../../self/dto/artist-self.dto';
@@ -60,6 +61,12 @@ export class ArtistCollectionController {
     /** DELETE /artist/collections/:collectionId — soft archive. */
     archive: RequestHandler = asyncHandler(async (req, res) => {
         res.json({ data: await this.service.archive(this.userId(req), this.id(req)) });
+    });
+
+    /** POST /artist/collections/:collectionId/restore — undo a delete. */
+    restore: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = restoreCollectionSchema.parse(req.body ?? {});
+        res.json({ data: await this.service.restore(this.userId(req), this.id(req), dto) });
     });
 
     /** POST /artist/collections/:collectionId/hero/upload-url */

@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import type { Logger } from 'pino';
 import { AppError } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import { Prisma } from '@hitbox/database';
 import {
+    ARTIST_AUDIT_EVENTS,
     ARTIST_COLLECTION_ERROR_CODES,
     ARTIST_COLLECTION_EVENTS,
     MAX_LIVE_COLLECTIONS_PER_ARTIST,
@@ -19,8 +21,10 @@ import type {
     CollectionView,
     CreateCollectionDto,
     ListMyCollectionsQuery,
+    MyCollectionDetailView,
     MyCollectionView,
     ReorderCollectionsDto,
+    RestoreCollectionDto,
     UpdateCollectionDto,
 } from '../dto/artist-collection.dto';
 import type {
@@ -34,18 +38,45 @@ import type {
     IArtistImageStorage,
 } from '../../self/domain/artist-image-storage.interface';
 import type { ImageUploadRequestDto, SetImageDto } from '../../self/dto/artist-self.dto';
+import type { IArtistAuditRecorder } from '../../domain/interfaces/audit-recorder.port';
 import { slugify } from '../../profile/domain/artist-role';
 
 export interface ArtistCollectionServiceDeps {
     collections: ArtistCollectionRepository;
     artists: ArtistSelfRepository;
+    /** Every change is recorded — `artist.collection.*` in the audit catalog. */
+    audit: IArtistAuditRecorder;
     images?: IArtistImageStorage | undefined;
     eventBus?: IEventBus | undefined;
     logger: Logger;
     now?: () => Date;
 }
 
-function toView(row: CollectionRow, liveDrops: number): CollectionView {
+/** The two drop counts a view needs beyond the plain relation count. */
+interface DropCounts {
+    /** Not archived, any status — blocks deleting the collection. */
+    live: number;
+    /** Active and by the collection's artist — what the artist is shown. */
+    active: number;
+}
+
+const NO_DROPS: DropCounts = { live: 0, active: 0 };
+
+/** What the audit trail records about a collection, before and after. */
+function snapshot(row: CollectionRow) {
+    return {
+        name: row.name,
+        slug: row.slug,
+        description: row.description,
+        heroImageUrl: row.heroImageUrl,
+        position: row.position,
+        isPublic: row.isPublic,
+        isActive: row.isActive,
+        archivedAt: row.archivedAt?.toISOString() ?? null,
+    };
+}
+
+function toView(row: CollectionRow, counts: DropCounts): CollectionView {
     return {
         id: row.id,
         publicCode: row.publicCode,
@@ -58,26 +89,32 @@ function toView(row: CollectionRow, liveDrops: number): CollectionView {
         isActive: row.isActive,
         archivedAt: row.archivedAt?.toISOString() ?? null,
         status: row.archivedAt ? 'ARCHIVED' : 'LIVE',
-        counts: { drops: row._count.drops, liveDrops },
+        counts: { drops: row._count.drops, liveDrops: counts.live, activeDrops: counts.active },
         createdAt: row.createdAt.toISOString(),
         updatedAt: row.updatedAt.toISOString(),
     };
 }
 
-function toMine(row: CollectionRow, liveDrops: number): MyCollectionView {
+function toMine(row: CollectionRow, counts: DropCounts): MyCollectionView {
     const archived = row.archivedAt !== null;
-    const blocked = archived ? 'ARCHIVED' : liveDrops > 0 ? 'HAS_DROPS' : null;
+    const blocked = archived ? 'ARCHIVED' : counts.live > 0 ? 'HAS_DROPS' : null;
     return {
-        ...toView(row, liveDrops),
-        actions: { canEdit: !archived, canArchive: blocked === null, archiveBlockedReason: blocked },
+        ...toView(row, counts),
+        actions: {
+            canEdit: !archived,
+            canArchive: blocked === null,
+            archiveBlockedReason: blocked,
+            canRestore: archived,
+        },
     };
 }
 
-function toAdmin(row: AdminCollectionRow, liveDrops: number): AdminCollectionView {
+function toAdmin(row: AdminCollectionRow, counts: DropCounts): AdminCollectionView {
     return {
-        ...toView(row, liveDrops),
+        ...toView(row, counts),
         artist: {
             id: row.artist.id,
+            userId: row.artist.userId,
             name: row.artist.name,
             slug: row.artist.slug,
             isActive: row.artist.isActive,
@@ -97,10 +134,18 @@ function toAdmin(row: AdminCollectionRow, liveDrops: number): AdminCollectionVie
  *
  * Collections are curated, not stocked: an artist creates and arranges them,
  * but which drops sit in a collection is set on the drop (by the drop's
- * managers), so there is no "add drop" route here. That is also why archiving
- * refuses while live drops remain — the artist cannot move them, and an
- * archived collection still holding on-sale drops would hide them from the
- * artist's page while every drop page still names it.
+ * managers), so there is no "add drop" route here. Products only accepts a
+ * live collection of the drop's own artist.
+ *
+ * **What the artist is shown** is narrower than what the collection holds:
+ * only drops that are active (ACTIVE, switched on, not archived) and by this
+ * artist. Deleting, though, is blocked by every drop that isn't archived —
+ * drafts and drops in review included — because archiving the collection
+ * would strand those too. The two numbers are `counts.activeDrops` and
+ * `counts.liveDrops`.
+ *
+ * **Every change is audited** after it is written (the platform's pattern,
+ * as in orders and payments), with before/after snapshots.
  */
 export class ArtistCollectionService {
     constructor(private readonly deps: ArtistCollectionServiceDeps) { }
@@ -110,25 +155,36 @@ export class ArtistCollectionService {
     async listMine(userId: string, query: ListMyCollectionsQuery): Promise<MyCollectionView[]> {
         const me = await this.requireArtist(userId);
         const rows = await this.deps.collections.listForArtist(me.id, query.status);
-        const live = await this.deps.collections.liveDropCounts(rows.map((r) => r.id));
-        return rows.map((row) => toMine(row, live.get(row.id) ?? 0));
+        const counts = await this.dropCounts(rows);
+        return rows.map((row) => toMine(row, counts.get(row.id) ?? NO_DROPS));
     }
 
-    async getMine(userId: string, collectionId: string): Promise<MyCollectionView> {
+    /** One collection, with the active drops of this artist inside it. */
+    async getMine(userId: string, collectionId: string): Promise<MyCollectionDetailView> {
         const me = await this.requireArtist(userId);
-        return this.viewMine(await this.requireCollection(me.id, collectionId));
+        const row = await this.requireCollection(me.id, collectionId);
+        const [view, drops] = await Promise.all([
+            this.viewMine(row),
+            this.deps.collections.activeDropsOf(row.id, me.id),
+        ]);
+        return {
+            ...view,
+            drops: drops.map((d) => ({
+                id: d.id,
+                publicCode: d.publicCode,
+                name: d.name,
+                groupCode: d.groupCode,
+                totalSupply: d.totalSupply,
+                publishedAt: d.publishedAt?.toISOString() ?? null,
+                releaseStart: d.releaseStart?.toISOString() ?? null,
+                releaseEnd: d.releaseEnd?.toISOString() ?? null,
+            })),
+        };
     }
 
     async create(userId: string, dto: CreateCollectionDto): Promise<MyCollectionView> {
         const me = await this.requireEditableArtist(userId);
-
-        if ((await this.deps.collections.countLive(me.id)) >= MAX_LIVE_COLLECTIONS_PER_ARTIST) {
-            throw AppError.conflict(
-                `You already have ${MAX_LIVE_COLLECTIONS_PER_ARTIST} collections. Archive one before creating another.`,
-                ARTIST_COLLECTION_ERROR_CODES.LIMIT_REACHED,
-                { max: MAX_LIVE_COLLECTIONS_PER_ARTIST },
-            );
-        }
+        await this.assertUnderLimit(me.id);
         await this.assertNameFree(me.id, dto.name);
 
         const slug = dto.slug ?? (await this.freeSlug(me.slug, dto.name));
@@ -152,14 +208,16 @@ export class ArtistCollectionService {
             }),
         );
 
+        await this.audit(ARTIST_AUDIT_EVENTS.COLLECTION_CREATE, userId, row, null, snapshot(row));
         await this.publish(ARTIST_COLLECTION_EVENTS.CREATED, row, me.id);
         this.deps.logger.info({ artistId: me.id, collectionId: row.id }, 'artist collection created');
-        return toMine(row, 0);
+        return toMine(row, NO_DROPS);
     }
 
     async update(userId: string, collectionId: string, dto: UpdateCollectionDto): Promise<MyCollectionView> {
         const me = await this.requireEditableArtist(userId);
         const current = await this.requireLive(me.id, collectionId);
+        const before = snapshot(current);
 
         if (dto.name !== undefined && dto.name.toLowerCase() !== current.name.toLowerCase()) {
             await this.assertNameFree(me.id, dto.name, current.id);
@@ -176,6 +234,7 @@ export class ArtistCollectionService {
                 ...(dto.isPublic !== undefined && { isPublic: dto.isPublic }),
             }),
         );
+        await this.audit(ARTIST_AUDIT_EVENTS.COLLECTION_UPDATE, userId, row, before, snapshot(row), Object.keys(dto));
         await this.publish(ARTIST_COLLECTION_EVENTS.UPDATED, row, me.id, Object.keys(dto));
         return this.viewMine(row);
     }
@@ -184,29 +243,72 @@ export class ArtistCollectionService {
     async archive(userId: string, collectionId: string): Promise<MyCollectionView> {
         const me = await this.requireEditableArtist(userId);
         const current = await this.requireLive(me.id, collectionId);
+        const before = snapshot(current);
 
-        const liveDrops = (await this.deps.collections.liveDropCounts([current.id])).get(current.id) ?? 0;
-        if (liveDrops > 0) {
+        const { live } = (await this.dropCounts([current])).get(current.id) ?? NO_DROPS;
+        if (live > 0) {
             throw AppError.conflict(
-                `This collection still holds ${liveDrops} drop${liveDrops === 1 ? '' : 's'}. ` +
+                `This collection still holds ${live} drop${live === 1 ? '' : 's'} (including any not yet on sale). ` +
                 'Drops have to be moved to another collection or retired before it can be deleted — ' +
                 'ask your brand team or HitBox to do that.',
                 ARTIST_COLLECTION_ERROR_CODES.HAS_DROPS,
-                { liveDrops },
+                { liveDrops: live },
             );
         }
 
         if ((await this.deps.collections.archive(current.id)) === 0) {
             throw AppError.conflict('This collection is already deleted.', ARTIST_COLLECTION_ERROR_CODES.ARCHIVED);
         }
-        // Close the gap it leaves in the live order.
-        const remaining = (await this.deps.collections.listForArtist(me.id, 'live')).map((r) => r.id);
-        if (remaining.length > 0) await this.deps.collections.reorder(me.id, remaining);
+        await this.closeGaps(me.id);
 
         const row = (await this.deps.collections.findForArtist(me.id, current.id))!;
+        await this.audit(ARTIST_AUDIT_EVENTS.COLLECTION_ARCHIVE, userId, row, before, snapshot(row));
         await this.publish(ARTIST_COLLECTION_EVENTS.ARCHIVED, row, me.id);
         this.deps.logger.info({ artistId: me.id, collectionId: row.id }, 'artist collection archived');
-        return toMine(row, 0);
+        return toMine(row, NO_DROPS);
+    }
+
+    /**
+     * POST /artist/collections/:id/restore — undoes a delete.
+     *
+     * Comes back **private** and at the **end** of the list, whatever it was
+     * before: the storefront shouldn't change without the artist choosing to
+     * republish it. The slug was held while it was archived, so it is still
+     * theirs; the name may have been reused since, in which case the artist
+     * sends a new one.
+     */
+    async restore(userId: string, collectionId: string, dto: RestoreCollectionDto): Promise<MyCollectionView> {
+        const me = await this.requireEditableArtist(userId);
+        const current = await this.requireCollection(me.id, collectionId);
+        if (!current.archivedAt) {
+            throw AppError.conflict(
+                'This collection is not deleted, so there is nothing to restore.',
+                ARTIST_COLLECTION_ERROR_CODES.NOT_ARCHIVED,
+            );
+        }
+        const before = snapshot(current);
+        const name = dto.name ?? current.name;
+
+        await this.assertUnderLimit(me.id);
+        await this.assertNameFree(me.id, name, current.id, Boolean(dto.name));
+
+        const position = await this.deps.collections.nextPosition(me.id);
+        const restored = await this.deps.collections.restore(current.id, {
+            position,
+            ...(dto.name !== undefined && { name: dto.name }),
+        });
+        if (restored === 0) {
+            throw AppError.conflict(
+                'This collection was restored a moment ago.',
+                ARTIST_COLLECTION_ERROR_CODES.NOT_ARCHIVED,
+            );
+        }
+
+        const row = (await this.deps.collections.findForArtist(me.id, current.id))!;
+        await this.audit(ARTIST_AUDIT_EVENTS.COLLECTION_RESTORE, userId, row, before, snapshot(row));
+        await this.publish(ARTIST_COLLECTION_EVENTS.RESTORED, row, me.id);
+        this.deps.logger.info({ artistId: me.id, collectionId: row.id }, 'artist collection restored');
+        return this.viewMine(row);
     }
 
     /**
@@ -230,6 +332,16 @@ export class ArtistCollectionService {
         }
 
         await this.deps.collections.reorder(me.id, dto.collectionIds);
+        await this.deps.audit.record({
+            eventType: ARTIST_AUDIT_EVENTS.COLLECTION_REORDER,
+            actor: { type: 'ARTIST', id: userId },
+            result: 'SUCCESS',
+            organizationId: me.organizationId,
+            resource: { type: 'Artist', id: me.id },
+            beforeState: { order: live },
+            afterState: { order: dto.collectionIds },
+            correlationId: randomUUID(),
+        });
         await this.deps.eventBus?.publish(ARTIST_COLLECTION_EVENTS.REORDERED, {
             artistId: me.id,
             collectionIds: dto.collectionIds,
@@ -277,7 +389,9 @@ export class ArtistCollectionService {
         if (asset.virusScanStatus === 'PENDING') refuse('it is still being scanned — try again shortly.');
         if (!asset.publicUrl) refuse('it is not stored where public images are served from.');
 
+        const before = snapshot(current);
         const row = await this.deps.collections.update(current.id, { heroImageUrl: asset.publicUrl });
+        await this.audit(ARTIST_AUDIT_EVENTS.COLLECTION_UPDATE, userId, row, before, snapshot(row), ['heroImageUrl'], { assetId: dto.assetId });
         await this.publish(ARTIST_COLLECTION_EVENTS.UPDATED, row, me.id, ['heroImageUrl']);
         return this.viewMine(row);
     }
@@ -285,7 +399,9 @@ export class ArtistCollectionService {
     async removeHero(userId: string, collectionId: string): Promise<MyCollectionView> {
         const me = await this.requireEditableArtist(userId);
         const current = await this.requireLive(me.id, collectionId);
+        const before = snapshot(current);
         const row = await this.deps.collections.update(current.id, { heroImageUrl: null });
+        await this.audit(ARTIST_AUDIT_EVENTS.COLLECTION_UPDATE, userId, row, before, snapshot(row), ['heroImageUrl']);
         await this.publish(ARTIST_COLLECTION_EVENTS.UPDATED, row, me.id, ['heroImageUrl']);
         return this.viewMine(row);
     }
@@ -299,33 +415,42 @@ export class ArtistCollectionService {
             query,
             () => this.deps.collections.collectionIdsWithLiveDrops(),
         );
-        const live = await this.deps.collections.liveDropCounts(items.map((r) => r.id));
+        const counts = await this.dropCounts(items);
         return {
             page: query.page,
             limit: query.limit,
             total,
-            items: items.map((row) => toAdmin(row, live.get(row.id) ?? 0)),
+            items: items.map((row) => toAdmin(row, counts.get(row.id) ?? NO_DROPS)),
         };
     }
 
+    /**
+     * Monitoring sees every drop in the collection — not just what the artist
+     * is shown — with `shownToArtist` / `sameArtist` saying which is which.
+     */
     async adminGet(collectionId: string): Promise<AdminCollectionDetailView> {
         const row = await this.deps.collections.adminFind(collectionId);
         if (!row) {
             throw AppError.notFound('Collection not found.', ARTIST_COLLECTION_ERROR_CODES.NOT_FOUND);
         }
-        const [live, drops] = await Promise.all([
-            this.deps.collections.liveDropCounts([row.id]),
+        const [counts, drops] = await Promise.all([
+            this.dropCounts([row]),
             this.deps.collections.dropsOf(row.id),
         ]);
         return {
-            ...toAdmin(row, live.get(row.id) ?? 0),
-            drops: drops.map((d) => ({
-                id: d.id,
-                name: d.name,
-                status: d.status,
-                archivedAt: d.archivedAt?.toISOString() ?? null,
-                createdAt: d.createdAt.toISOString(),
-            })),
+            ...toAdmin(row, counts.get(row.id) ?? NO_DROPS),
+            drops: drops.map((d) => {
+                const sameArtist = d.artistId === row.artistId;
+                return {
+                    id: d.id,
+                    name: d.name,
+                    status: d.status,
+                    archivedAt: d.archivedAt?.toISOString() ?? null,
+                    createdAt: d.createdAt.toISOString(),
+                    shownToArtist: sameArtist && d.status === 'ACTIVE' && d.isActive && d.archivedAt === null,
+                    sameArtist,
+                };
+            }),
         };
     }
 
@@ -362,9 +487,17 @@ export class ArtistCollectionService {
 
     // ── Helpers ─────────────────────────────────────────────────────────────
 
+    private async dropCounts(rows: { id: string; artistId: string }[]): Promise<Map<string, DropCounts>> {
+        const ids = rows.map((r) => r.id);
+        const [live, active] = await Promise.all([
+            this.deps.collections.liveDropCounts(ids),
+            this.deps.collections.activeDropCounts(rows),
+        ]);
+        return new Map(ids.map((id) => [id, { live: live.get(id) ?? 0, active: active.get(id) ?? 0 }]));
+    }
+
     private async viewMine(row: CollectionRow): Promise<MyCollectionView> {
-        const live = (await this.deps.collections.liveDropCounts([row.id])).get(row.id) ?? 0;
-        return toMine(row, live);
+        return toMine(row, (await this.dropCounts([row])).get(row.id) ?? NO_DROPS);
     }
 
     private async requireArtist(userId: string): Promise<ArtistSelfRow> {
@@ -403,17 +536,29 @@ export class ArtistCollectionService {
         const row = await this.requireCollection(artistId, collectionId);
         if (row.archivedAt) {
             throw AppError.conflict(
-                'This collection has been deleted, so it can no longer be changed.',
+                'This collection has been deleted, so it can no longer be changed. Restore it first.',
                 ARTIST_COLLECTION_ERROR_CODES.ARCHIVED,
             );
         }
         return row;
     }
 
-    private async assertNameFree(artistId: string, name: string, exceptId?: string): Promise<void> {
+    private async assertUnderLimit(artistId: string): Promise<void> {
+        if ((await this.deps.collections.countLive(artistId)) >= MAX_LIVE_COLLECTIONS_PER_ARTIST) {
+            throw AppError.conflict(
+                `You already have ${MAX_LIVE_COLLECTIONS_PER_ARTIST} collections. Delete one first.`,
+                ARTIST_COLLECTION_ERROR_CODES.LIMIT_REACHED,
+                { max: MAX_LIVE_COLLECTIONS_PER_ARTIST },
+            );
+        }
+    }
+
+    private async assertNameFree(artistId: string, name: string, exceptId?: string, chosen = true): Promise<void> {
         if (await this.deps.collections.nameTaken(artistId, name, exceptId)) {
             throw AppError.conflict(
-                `You already have a collection called "${name}".`,
+                chosen
+                    ? `You already have a collection called "${name}".`
+                    : `You now have another collection called "${name}". Restore this one with a new name.`,
                 ARTIST_COLLECTION_ERROR_CODES.NAME_TAKEN,
             );
         }
@@ -450,6 +595,12 @@ export class ArtistCollectionService {
         }
     }
 
+    /** Renumbers the live list 0…n-1 after one leaves it. */
+    private async closeGaps(artistId: string): Promise<void> {
+        const remaining = (await this.deps.collections.listForArtist(artistId, 'live')).map((r) => r.id);
+        if (remaining.length > 0) await this.deps.collections.reorder(artistId, remaining);
+    }
+
     private requireImages(): IArtistImageStorage {
         if (!this.deps.images) {
             throw AppError.badRequest(
@@ -458,6 +609,28 @@ export class ArtistCollectionService {
             );
         }
         return this.deps.images;
+    }
+
+    private async audit(
+        eventType: string,
+        userId: string,
+        row: CollectionRow,
+        before: ReturnType<typeof snapshot> | null,
+        after: ReturnType<typeof snapshot>,
+        fields?: string[],
+        extra?: Record<string, string>,
+    ): Promise<void> {
+        await this.deps.audit.record({
+            eventType,
+            actor: { type: 'ARTIST', id: userId },
+            result: 'SUCCESS',
+            organizationId: row.organizationId,
+            resource: { type: 'ArtistCollection', id: row.id },
+            beforeState: before,
+            afterState: after,
+            correlationId: randomUUID(),
+            metadata: { artistId: row.artistId, ...(fields ? { fields } : {}), ...(extra ?? {}) },
+        });
     }
 
     private async publish(

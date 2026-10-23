@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Prisma, PrismaClient } from '@hitbox/database';
 import type { AdminListCollectionsQuery } from '../dto/artist-collection.dto';
+import { ACTIVE_DROP_WHERE } from '../constants/artist-collection.constant';
 
 export interface ArtistCollectionCapacityRow {
     collectionId: string;
@@ -32,7 +33,7 @@ const collectionSelect = {
 
 const adminSelect = {
     ...collectionSelect,
-    artist: { select: { id: true, name: true, slug: true, isActive: true, archivedAt: true } },
+    artist: { select: { id: true, userId: true, name: true, slug: true, isActive: true, archivedAt: true } },
     organization: { select: { id: true, name: true } },
 } satisfies Prisma.ArtistCollectionSelect;
 
@@ -109,6 +110,44 @@ export class ArtistCollectionRepository {
             _count: { _all: true },
         });
         return new Map(rows.map((row) => [row.collectionId as string, row._count._all]));
+    }
+
+    /**
+     * Drops the artist is shown, per collection: active, and by the
+     * collection's own artist. Grouped by (collection, drop artist) so one
+     * query serves many artists' collections — the caller keeps only the
+     * rows whose artist matches the collection's.
+     */
+    async activeDropCounts(
+        collections: { id: string; artistId: string }[],
+    ): Promise<Map<string, number>> {
+        if (collections.length === 0) return new Map();
+        const owner = new Map(collections.map((c) => [c.id, c.artistId]));
+        const rows = await this.prisma.drop.groupBy({
+            by: ['collectionId', 'artistId'],
+            where: { collectionId: { in: [...owner.keys()] }, ...ACTIVE_DROP_WHERE },
+            _count: { _all: true },
+        });
+        const counts = new Map<string, number>();
+        for (const row of rows) {
+            if (row.collectionId && row.artistId === owner.get(row.collectionId)) {
+                counts.set(row.collectionId, row._count._all);
+            }
+        }
+        return counts;
+    }
+
+    /** The drops shown to the artist on one collection, newest first. */
+    activeDropsOf(collectionId: string, artistId: string) {
+        return this.prisma.drop.findMany({
+            where: { collectionId, artistId, ...ACTIVE_DROP_WHERE },
+            orderBy: [{ publishedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }],
+            take: 100,
+            select: {
+                id: true, publicCode: true, name: true, groupCode: true,
+                totalSupply: true, publishedAt: true, releaseStart: true, releaseEnd: true,
+            },
+        });
     }
 
     async slugTaken(slug: string, exceptId?: string): Promise<boolean> {
@@ -196,6 +235,19 @@ export class ArtistCollectionRepository {
         return result.count;
     }
 
+    /**
+     * Undoes `archive`: live again at `position`, optionally renamed.
+     * Comes back **private** — the artist republishes deliberately. Guarded
+     * on `archivedAt` being set so a double press restores once.
+     */
+    async restore(collectionId: string, data: { position: number; name?: string }): Promise<number> {
+        const result = await this.prisma.artistCollection.updateMany({
+            where: { id: collectionId, archivedAt: { not: null } },
+            data: { ...data, archivedAt: null, isActive: true, isPublic: false, updatedAt: new Date() },
+        });
+        return result.count;
+    }
+
     /** Rewrites positions 0…n-1 in the given order, in one transaction. */
     async reorder(artistId: string, orderedIds: string[]): Promise<void> {
         const now = new Date();
@@ -270,7 +322,10 @@ export class ArtistCollectionRepository {
             where: { collectionId },
             orderBy: { createdAt: 'desc' },
             take: 100,
-            select: { id: true, name: true, status: true, archivedAt: true, createdAt: true },
+            select: {
+                id: true, name: true, status: true, isActive: true, archivedAt: true, createdAt: true,
+                artistId: true,
+            },
         });
     }
 

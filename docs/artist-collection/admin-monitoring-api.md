@@ -1,7 +1,8 @@
 # Artist collections — monitoring API (HitBox System Admin)
 
 > Read-only oversight of every artist's collections for the admin console:
-> who has created what, what's public, what's empty, what was deleted.
+> who has created what, what's public, what's empty, what was deleted — and,
+> through the audit log, who changed what and when.
 > Background: [README.md](README.md). The artist-side API:
 > [artist-collection-api.md](artist-collection-api.md).
 
@@ -21,7 +22,8 @@ show the menu item.
 | `GET /admin/artist-collections/:collectionId` | One collection, with its drops |
 
 Nothing here writes. There is no admin edit, hide or delete yet — see
-[README §7](README.md#7-known-gaps).
+[README §8](README.md#8-known-gaps). The change history lives in the audit
+log — see [the audit trail](#the-audit-trail) below.
 
 ---
 
@@ -57,15 +59,19 @@ Nothing here writes. There is no admin edit, hide or delete yet — see
       "isActive": true,
       "archivedAt": null,
       "status": "LIVE",
-      "counts": { "drops": 4, "liveDrops": 4 },
+      "counts": { "drops": 4, "liveDrops": 4, "activeDrops": 2 },
       "createdAt": "2026-09-01T12:00:00.000Z",
       "updatedAt": "2026-09-01T12:00:00.000Z",
-      "artist": { "id": "23ef…", "name": "Kaze", "slug": "kaze", "isActive": true, "archived": false },
+      "artist": { "id": "23ef…", "userId": "e62c…", "name": "Kaze", "slug": "kaze", "isActive": true, "archived": false },
       "organization": { "id": "4b10…", "name": "Kaze (solo)" }
     }
   ]
 }
 ```
+
+`counts`: `drops` = every drop ever filed under it; `liveDrops` = not
+archived, any status (what blocks the artist deleting it); `activeDrops` =
+what the artist is shown (active and by this artist).
 
 `artist.isActive` / `artist.archived` flag collections whose owner has been
 deactivated or archived — they stay listed here but the artist can no longer
@@ -108,7 +114,8 @@ New this month**, each linking to the list with the matching filter
 
 ## `GET /admin/artist-collections/:collectionId`
 
-The list item shape plus the drops filed under it (newest first, at most 100):
+The list item shape plus **every** drop filed under it (newest first, at most
+100) — not only the ones the artist is shown:
 
 ```json
 {
@@ -117,13 +124,36 @@ The list item shape plus the drops filed under it (newest first, at most 100):
     "name": "Kaze — Season One",
     "…": "…every field from the list item…",
     "drops": [
-      { "id": "d1a0…", "name": "Neon Nights Tee", "status": "DRAFT", "archivedAt": null, "createdAt": "2026-09-02T12:00:00.000Z" }
+      { "id": "d1a0…", "name": "Kaze Genesis — Single Card", "status": "ACTIVE", "archivedAt": null, "createdAt": "2026-09-02T12:00:00.000Z", "shownToArtist": true, "sameArtist": true },
+      { "id": "d7c2…", "name": "Kaze Winter Tour Tee", "status": "DRAFT", "archivedAt": null, "createdAt": "2026-10-01T12:00:00.000Z", "shownToArtist": false, "sameArtist": true }
     ]
   }
 }
 ```
 
 Link each drop to the catalog (`/admin/products/:id`).
+
+| Field | Meaning |
+|---|---|
+| `shownToArtist` | The artist sees it in their collection: `ACTIVE`, switched on, not archived, and `sameArtist` |
+| `sameArtist` | The drop's artist is the collection's artist. **`false` is legacy data** — products now refuses that pairing — worth fixing from the drop's edit screen |
+
+## The audit trail
+
+Every change an artist makes is in the audit log (`artist.collection.*`,
+actor type `ARTIST`, before/after snapshots — [README §6](README.md#6-audit-trail)).
+The monitoring routes don't repeat it; read it from the audit API, which
+needs `audit-log:read:global` (System Admin holds it):
+
+| Show | Call |
+|---|---|
+| One collection's history | `GET /admin/audit/events?resourceType=ArtistCollection&resourceId={collectionId}` |
+| An artist's activity | `GET /admin/audit/events?actorId={artist.userId}` (`userId` is on every list item; null for an artist not yet linked to an account) |
+| Every deletion | `GET /admin/audit/events?eventType=artist.collection.archive` |
+| Reorders | `GET /admin/audit/events?eventType=artist.collection.reorder` (resource is the `Artist`) |
+
+Events: `artist.collection.create`, `.update` (incl. hero image), `.archive`
+(WARNING), `.restore`, `.reorder`.
 
 ## Errors
 
@@ -140,4 +170,5 @@ Link each drop to the catalog (`/admin/products/:id`).
 - [ ] Table: name + slug, artist (link to `?artistId=`), organization, status chip (Live / Archived), visibility chip (Public / Draft), `counts.liveDrops`, created, updated.
 - [ ] Filters: status, visibility, empty, organization, date range, search box (`q`), sort.
 - [ ] Badge rows whose `artist.isActive` is `false` or `artist.archived` is `true`.
-- [ ] Detail drawer from `/:collectionId` with the drops list.
+- [ ] Detail drawer from `/:collectionId` with the drops list: a "shown to artist" chip from `shownToArtist`, and a red "different artist" flag when `sameArtist` is `false`.
+- [ ] **History** tab in the drawer → `GET /admin/audit/events?resourceType=ArtistCollection&resourceId={id}`: who, what (`eventType`), when, and the before/after diff.

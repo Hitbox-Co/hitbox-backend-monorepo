@@ -35,6 +35,8 @@ export type { MyArtistProfile } from './self/service/artist-self.service';
 
 // Artist collections — docs/artist-collection/.
 export {
+    ACTIVE_DROP_WHERE,
+    ARTIST_AUDIT_EVENTS,
     ARTIST_COLLECTION_ERROR_CODES,
     ARTIST_COLLECTION_EVENTS,
     MAX_LIVE_COLLECTIONS_PER_ARTIST,
@@ -43,12 +45,19 @@ export {
     adminListCollectionsQuerySchema,
     createCollectionSchema,
     reorderCollectionsSchema,
+    restoreCollectionSchema,
     updateCollectionSchema,
 } from './collection/dto/artist-collection.dto';
 export type {
     AdminCollectionDetailView,
     AdminCollectionView,
     CollectionSummaryView,
+    ArtistDropView,
     CollectionView,
+    MyCollectionDetailView,
     MyCollectionView,
 } from './collection/dto/artist-collection.dto';
+
+// The audit hook — bootstrap passes the real recorder in.
+export { NOOP_ARTIST_AUDIT } from './domain/interfaces/audit-recorder.port';
+export type { ArtistAuditRecordInput, IArtistAuditRecorder } from './domain/interfaces/audit-recorder.port';

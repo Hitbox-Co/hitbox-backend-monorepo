@@ -30,6 +30,33 @@ export const ARTIST_COLLECTION_ERROR_CODES = {
     LIMIT_REACHED: 'ARTIST_COLLECTION_LIMIT_REACHED',
     /** The reorder list must name every live collection exactly once. */
     ORDER_MISMATCH: 'ARTIST_COLLECTION_ORDER_MISMATCH',
+    /** Restore was asked for a collection that isn't archived. */
+    NOT_ARCHIVED: 'ARTIST_COLLECTION_NOT_ARCHIVED',
+} as const;
+
+/**
+ * Which drops the artist is shown: **active** and **their own**.
+ *
+ * "Active" is exactly the public catalog's definition (products'
+ * `PUBLIC_PRODUCT_WHERE`): status ACTIVE, not switched off, not archived. Kept
+ * as a copy because the artist module must not import products; change both
+ * together. "Their own" (`Drop.artistId` = the collection's artist) is added at
+ * each query, and products now refuses to file a drop under another artist's
+ * collection, so a mismatch can only be legacy data.
+ */
+export const ACTIVE_DROP_WHERE = {
+    status: 'ACTIVE',
+    isActive: true,
+    archivedAt: null,
+} as const;
+
+/** Audit event types — registered in @hitbox/audit's AUDIT_EVENT_CATALOG. */
+export const ARTIST_AUDIT_EVENTS = {
+    COLLECTION_CREATE: 'artist.collection.create',
+    COLLECTION_UPDATE: 'artist.collection.update',
+    COLLECTION_ARCHIVE: 'artist.collection.archive',
+    COLLECTION_RESTORE: 'artist.collection.restore',
+    COLLECTION_REORDER: 'artist.collection.reorder',
 } as const;
 
 export const COLLECTION_NAME_MAX = 120;
@@ -44,6 +71,7 @@ export const ARTIST_COLLECTION_EVENTS = {
     CREATED: 'artist.collection.created',
     UPDATED: 'artist.collection.updated',
     ARCHIVED: 'artist.collection.archived',
+    RESTORED: 'artist.collection.restored',
     REORDERED: 'artist.collection.reordered',
 } as const;
 

@@ -296,6 +296,19 @@ export class ProductRepository {
         return result;
     }
 
+    /**
+     * Who owns a collection, and whether it is archived — what filing a drop
+     * under it is checked against. Reads the artist module's table directly,
+     * the same documented shortcut as the `collection` include on every
+     * product read; on extraction it becomes a call to the artist service.
+     */
+    findCollectionOwner(collectionId: string): Promise<{ artistId: string; archivedAt: Date | null } | null> {
+        return this.prisma.artistCollection.findUnique({
+            where: { id: collectionId },
+            select: { artistId: true, archivedAt: true },
+        });
+    }
+
     async findById(id: string): Promise<ProductWithRelations | null> {
         const cached = await this.cache.getEntity<ProductWithRelations>('id', id);
         if (cached) return cached;

@@ -33,6 +33,7 @@ import {
 import { ArtistSelfController } from './self/controller/artist-self.controller';
 import type { ArtistUserIdResolver } from './self/controller/artist-self.controller';
 import type { IArtistImageStorage } from './self/domain/artist-image-storage.interface';
+import type { IArtistAuditRecorder } from './domain/interfaces/audit-recorder.port';
 import { ArtistSelfRepository } from './self/repository/artist-self.repository';
 import { ArtistSelfService } from './self/service/artist-self.service';
 
@@ -68,6 +69,13 @@ export interface ArtistModuleDeps {
      * rest of the profile still works.
      */
     images?: IArtistImageStorage | undefined;
+    /**
+     * The audit hook. Every collection change is recorded through it
+     * (`artist.collection.*`). Required to build the self-service and
+     * collections routers — a write surface without its audit trail is not
+     * something to start by accident. Optional for read-only test setups.
+     */
+    audit?: IArtistAuditRecorder | undefined;
 }
 
 export interface ArtistModule {
@@ -124,6 +132,9 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
     const collectionService = new ArtistCollectionService({
         collections,
         artists: selfRepository,
+        // Routers refuse to build without a real recorder (below); this
+        // fallback only ever serves a module built for the read side.
+        audit: deps.audit ?? { record: () => Promise.reject(new Error('artist module built without an audit recorder')) },
         images: deps.images,
         eventBus: deps.eventBus,
         logger,
@@ -183,9 +194,9 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
         ownership: new ArtistOwnershipAdapter(deps.prisma),
 
         createSelfRouter(requireAuth) {
-            if (!deps.guard || !deps.resolveUserId) {
+            if (!deps.guard || !deps.resolveUserId || !deps.audit) {
                 throw new Error(
-                    'createArtistModule({ guard, resolveUserId }) is required to build the self-service router.',
+                    'createArtistModule({ guard, resolveUserId, audit }) is required to build the self-service router.',
                 );
             }
             const { guard, resolveUserId } = deps;
@@ -224,6 +235,7 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
             router.get('/collections/:collectionId', readCollections, collectionsController.get);
             router.patch('/collections/:collectionId', writeCollections, collectionsController.update);
             router.delete('/collections/:collectionId', writeCollections, collectionsController.archive);
+            router.post('/collections/:collectionId/restore', writeCollections, collectionsController.restore);
             router.post('/collections/:collectionId/hero/upload-url', writeCollections, collectionsController.createHeroUpload);
             router.put('/collections/:collectionId/hero', writeCollections, collectionsController.setHero);
             router.delete('/collections/:collectionId/hero', writeCollections, collectionsController.removeHero);
