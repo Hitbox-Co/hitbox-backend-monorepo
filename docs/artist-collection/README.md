@@ -2,9 +2,9 @@
 
 > An **artist collection** is a curated series of drops by one artist —
 > "Kaze — Season One" — and the unit a buyer tries to complete. Artists
-> create, edit, reorder, delete and restore their own collections from the
-> artist dashboard; HitBox System Admins monitor every artist's collections.
-> Every change is audited.
+> create, edit, reorder, delete and restore their own collections, and add
+> their own active drops to them, from the artist dashboard; HitBox System
+> Admins monitor every artist's collections. Every change is audited.
 
 | Document | For |
 |---|---|
@@ -31,7 +31,7 @@ write API.
 | `name` | artist | 1–120 chars. Unique per artist among **live** collections, case-insensitive |
 | `slug` | artist or server | Globally unique URL handle. Generated as `{artist-slug}-{name}` (`kaze-season-two`), `-2`, `-3`… on a clash |
 | `description` | artist | Up to 2000 chars; `""`/`null` clears it |
-| `heroImageUrl` | artist, **via the upload flow only** | Never a free-text URL — see §4 |
+| `heroImageUrl` | artist, **via the upload flow only** | Never a free-text URL — see 4 |
 | `position` | server / reorder route | 0-based order on the artist's page, among their live collections |
 | `artistId` | server | The caller's own artist profile. Never from the request |
 | `organizationId` | server | Copied from the artist at creation |
@@ -52,10 +52,10 @@ capability, never by role name:
 
 | Caller | Grant that lets them in | Can |
 |---|---|---|
-| **Artist** (`ARTIST` role) | `brand-artist-record:read:own`, `brand-artist-record:update:own` — checked against the caller's own account | List, create, read, edit, reorder, delete and restore **their own** collections; set the hero image |
+| **Artist** (`ARTIST` role) | `brand-artist-record:read:own`, `brand-artist-record:update:own` — checked against the caller's own account | List, create, read, edit, reorder, delete and restore **their own** collections; set the hero image; **add and remove their own active drops** |
 | **HitBox System Admin** | `brand-artist-record:manage:global` (implies read), route is `globalOnly` | Monitor **every** artist's collections: list, filter, search, summary, detail — and read their audit trail (`audit-log:read:global`). Read-only |
 | Brand Admin | `brand-artist-record:*:organization` | **Neither surface** — own-scope routes don't accept an organization grant, and the monitoring routes are platform-wide only |
-| Drop managers (products) | `drop:manage:*` | File a drop under a collection — only one of the drop's own artist (§3) |
+| Drop managers (products) | `drop:manage:*` | File a drop under a collection — only one of the drop's own artist (3) |
 | Buyer / anyone else | — | `403` |
 
 "Which artist" is never a parameter on the artist side: it is always the
@@ -111,11 +111,47 @@ the collection still holds any drop that isn't archived — **in any status**,
 including drafts the artist isn't shown. Those would otherwise be stranded in
 a deleted collection. So `counts.liveDrops` (blocks delete) can be higher
 than `counts.activeDrops` (shown); Kaze — Season One holds 4 drops of which 2
-are active. The artist can't move drops themselves, so they're told to ask
-their brand team or HitBox. `actions.archiveBlockedReason` says this up front.
+are active. The artist can take their **active** drops out themselves
+(`DELETE …/drops/:dropId`, 3 "Adding and removing drops"); drops not yet on
+sale aren't shown to them, so those are moved or retired by the brand team or
+HitBox. `actions.archiveBlockedReason` says this up front.
 
 An archived collection can't be edited (`409 ARTIST_COLLECTION_ARCHIVED`),
 keeps its slug, and frees its **name** for reuse.
+
+### Adding and removing drops
+
+An artist puts drops into their collection themselves
+([API 10–12](artist-collection-api.md#1012-drops-in-a-collection)):
+
+| Rule | How it's enforced |
+|---|---|
+| **The drop is assigned to this artist** (`Drop.artistId` = the artist) | The picker only lists the caller's drops; adding someone else's drop answers `NOT_FOUND` (same as a missing one — no probing) |
+| **The drop is active** (`ACTIVE`, switched on, not archived) | Drafts and drops in review are never listed; adding one answers `NOT_ACTIVE` |
+| **Not already in this collection** | The picker excludes them; adding again answers `ALREADY_IN_COLLECTION` |
+| **One collection per drop** | A drop in another of the artist's collections is listed only with `includeFiled=true`, and moved only with `move: true` (otherwise `IN_ANOTHER_COLLECTION`) |
+| **The collection is live** | Deleted collections take no drops (`ARTIST_COLLECTION_ARCHIVED`) |
+
+An add is **all or nothing**: every drop is checked, every problem returned
+together in `details.problems`, and nothing written unless all pass.
+
+**Who writes.** Products owns `Drop`, so the artist module never updates it
+directly: it calls its own port, `IDropCollectionMembership`, which products
+implements (`CollectionMembershipAdapter`). Products writes in one
+transaction whose `WHERE` repeats the checks — same artist, still active,
+still in the collection it was read from — so a drop retired, reassigned or
+moved between the check and the write is not moved anyway
+(`409 ARTIST_COLLECTION_DROPS_CHANGED`, nothing changed). Products then
+invalidates its cache and publishes `products.product.updated` for each
+drop, like any other drop edit.
+
+**Removing** (`DELETE …/drops/:dropId`) unfiles the drop — it stays on sale,
+just in no collection — and works whatever the drop's status, so an artist
+can always clear out a drop they can see. Drops not yet on sale aren't shown
+to the artist, so those are still moved by their managers.
+
+Drop managers can also set `collectionId` from the catalog (products' drop
+form); the same artist-and-live rule applies there (above).
 
 ### Restore
 
@@ -170,7 +206,7 @@ image. No bucket configured → `400 ARTIST_IMAGES_UNAVAILABLE`.
 ## 5. Events
 
 Published on the event bus for whoever wants them (notifications, search
-indexing). Payloads carry ids, not data. Separate from the audit trail (§6):
+indexing). Payloads carry ids, not data. Separate from the audit trail (6):
 events are for reacting, the audit trail is the record.
 
 | Event | Payload |
@@ -180,6 +216,10 @@ events are for reacting, the audit trail is the record.
 | `artist.collection.archived` | `{ collectionId, artistId }` |
 | `artist.collection.restored` | `{ collectionId, artistId }` |
 | `artist.collection.reordered` | `{ artistId, collectionIds }` |
+| `artist.collection.drops-added` | `{ collectionId, artistId, dropIds, movedFrom }` |
+| `artist.collection.drop-removed` | `{ collectionId, artistId, dropId }` |
+
+Each added or removed drop also gets products' own `products.product.updated`.
 
 ---
 
@@ -199,6 +239,8 @@ started without its trail.
 | `artist.collection.archive` | WARNING | deleted — it leaves the storefront | `ArtistCollection` |
 | `artist.collection.restore` | INFO | restored | `ArtistCollection` |
 | `artist.collection.reorder` | INFO | the list's order changed | `Artist` (the whole list) |
+| `artist.collection.drops.add` | INFO | drops added (or moved in) — before/after: each drop's `collectionId`; `metadata.moved` counts moves | `ArtistCollection` |
+| `artist.collection.drops.remove` | INFO | a drop taken out — `metadata.dropName` | `ArtistCollection` |
 
 Each row records:
 
@@ -233,6 +275,7 @@ Full reference: [audit/audit-logging.md](../audit/audit-logging.md).
 packages/artist/src/
   domain/interfaces/audit-recorder.port.ts   the module's audit hook (IArtistAuditRecorder)
   collection/
+    domain/drop-membership.port.ts           IDropCollectionMembership — products implements it
     constants/artist-collection.constant.ts  capabilities, error codes, ACTIVE_DROP_WHERE,
                                              audit event types, bus events, limits
     dto/artist-collection.dto.ts             request schemas (strict) + response shapes
@@ -241,11 +284,14 @@ packages/artist/src/
     controller/artist-collection.controller.ts artist + admin controllers
   module.ts                                  routes; requires `audit` to build routers
 packages/products/src/service/product.service.ts  assertCollectionFits() — the filing rule
+packages/products/src/domain/collection-membership.adapter.ts  the port's implementation
+packages/products/src/repository/product.repository.ts  listAssignableToCollection, setCollection (guarded)
 packages/audit/src/domain/audit-event-catalog.ts  artist.collection.* registered
 apps/backend/src/bootstrap.ts                audit hook wired (deferred, like orders)
 apps/backend/src/routes.ts                   /admin/artist-collections
 
 packages/artist/tests/artist-collection.test.ts   artist rules, restore, shown drops, audit
+packages/artist/tests/artist-collection-drops.test.ts  picker, add/move/remove, problems, races
 packages/products/tests/collection-fit.test.ts    the filing rule
 ```
 

@@ -158,7 +158,7 @@ Content-Type: application/json
 | `name` | string 1–255 | **yes** | trimmed |
 | `description` | string ≤5000 | no | `""`/`null` → `null` |
 | `vertical` / `category` / `rarity` | string ≤64 | no | free-form, not enums |
-| `collectionId` / `artistId` / `organizationId` | uuid | no | `null` detaches on PATCH |
+| `collectionId` / `artistId` / `organizationId` | uuid | no | `null` detaches on PATCH. **A `collectionId` must be a live collection of the drop's own `artistId`** — see below |
 | `totalSupply` | int ≥ 0 | no (`0`) | `0` = size not declared yet |
 | `purchaseLimit` | int ≥ 1 | no | omit for unlimited |
 | `releaseStart` / `releaseEnd` | ISO date | no | |
@@ -170,6 +170,19 @@ Content-Type: application/json
 | `skus.count` | int 1–1000 | no | mints the edition in the same transaction |
 | `prices[]` | 1–200 entries | **yes** | at least one market price — see §3 |
 | `images[]` | ≤24 entries | no | attaches uploaded assets as the gallery |
+
+**Collection rule.** A drop may only be filed under a collection that is
+**live** (not deleted by its artist) and belongs to **the drop's own artist**.
+A drop with no `artistId` can't be in a collection. Checked on create, and on
+PATCH whenever `collectionId` or `artistId` is sent — so moving a drop to
+another artist means sending both in one request. Unrelated edits don't
+re-check an existing pairing. The artist sees the drop in their collection
+only once it is active (`status: ACTIVE`, switched on, not archived) — see
+[artist-collection/README.md §3](../artist-collection/README.md#3-the-rules).
+For the collection picker, a System Admin can list the artist's live
+collections from `GET /admin/artist-collections?artistId=…&status=live`; that
+route needs platform-wide `brand-artist-record` read, so other drop-form users
+have no collection picker endpoint yet.
 
 Everything in `prices`, `skus` and `images` is written in the **same
 transaction** as the product. The request either produces a complete drop —
@@ -584,6 +597,9 @@ cascaded, and guessing wrong on every reorder.
 | HTTP | `code` | Raised when |
 |---|---|---|
 | `400` | `BODY_REQUIRED` | no JSON body was parsed — check `Content-Type` |
+| `400` | `PRODUCTS_COLLECTION_NOT_FOUND` | `collectionId` names no collection |
+| `400` | `PRODUCTS_COLLECTION_ARCHIVED` | the collection was deleted by its artist |
+| `400` | `PRODUCTS_COLLECTION_ARTIST_MISMATCH` | the collection belongs to a different artist than the drop's `artistId` — or the drop has no artist. `details`: `collectionArtistId`, `dropArtistId`. Set both together to move a drop to another artist's collection |
 | `400` | `PRODUCTS_MINTING_UNAVAILABLE` | `skus` sent but no minting provider wired in |
 | `400` | `PRODUCTS_SUPPLY_EXCEEDED` | `skus.count` > `totalSupply` in the same payload |
 | `400` | `PRODUCTS_MEDIA_UNAVAILABLE` | `images` sent on a deploy with no bucket configured |

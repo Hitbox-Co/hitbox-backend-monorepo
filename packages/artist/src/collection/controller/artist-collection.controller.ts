@@ -5,6 +5,8 @@ import {
     createCollectionSchema,
     listMyCollectionsQuerySchema,
     reorderCollectionsSchema,
+    addDropsSchema,
+    availableDropsQuerySchema,
     restoreCollectionSchema,
     updateCollectionSchema,
 } from '../dto/artist-collection.dto';
@@ -67,6 +69,23 @@ export class ArtistCollectionController {
     restore: RequestHandler = asyncHandler(async (req, res) => {
         const dto = restoreCollectionSchema.parse(req.body ?? {});
         res.json({ data: await this.service.restore(this.userId(req), this.id(req), dto) });
+    });
+
+    /** GET /artist/collections/:collectionId/available-drops */
+    availableDrops: RequestHandler = asyncHandler(async (req, res) => {
+        const query = availableDropsQuerySchema.parse(req.query);
+        res.json(await this.service.listAvailableDrops(this.userId(req), this.id(req), query));
+    });
+
+    /** POST /artist/collections/:collectionId/drops */
+    addDrops: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = addDropsSchema.parse(req.body);
+        res.json({ data: await this.service.addDrops(this.userId(req), this.id(req), dto) });
+    });
+
+    /** DELETE /artist/collections/:collectionId/drops/:dropId */
+    removeDrop: RequestHandler = asyncHandler(async (req, res) => {
+        res.json({ data: await this.service.removeDrop(this.userId(req), this.id(req), req.params.dropId as string) });
     });
 
     /** POST /artist/collections/:collectionId/hero/upload-url */

@@ -12,6 +12,7 @@ import {
     PRODUCTS_MODULE,
 } from './constants/products.constant';
 import { ProductCache } from './cache/product-cache';
+import { CollectionMembershipAdapter } from './domain/collection-membership.adapter';
 import { ProductController } from './controller/product.controller';
 import { MarketplaceListingAdapter } from './domain/marketplace-listing.adapter';
 import { ProductDiscoveryAdapter } from './domain/product-discovery.adapter';
@@ -115,6 +116,11 @@ export interface ProductsModule {
      * asks at submit. Satisfies their ports structurally.
      */
     variantPolicy: VariantPolicyAdapter;
+    /**
+     * Injected into createArtistModule — artist's `IDropCollectionMembership`
+     * port. An artist filing their own active drops into their collections.
+     */
+    collectionMembership: CollectionMembershipAdapter;
     /** Drop-type administration. Mounted at /api/v1/admin/drop-types. */
     createDropTypesRouter(requireAuth: RequestHandler): Router;
     /** Public, read-only catalog. Mounted at /api/v1/products. */
@@ -150,6 +156,7 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
         service,
         discovery: new ProductDiscoveryAdapter(products, deps.mediaUrls),
         listings: new MarketplaceListingAdapter(products, deps.mediaUrls),
+        collectionMembership: new CollectionMembershipAdapter(products, deps.eventBus),
         variantPolicy: new VariantPolicyAdapter(variants),
 
         createDropTypesRouter(requireAuth) {

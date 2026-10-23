@@ -199,6 +199,27 @@ export const PUBLIC_PRODUCT_WHERE: Prisma.DropWhereInput = {
     archivedAt: null,
 };
 
+/** What collection membership needs to know about a drop. */
+const membershipSelect = {
+    id: true,
+    publicCode: true,
+    name: true,
+    groupCode: true,
+    status: true,
+    isActive: true,
+    archivedAt: true,
+    artistId: true,
+    collectionId: true,
+    totalSupply: true,
+    publishedAt: true,
+    collection: { select: { id: true, name: true } },
+} satisfies Prisma.DropSelect;
+
+export type MembershipDropRow = Prisma.DropGetPayload<{ select: typeof membershipSelect }>;
+
+/** A precondition stopped holding between check and write. Rolls the batch back. */
+class MembershipRaceError extends Error { }
+
 export class ProductRepository {
     constructor(
         private readonly prisma: PrismaClient,
@@ -518,6 +539,103 @@ export class ProductRepository {
             this.cache.invalidateLists(),
         ]);
         return product;
+    }
+
+    // ── Collection membership (driven by the artist module's port) ──────
+
+    /**
+     * An artist's active drops that could go into `collectionId`: unfiled
+     * ones, plus — with `includeFiled` — ones in the artist's *other*
+     * collections. Never ones already in it.
+     */
+    async listAssignableToCollection(input: {
+        artistId: string;
+        collectionId: string;
+        includeFiled: boolean;
+        q?: string | undefined;
+        skip: number;
+        take: number;
+    }) {
+        const where: Prisma.DropWhereInput = {
+            ...PUBLIC_PRODUCT_WHERE,
+            artistId: input.artistId,
+            // `{ not: x }` alone would also drop NULL rows — SQL's three-valued
+            // logic — so "anything but this collection" spells out the NULLs.
+            ...(input.includeFiled
+                ? { OR: [{ collectionId: null }, { collectionId: { not: input.collectionId } }] }
+                : { collectionId: null }),
+            ...(input.q
+                ? {
+                    AND: [{
+                        OR: [
+                            { name: { contains: input.q, mode: 'insensitive' } },
+                            { groupCode: { contains: input.q } },
+                        ],
+                    }],
+                }
+                : {}),
+        };
+        const [total, items] = await Promise.all([
+            this.prisma.drop.count({ where }),
+            this.prisma.drop.findMany({
+                where,
+                orderBy: [{ publishedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }, { id: 'asc' }],
+                skip: input.skip,
+                take: input.take,
+                select: membershipSelect,
+            }),
+        ]);
+        return { total, items };
+    }
+
+    /** The facts an add is checked against, for each id that exists. */
+    findForMembership(dropIds: string[]) {
+        return this.prisma.drop.findMany({ where: { id: { in: dropIds } }, select: membershipSelect });
+    }
+
+    /**
+     * Files drops under a collection (or takes one out, `collectionId: null`),
+     * all or nothing.
+     *
+     * The `where` repeats every precondition the caller checked — same artist,
+     * still active, still where the caller saw it — so a drop retired, moved
+     * or reassigned between the check and the write is not silently moved
+     * anyway: the row count comes up short and the transaction rolls back.
+     */
+    async setCollection(input: {
+        drops: { id: string; expectedCollectionId: string | null }[];
+        artistId: string;
+        collectionId: string | null;
+        requireActive: boolean;
+    }): Promise<boolean> {
+        const now = new Date();
+        const rows = await this.prisma.$transaction(async (tx) => {
+            for (const drop of input.drops) {
+                const result = await tx.drop.updateMany({
+                    where: {
+                        id: drop.id,
+                        artistId: input.artistId,
+                        collectionId: drop.expectedCollectionId,
+                        ...(input.requireActive ? PUBLIC_PRODUCT_WHERE : {}),
+                    },
+                    data: { collectionId: input.collectionId, updatedAt: now },
+                });
+                if (result.count !== 1) throw new MembershipRaceError();
+            }
+            return tx.drop.findMany({
+                where: { id: { in: input.drops.map((d) => d.id) } },
+                select: { id: true, groupCode: true },
+            });
+        }).catch((error: unknown) => {
+            if (error instanceof MembershipRaceError) return null;
+            throw error;
+        });
+        if (!rows) return false;
+        await Promise.all([
+            ...rows.map((row) => this.cache.invalidateEntity(row.id, row.groupCode)),
+            this.cache.invalidateLists(),
+        ]);
+        return true;
     }
 
     // ── Gallery ─────────────────────────────────────────────────────────

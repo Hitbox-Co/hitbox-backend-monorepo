@@ -475,6 +475,9 @@ export function bootstrap(): Bootstrapped {
         // Media owns MediaAsset and the bucket; undefined on a deploy with no
         // bucket, in which case avatar/cover uploads are refused clearly.
         images: mediaModule?.profileImages,
+        // Products owns Drop; artists file their own active drops into their
+        // collections through its adapter. docs/artist-collection/.
+        drops: productsModule.collectionMembership,
         // Deferred: the audit module is built further down. Only called at
         // request time, long after bootstrap has finished.
         audit: { record: (input, options) => auditModule.recorder.record(input, options) },

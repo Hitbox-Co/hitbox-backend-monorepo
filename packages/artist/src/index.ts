@@ -44,6 +44,8 @@ export {
 export {
     adminListCollectionsQuerySchema,
     createCollectionSchema,
+    addDropsSchema,
+    availableDropsQuerySchema,
     reorderCollectionsSchema,
     restoreCollectionSchema,
     updateCollectionSchema,
@@ -52,11 +54,17 @@ export type {
     AdminCollectionDetailView,
     AdminCollectionView,
     CollectionSummaryView,
+    AddDropProblem,
     ArtistDropView,
+    AvailableDropView,
+    DropMembershipResult,
     CollectionView,
     MyCollectionDetailView,
     MyCollectionView,
 } from './collection/dto/artist-collection.dto';
+
+// Drops in collections — the port products implements.
+export type { IDropCollectionMembership, MembershipDrop } from './collection/domain/drop-membership.port';
 
 // The audit hook — bootstrap passes the real recorder in.
 export { NOOP_ARTIST_AUDIT } from './domain/interfaces/audit-recorder.port';

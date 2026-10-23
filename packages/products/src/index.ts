@@ -1,5 +1,7 @@
 // Module factory
 export { createProductsModule } from './module';
+export { CollectionMembershipAdapter } from './domain/collection-membership.adapter';
+export type { CollectionMembershipDrop } from './domain/collection-membership.adapter';
 export type { ProductsModule, ProductsModuleDeps } from './module';
 
 // Constants

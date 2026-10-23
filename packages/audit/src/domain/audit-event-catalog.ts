@@ -213,6 +213,20 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         defaultSeverity: INFO,
         sourceStories: ['docs/artist-collection/README.md'],
     },
+    {
+        eventType: 'artist.collection.drops.add',
+        personaGroup: ARTIST,
+        description: 'An artist added their own drops to a collection (or moved them from another of theirs).',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.drops.remove',
+        personaGroup: ARTIST,
+        description: 'An artist took a drop out of a collection.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
 
     // ── Orders ──────────────────────────────────────────────────────────────
     // What a person does to an order. System-driven changes (webhook, sweep,

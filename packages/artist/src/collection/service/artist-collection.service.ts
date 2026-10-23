@@ -9,6 +9,7 @@ import {
     ARTIST_COLLECTION_EVENTS,
     MAX_LIVE_COLLECTIONS_PER_ARTIST,
 } from '../constants/artist-collection.constant';
+import type { IDropCollectionMembership, MembershipDrop } from '../domain/drop-membership.port';
 import {
     ARTIST_SELF_ERROR_CODES,
     ARTIST_SLUG_MAX,
@@ -16,8 +17,13 @@ import {
 import type {
     AdminCollectionDetailView,
     AdminCollectionView,
+    AddDropProblem,
+    AddDropsDto,
     AdminListCollectionsQuery,
+    AvailableDropsQuery,
+    AvailableDropView,
     CollectionSummaryView,
+    DropMembershipResult,
     CollectionView,
     CreateCollectionDto,
     ListMyCollectionsQuery,
@@ -47,6 +53,12 @@ export interface ArtistCollectionServiceDeps {
     /** Every change is recorded — `artist.collection.*` in the audit catalog. */
     audit: IArtistAuditRecorder;
     images?: IArtistImageStorage | undefined;
+    /**
+     * Putting drops into collections — products' adapter. Optional only so
+     * the read side can be built without products; the drop routes answer
+     * ARTIST_COLLECTION_DROPS_UNAVAILABLE without it.
+     */
+    drops?: IDropCollectionMembership | undefined;
     eventBus?: IEventBus | undefined;
     logger: Logger;
     now?: () => Date;
@@ -132,10 +144,11 @@ function toAdmin(row: AdminCollectionRow, counts: DropCounts): AdminCollectionVi
  * profile linked to the signed-in account, exactly as on `/artist/me`. A
  * collection id belonging to another artist is simply not found.
  *
- * Collections are curated, not stocked: an artist creates and arranges them,
- * but which drops sit in a collection is set on the drop (by the drop's
- * managers), so there is no "add drop" route here. Products only accepts a
- * live collection of the drop's own artist.
+ * Collections are curated: an artist files **their own active drops** into
+ * them (`addDrops`, `removeDrop`), and drop managers can set a drop's
+ * collection from the catalog too. Either way products only accepts a live
+ * collection of the drop's own artist, and products does the write — this
+ * module reaches drops only through the `IDropCollectionMembership` port.
  *
  * **What the artist is shown** is narrower than what the collection holds:
  * only drops that are active (ACTIVE, switched on, not archived) and by this
@@ -249,8 +262,8 @@ export class ArtistCollectionService {
         if (live > 0) {
             throw AppError.conflict(
                 `This collection still holds ${live} drop${live === 1 ? '' : 's'} (including any not yet on sale). ` +
-                'Drops have to be moved to another collection or retired before it can be deleted — ' +
-                'ask your brand team or HitBox to do that.',
+                'Remove your on-sale drops from it first; drops not yet on sale (drafts, in review) ' +
+                'are moved or retired by your brand team or HitBox.',
                 ARTIST_COLLECTION_ERROR_CODES.HAS_DROPS,
                 { liveDrops: live },
             );
@@ -347,6 +360,169 @@ export class ArtistCollectionService {
             collectionIds: dto.collectionIds,
         });
         return this.listMine(userId, { status: 'live' });
+    }
+
+    // ── Drops in a collection ───────────────────────────────────────────────
+
+    /**
+     * The "Add drops" picker: the caller's own drops (`Drop.artistId` is
+     * them), that are active, and that are **not already in this
+     * collection**. By default only drops in no collection at all; with
+     * `includeFiled`, drops in the artist's other collections too, each
+     * naming where it is now.
+     */
+    async listAvailableDrops(
+        userId: string,
+        collectionId: string,
+        query: AvailableDropsQuery,
+    ): Promise<{ page: number; limit: number; total: number; items: AvailableDropView[] }> {
+        const drops = this.requireDrops();
+        const me = await this.requireArtist(userId);
+        await this.requireLive(me.id, collectionId);
+        const { total, items } = await drops.listAssignable({
+            artistId: me.id,
+            collectionId,
+            includeFiled: query.includeFiled,
+            q: query.q,
+            skip: (query.page - 1) * query.limit,
+            take: query.limit,
+        });
+        return {
+            page: query.page,
+            limit: query.limit,
+            total,
+            items: items.map((d) => ({
+                id: d.id,
+                publicCode: d.publicCode,
+                name: d.name,
+                groupCode: d.groupCode,
+                totalSupply: d.totalSupply,
+                publishedAt: d.publishedAt?.toISOString() ?? null,
+                currentCollection: d.collection,
+            })),
+        };
+    }
+
+    /**
+     * POST …/drops — files the artist's own active drops under this
+     * collection, all or nothing.
+     *
+     * Every drop is checked and every problem reported at once: it must
+     * exist and be **assigned to this artist** (someone else's drop reads as
+     * NOT_FOUND, so ids can't be probed), be **active**, and **not already be
+     * here**. A drop in another of the artist's collections is only moved
+     * with `move: true`. The write re-asserts all of it, so a drop retired
+     * or reassigned in between is not moved anyway (409 DROPS_CHANGED).
+     */
+    async addDrops(userId: string, collectionId: string, dto: AddDropsDto): Promise<DropMembershipResult> {
+        const drops = this.requireDrops();
+        const me = await this.requireEditableArtist(userId);
+        const collection = await this.requireLive(me.id, collectionId);
+
+        const found = new Map((await drops.findDrops(dto.dropIds)).map((d) => [d.id, d]));
+        const problems: { dropId: string; problem: AddDropProblem; collection?: { id: string; name: string } }[] = [];
+        for (const dropId of dto.dropIds) {
+            const drop = found.get(dropId);
+            const problem: AddDropProblem | null =
+                !drop || drop.artistId !== me.id ? 'NOT_FOUND'
+                    : drop.collection?.id === collectionId ? 'ALREADY_IN_COLLECTION'
+                        : !drop.active ? 'NOT_ACTIVE'
+                            : drop.collection && !dto.move ? 'IN_ANOTHER_COLLECTION'
+                                : null;
+            if (problem) {
+                problems.push({
+                    dropId,
+                    problem,
+                    ...(problem === 'IN_ANOTHER_COLLECTION' && drop?.collection ? { collection: drop.collection } : {}),
+                });
+            }
+        }
+        if (problems.length > 0) {
+            throw AppError.badRequest(
+                'Some drops cannot be added to this collection.',
+                ARTIST_COLLECTION_ERROR_CODES.DROPS_INVALID,
+                { problems },
+            );
+        }
+
+        // Where each drop is now, captured before the write — the record of
+        // what was moved must not depend on the drop objects staying as read.
+        const before = (dto.dropIds.map((id) => found.get(id)) as MembershipDrop[])
+            .map((d) => ({ dropId: d.id, collectionId: d.collection?.id ?? null }));
+
+        const written = await drops.setCollection({
+            drops: before.map((b) => ({ id: b.dropId, expectedCollectionId: b.collectionId })),
+            artistId: me.id,
+            collectionId,
+            requireActive: true,
+        });
+        if (!written) this.dropsChanged();
+
+        const movedFrom: Record<string, string> = {};
+        for (const b of before) if (b.collectionId) movedFrom[b.dropId] = b.collectionId;
+
+        await this.deps.audit.record({
+            eventType: ARTIST_AUDIT_EVENTS.COLLECTION_DROPS_ADD,
+            actor: { type: 'ARTIST', id: userId },
+            result: 'SUCCESS',
+            organizationId: collection.organizationId,
+            resource: { type: 'ArtistCollection', id: collection.id },
+            beforeState: { drops: before },
+            afterState: { drops: before.map((b) => ({ dropId: b.dropId, collectionId })) },
+            correlationId: randomUUID(),
+            metadata: { artistId: me.id, dropIds: dto.dropIds, moved: Object.keys(movedFrom).length },
+        });
+        await this.deps.eventBus?.publish(ARTIST_COLLECTION_EVENTS.DROPS_ADDED, {
+            collectionId, artistId: me.id, dropIds: dto.dropIds, movedFrom,
+        });
+        this.deps.logger.info({ artistId: me.id, collectionId, count: dto.dropIds.length }, 'drops added to artist collection');
+
+        return { collection: await this.getMine(userId, collectionId), dropIds: dto.dropIds, movedFrom };
+    }
+
+    /**
+     * DELETE …/drops/:dropId — takes one of the artist's drops out of this
+     * collection. The drop itself is untouched; it is just unfiled. Works
+     * whether or not the drop is still active, so a retired drop can always be
+     * cleared out (which is what unblocks deleting the collection).
+     */
+    async removeDrop(userId: string, collectionId: string, dropId: string): Promise<DropMembershipResult> {
+        const drops = this.requireDrops();
+        const me = await this.requireEditableArtist(userId);
+        const collection = await this.requireLive(me.id, collectionId);
+
+        const [drop] = await drops.findDrops([dropId]);
+        if (!drop || drop.artistId !== me.id || drop.collection?.id !== collectionId) {
+            throw AppError.notFound(
+                'That drop is not in this collection.',
+                ARTIST_COLLECTION_ERROR_CODES.DROP_NOT_IN_COLLECTION,
+            );
+        }
+
+        const written = await drops.setCollection({
+            drops: [{ id: dropId, expectedCollectionId: collectionId }],
+            artistId: me.id,
+            collectionId: null,
+            requireActive: false,
+        });
+        if (!written) this.dropsChanged();
+
+        await this.deps.audit.record({
+            eventType: ARTIST_AUDIT_EVENTS.COLLECTION_DROPS_REMOVE,
+            actor: { type: 'ARTIST', id: userId },
+            result: 'SUCCESS',
+            organizationId: collection.organizationId,
+            resource: { type: 'ArtistCollection', id: collection.id },
+            beforeState: { drops: [{ dropId, collectionId }] },
+            afterState: { drops: [{ dropId, collectionId: null }] },
+            correlationId: randomUUID(),
+            metadata: { artistId: me.id, dropIds: [dropId], dropName: drop.name },
+        });
+        await this.deps.eventBus?.publish(ARTIST_COLLECTION_EVENTS.DROP_REMOVED, {
+            collectionId, artistId: me.id, dropId,
+        });
+
+        return { collection: await this.getMine(userId, collectionId), dropIds: [dropId], movedFrom: {} };
     }
 
     // ── Hero image (same storage and rules as the profile's cover) ──────────
@@ -599,6 +775,23 @@ export class ArtistCollectionService {
     private async closeGaps(artistId: string): Promise<void> {
         const remaining = (await this.deps.collections.listForArtist(artistId, 'live')).map((r) => r.id);
         if (remaining.length > 0) await this.deps.collections.reorder(artistId, remaining);
+    }
+
+    private requireDrops(): IDropCollectionMembership {
+        if (!this.deps.drops) {
+            throw AppError.badRequest(
+                'Adding drops to collections is not available on this server.',
+                ARTIST_COLLECTION_ERROR_CODES.DROPS_UNAVAILABLE,
+            );
+        }
+        return this.deps.drops;
+    }
+
+    private dropsChanged(): never {
+        throw AppError.conflict(
+            'A drop changed while you were adding it (it was retired, moved or reassigned). Reload and try again.',
+            ARTIST_COLLECTION_ERROR_CODES.DROPS_CHANGED,
+        );
     }
 
     private requireImages(): IArtistImageStorage {

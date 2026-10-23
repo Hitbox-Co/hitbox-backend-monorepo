@@ -2,7 +2,7 @@
 
 > Everything the artist dashboard needs to list, create, edit, reorder,
 > delete and restore the signed-in artist's collections, and see the active
-> drops inside them. Every change is audited ([README §6](README.md#6-audit-trail)). Background and rules:
+> drops inside them. Every change is audited ([README 6](README.md#6-audit-trail)). Background and rules:
 > [README.md](README.md). Monitoring for HitBox staff:
 > [admin-monitoring-api.md](admin-monitoring-api.md).
 
@@ -23,6 +23,9 @@ it is always the signed-in artist.
 | 7 | `POST /artist/collections/:collectionId/hero/upload-url` | Upload URL for a hero image |
 | 8 | `PUT /artist/collections/:collectionId/hero` | Use the uploaded image |
 | 9 | `DELETE /artist/collections/:collectionId/hero` | Remove the hero image |
+| 10 | `GET /artist/collections/:collectionId/available-drops` | The **Add drops** picker: my active drops not already in this collection |
+| 11 | `POST /artist/collections/:collectionId/drops` | Add drops (or move them from another of my collections) |
+| 12 | `DELETE /artist/collections/:collectionId/drops/:dropId` | Take a drop out of this collection |
 
 ---
 
@@ -62,7 +65,7 @@ array of them).
 | `counts.activeDrops` | Drops **you are shown**: on sale (`ACTIVE`, switched on, not archived) and yours. Can be lower than `liveDrops` — drafts and drops in review count toward blocking delete but aren't listed |
 | `actions.canEdit` | `false` once archived |
 | `actions.canArchive` | Whether **Delete** will work right now |
-| `actions.archiveBlockedReason` | `HAS_DROPS` (ask your brand team / HitBox to move or retire its drops), `ARCHIVED`, or `null` |
+| `actions.archiveBlockedReason` | `HAS_DROPS` (remove your on-sale drops — 12; drafts and drops in review are moved by your brand team / HitBox), `ARCHIVED`, or `null` |
 | `actions.canRestore` | `true` for a deleted collection — show **Restore** (5a) |
 
 ---
@@ -166,7 +169,7 @@ Refused while it still holds drops that aren't retired:
 {
   "error": {
     "code": "ARTIST_COLLECTION_HAS_DROPS",
-    "message": "This collection still holds 4 drops. Drops have to be moved to another collection or retired before it can be deleted — ask your brand team or HitBox to do that.",
+    "message": "This collection still holds 4 drops (including any not yet on sale). Remove your on-sale drops from it first; drops not yet on sale (drafts, in review) are moved or retired by your brand team or HitBox.",
     "details": { "liveDrops": 4 }
   }
 }
@@ -235,6 +238,131 @@ with no storage configured, step 1 returns `400 ARTIST_IMAGES_UNAVAILABLE`.
 
 ---
 
+## 10–12. Drops in a collection
+
+An artist files **their own** drops into **their own** collections. Three
+rules hold everywhere:
+
+- **Yours only.** A drop is yours when its `artistId` is your artist
+  profile. Someone else's drop is never listed, and adding one answers
+  `NOT_FOUND` — the same as a drop that doesn't exist, so ids can't be probed.
+- **Active only.** Only drops on sale can be added: `status: ACTIVE`,
+  switched on, not archived — the same rule as the drops shown in a
+  collection (3). Drafts, drops in review, approved-not-live, ended and
+  rejected drops can't be added.
+- **Not already there.** The picker never lists a drop that's already in this
+  collection, and adding one again is refused.
+
+A drop sits in at most one collection. Adding a drop that's in another of
+your collections **moves** it — but only when you say so with `move: true`.
+
+The collection must be live (not deleted) for all three.
+
+### 10. `GET /artist/collections/:collectionId/available-drops`
+
+| Query | Values |
+|---|---|
+| `includeFiled` | `false` (default): only drops in **no** collection. `true`: also drops in your **other** collections — each says where it is now |
+| `q` | Case-insensitive match on the drop name, or a group code |
+| `page`, `limit` | default 1, 20; `limit` ≤ 100 |
+
+```json
+{
+  "page": 1,
+  "limit": 20,
+  "total": 2,
+  "items": [
+    {
+      "id": "e001d2b4-…",
+      "publicCode": "drp0…",
+      "name": "Kaze Genesis — Single Card",
+      "groupCode": "1001-0001",
+      "totalSupply": 500,
+      "publishedAt": "2026-09-10T12:00:00.000Z",
+      "currentCollection": null
+    },
+    {
+      "id": "a7f1…",
+      "name": "Kaze — Neon Nights Tour Tee",
+      "…": "…",
+      "currentCollection": { "id": "f80d…", "name": "Season One" }
+    }
+  ]
+}
+```
+
+`currentCollection` is only ever non-null with `includeFiled=true` — show it
+as "In *Season One* — adding moves it".
+
+### 11. `POST /artist/collections/:collectionId/drops`
+
+```json
+{ "dropIds": ["e001d2b4-…", "a7f1…"], "move": false }
+```
+
+| Field | Rules |
+|---|---|
+| `dropIds` | 1–50 drop ids, no duplicates |
+| `move` | Default `false`. `true` lets drops already in another of your collections move here |
+
+**All or nothing.** Every drop is checked first and every problem is reported
+together; nothing is added unless all of them can be:
+
+```json
+{
+  "error": {
+    "code": "ARTIST_COLLECTION_DROPS_INVALID",
+    "message": "Some drops cannot be added to this collection.",
+    "details": {
+      "problems": [
+        { "dropId": "5bb3…", "problem": "NOT_ACTIVE" },
+        { "dropId": "e001…", "problem": "IN_ANOTHER_COLLECTION", "collection": { "id": "f80d…", "name": "Season One" } },
+        { "dropId": "f7d7…", "problem": "NOT_FOUND" }
+      ]
+    }
+  }
+}
+```
+
+| `problem` | Meaning | What the UI should do |
+|---|---|---|
+| `NOT_FOUND` | No such drop, **or it isn't yours** | Drop it from the selection |
+| `NOT_ACTIVE` | Not on sale (draft, in review, ended, switched off, archived) | Drop it — it can be added once it's live |
+| `ALREADY_IN_COLLECTION` | Already in this collection | Drop it — nothing to do |
+| `IN_ANOTHER_COLLECTION` | In another of your collections (`collection` says which) | Ask "Move it from *{collection.name}*?" and resend with `move: true` |
+
+Response `200`:
+
+```json
+{
+  "data": {
+    "collection": { "…": "the collection detail, as in 3 — drops included" },
+    "dropIds": ["e001d2b4-…", "a7f1…"],
+    "movedFrom": { "a7f1…": "f80d…" }
+  }
+}
+```
+
+`movedFrom` maps each moved drop to the collection it left — refresh that one
+too. If a drop changed between the check and the write (retired, reassigned,
+moved by someone else) the whole request is refused with
+`409 ARTIST_COLLECTION_DROPS_CHANGED` and nothing changes; reload the picker.
+
+### 12. `DELETE /artist/collections/:collectionId/drops/:dropId`
+
+No body. Takes the drop out of this collection — it isn't deleted or
+unpublished, just no longer in any collection (it shows up again in the
+picker, 10). Works for any of your drops in this collection, active or not.
+
+Response `200`: same shape as 11, with `movedFrom: {}`. A drop that isn't in
+this collection, or isn't yours, is `404 ARTIST_COLLECTION_DROP_NOT_IN_COLLECTION`.
+
+Both 11 and 12 are audited (`artist.collection.drops.add` /
+`.drops.remove`, [README 6](README.md#6-audit-trail)) and announced on the
+bus (`artist.collection.drops-added` / `.drop-removed`).
+
+---
+
 ## Errors
 
 | Status | Code | When |
@@ -249,6 +377,10 @@ with no storage configured, step 1 returns `400 ARTIST_IMAGES_UNAVAILABLE`.
 | `409` | `ARTIST_COLLECTION_SLUG_TAKEN` | That slug is used by another collection (any artist's) |
 | `409` | `ARTIST_COLLECTION_ARCHIVED` | Editing or deleting an archived collection — restore it first |
 | `409` | `ARTIST_COLLECTION_NOT_ARCHIVED` | Restoring a collection that isn't deleted |
+| `400` | `ARTIST_COLLECTION_DROPS_INVALID` | Adding drops: one or more can't be added — `details.problems[]` (11) |
+| `400` | `ARTIST_COLLECTION_DROPS_UNAVAILABLE` | The drop catalog isn't wired on this server |
+| `404` | `ARTIST_COLLECTION_DROP_NOT_IN_COLLECTION` | Removing a drop that isn't in this collection or isn't yours |
+| `409` | `ARTIST_COLLECTION_DROPS_CHANGED` | A drop changed between check and write — nothing was changed; reload |
 | `409` | `ARTIST_COLLECTION_HAS_DROPS` | Deleting a collection that still has live drops (`details.liveDrops`) |
 | `409` | `ARTIST_COLLECTION_LIMIT_REACHED` | Already 50 live collections (`details.max`) |
 | `409` | `ARTIST_PROFILE_LOCKED` | Your profile is archived or deactivated — read-only |
@@ -271,12 +403,19 @@ with no storage configured, step 1 returns `400 ARTIST_IMAGES_UNAVAILABLE`.
 - [ ] Hero image picker → steps 7–9; show the returned `heroImageUrl`.
 
 **Delete**
-- [ ] Enable only when `actions.canArchive`. When `archiveBlockedReason` is `HAS_DROPS`: "This collection still has {counts.liveDrops} drops — ask your brand team or HitBox to move or retire them first."
+- [ ] Enable only when `actions.canArchive`. When `archiveBlockedReason` is `HAS_DROPS`: "This collection still has {counts.liveDrops} drops." Offer **Remove** on each drop in the grid (12); if `liveDrops` > `activeDrops`, add "{liveDrops − activeDrops} not yet on sale — your brand team or HitBox can move those."
 - [ ] Confirm dialog: "This removes the collection from your page. You can restore it later from Archived."
 
 **Collection detail**
 - [ ] Drops grid from `drops` (active and yours only). Show `counts.activeDrops` as "N on sale".
 - [ ] When `counts.liveDrops` > `counts.activeDrops`: "{liveDrops − activeDrops} more drops are being prepared" — they're why Delete is blocked even if the grid looks short.
+
+**Add drops**
+- [ ] **Add drops** button on a live collection → picker from 10: search box (`q`), paging, multi-select. A "Show drops in my other collections" toggle → `includeFiled=true`, with an "In *{currentCollection.name}*" chip on those rows.
+- [ ] Submit → 11 with the selected ids; `move: true` only if the artist confirmed moving the chipped ones.
+- [ ] On `DROPS_INVALID`, mark each `problems[].dropId`; for `IN_ANOTHER_COLLECTION` offer "Move here" (resend with `move: true`). On `DROPS_CHANGED`, reload the picker.
+- [ ] Replace the collection with `data.collection`; if `movedFrom` isn't empty, refetch those collections too.
+- [ ] **Remove** on each drop in the collection grid → 12 (confirm: "It stays on sale, it just leaves this collection").
 
 **Profile locked**
 - [ ] On `ARTIST_PROFILE_LOCKED`, switch the whole section to read-only.

@@ -32,7 +32,18 @@ export const ARTIST_COLLECTION_ERROR_CODES = {
     ORDER_MISMATCH: 'ARTIST_COLLECTION_ORDER_MISMATCH',
     /** Restore was asked for a collection that isn't archived. */
     NOT_ARCHIVED: 'ARTIST_COLLECTION_NOT_ARCHIVED',
+    /** One or more drops can't be added; `details.problems` says which and why. */
+    DROPS_INVALID: 'ARTIST_COLLECTION_DROPS_INVALID',
+    /** The drop isn't in this collection. */
+    DROP_NOT_IN_COLLECTION: 'ARTIST_COLLECTION_DROP_NOT_IN_COLLECTION',
+    /** A drop changed (retired, moved, reassigned) between the check and the write. */
+    DROPS_CHANGED: 'ARTIST_COLLECTION_DROPS_CHANGED',
+    /** No drop catalog is wired on this deployment. */
+    DROPS_UNAVAILABLE: 'ARTIST_COLLECTION_DROPS_UNAVAILABLE',
 } as const;
+
+/** Drops one add request may carry. */
+export const MAX_DROPS_PER_ADD = 50;
 
 /**
  * Which drops the artist is shown: **active** and **their own**.
@@ -57,6 +68,8 @@ export const ARTIST_AUDIT_EVENTS = {
     COLLECTION_ARCHIVE: 'artist.collection.archive',
     COLLECTION_RESTORE: 'artist.collection.restore',
     COLLECTION_REORDER: 'artist.collection.reorder',
+    COLLECTION_DROPS_ADD: 'artist.collection.drops.add',
+    COLLECTION_DROPS_REMOVE: 'artist.collection.drops.remove',
 } as const;
 
 export const COLLECTION_NAME_MAX = 120;
@@ -73,6 +86,8 @@ export const ARTIST_COLLECTION_EVENTS = {
     ARCHIVED: 'artist.collection.archived',
     RESTORED: 'artist.collection.restored',
     REORDERED: 'artist.collection.reordered',
+    DROPS_ADDED: 'artist.collection.drops-added',
+    DROP_REMOVED: 'artist.collection.drop-removed',
 } as const;
 
 export const COLLECTION_DEFAULT_LIMIT = 20;

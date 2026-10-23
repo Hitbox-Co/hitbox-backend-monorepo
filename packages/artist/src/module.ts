@@ -34,6 +34,7 @@ import { ArtistSelfController } from './self/controller/artist-self.controller';
 import type { ArtistUserIdResolver } from './self/controller/artist-self.controller';
 import type { IArtistImageStorage } from './self/domain/artist-image-storage.interface';
 import type { IArtistAuditRecorder } from './domain/interfaces/audit-recorder.port';
+import type { IDropCollectionMembership } from './collection/domain/drop-membership.port';
 import { ArtistSelfRepository } from './self/repository/artist-self.repository';
 import { ArtistSelfService } from './self/service/artist-self.service';
 
@@ -69,6 +70,13 @@ export interface ArtistModuleDeps {
      * rest of the profile still works.
      */
     images?: IArtistImageStorage | undefined;
+    /**
+     * Putting drops into collections, provided by @hitbox/products
+     * (`productsModule.collectionMembership`) — products owns `Drop` and its
+     * cache. Optional: without it the drop routes answer
+     * ARTIST_COLLECTION_DROPS_UNAVAILABLE and the rest still works.
+     */
+    drops?: IDropCollectionMembership | undefined;
     /**
      * The audit hook. Every collection change is recorded through it
      * (`artist.collection.*`). Required to build the self-service and
@@ -136,6 +144,7 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
         // fallback only ever serves a module built for the read side.
         audit: deps.audit ?? { record: () => Promise.reject(new Error('artist module built without an audit recorder')) },
         images: deps.images,
+        drops: deps.drops,
         eventBus: deps.eventBus,
         logger,
     });
@@ -236,6 +245,12 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
             router.patch('/collections/:collectionId', writeCollections, collectionsController.update);
             router.delete('/collections/:collectionId', writeCollections, collectionsController.archive);
             router.post('/collections/:collectionId/restore', writeCollections, collectionsController.restore);
+            // Drops: the picker, add (or move), remove. The artist's own,
+            // active drops only — checked in the service, re-asserted by
+            // products at write time.
+            router.get('/collections/:collectionId/available-drops', readCollections, collectionsController.availableDrops);
+            router.post('/collections/:collectionId/drops', writeCollections, collectionsController.addDrops);
+            router.delete('/collections/:collectionId/drops/:dropId', writeCollections, collectionsController.removeDrop);
             router.post('/collections/:collectionId/hero/upload-url', writeCollections, collectionsController.createHeroUpload);
             router.put('/collections/:collectionId/hero', writeCollections, collectionsController.setHero);
             router.delete('/collections/:collectionId/hero', writeCollections, collectionsController.removeHero);

@@ -9,6 +9,7 @@ import {
     COLLECTION_DESCRIPTION_MAX,
     COLLECTION_MAX_LIMIT,
     COLLECTION_NAME_MAX,
+    MAX_DROPS_PER_ADD,
     MAX_LIVE_COLLECTIONS_PER_ARTIST,
 } from '../constants/artist-collection.constant';
 
@@ -111,6 +112,42 @@ export const listMyCollectionsQuerySchema = z.object({
     status: z.enum(['live', 'archived', 'all']).default('live'),
 });
 export type ListMyCollectionsQuery = z.infer<typeof listMyCollectionsQuerySchema>;
+
+/**
+ * GET /artist/collections/:collectionId/available-drops — what the "Add
+ * drops" picker lists: the caller's own active drops not already in this
+ * collection.
+ */
+export const availableDropsQuerySchema = z.object({
+    ...pagination,
+    /**
+     * `false` (default): only drops in no collection at all. `true`: also
+     * drops in your *other* collections — adding one moves it (send
+     * `move: true`).
+     */
+    includeFiled: z.enum(['true', 'false']).transform((v) => v === 'true').default('false'),
+    /** Case-insensitive match on name, or a group code. */
+    q: z.string().trim().min(1).max(120).optional(),
+});
+export type AvailableDropsQuery = z.infer<typeof availableDropsQuerySchema>;
+
+/** POST /artist/collections/:collectionId/drops */
+export const addDropsSchema = z
+    .object({
+        dropIds: z
+            .array(uuid)
+            .min(1)
+            .max(MAX_DROPS_PER_ADD, `At most ${MAX_DROPS_PER_ADD} drops per request.`)
+            .refine((ids) => new Set(ids).size === ids.length, 'A drop is listed twice.'),
+        /**
+         * Allow taking drops out of another of your collections. Without it,
+         * a drop that is already filed elsewhere is refused rather than moved
+         * silently.
+         */
+        move: z.boolean().default(false),
+    })
+    .strict();
+export type AddDropsDto = z.infer<typeof addDropsSchema>;
 
 /** GET /admin/artist-collections — the monitoring list. */
 export const adminListCollectionsQuerySchema = z.object({
@@ -219,6 +256,41 @@ export interface AdminCollectionDetailView extends AdminCollectionView {
         /** False flags a legacy drop by another artist (new ones are refused). */
         sameArtist: boolean;
     }[];
+}
+
+/** One drop in the "Add drops" picker. */
+export interface AvailableDropView {
+    id: string;
+    publicCode: string | null;
+    name: string;
+    groupCode: string;
+    totalSupply: number;
+    publishedAt: string | null;
+    /**
+     * Another of your collections it is in now — only with
+     * `includeFiled=true`. Adding it moves it from there.
+     */
+    currentCollection: { id: string; name: string } | null;
+}
+
+/** Why one drop could not be added. Reported per drop, all at once. */
+export type AddDropProblem =
+    /** No such drop, or it isn't assigned to you. */
+    | 'NOT_FOUND'
+    /** Not on sale: not ACTIVE, switched off, or archived. */
+    | 'NOT_ACTIVE'
+    /** Already in this collection. */
+    | 'ALREADY_IN_COLLECTION'
+    /** In another of your collections — resend with `move: true` to move it. */
+    | 'IN_ANOTHER_COLLECTION';
+
+/** POST …/drops and DELETE …/drops/:dropId respond with the collection. */
+export interface DropMembershipResult {
+    collection: MyCollectionDetailView;
+    /** What changed — the drops added (or the one removed). */
+    dropIds: string[];
+    /** Drops moved here from another collection: dropId → the collection it left. */
+    movedFrom: Record<string, string>;
 }
 
 export interface CollectionSummaryView {
