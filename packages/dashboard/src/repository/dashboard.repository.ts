@@ -411,6 +411,9 @@ export class DashboardRepository {
     async listProducts(input: {
         orgIds: OrgFilter;
         status?: string | undefined;
+        /** A filter inside the org scope above, never a widening of it. */
+        artistId?: string | undefined;
+        q?: string | undefined;
         skip: number;
         take: number;
     }) {
@@ -418,15 +421,25 @@ export class DashboardRepository {
             archivedAt: null,
             ...orgWhere('organizationId', input.orgIds),
             ...(input.status ? { status: input.status as Prisma.EnumDropStatusFilter['equals'] } : {}),
+            ...(input.artistId ? { artistId: input.artistId } : {}),
+            ...(input.q
+                ? {
+                    OR: [
+                        { name: { contains: input.q, mode: Prisma.QueryMode.insensitive } },
+                        { groupCode: { contains: input.q, mode: Prisma.QueryMode.insensitive } },
+                    ],
+                }
+                : {}),
         };
         const [total, items] = await Promise.all([
             this.prisma.drop.count({ where }),
             this.prisma.drop.findMany({
                 where, orderBy: { createdAt: 'desc' }, skip: input.skip, take: input.take,
                 select: {
-                    id: true, groupCode: true, name: true, status: true, totalSupply: true,
+                    id: true, publicCode: true, groupCode: true, name: true, status: true, totalSupply: true,
                     complianceStatus: true, isAgeSpecific: true, minimumAge: true,
-                    organizationId: true, artistId: true, publishedAt: true, createdAt: true,
+                    organizationId: true, artistId: true, collectionId: true,
+                    isActive: true, publishedAt: true, createdAt: true,
                 },
             }),
         ]);

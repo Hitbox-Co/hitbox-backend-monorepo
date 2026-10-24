@@ -42,6 +42,10 @@ export const ordersQuerySchema = paginatedQuerySchema.extend({
 export type OrdersQuery = z.infer<typeof ordersQuerySchema>;
 
 export const productsQuerySchema = paginatedQuerySchema.extend({
+    /** One artist's drops — every status, drafts and drops in review included. */
+    artistId: z.string().uuid().optional(),
+    /** Case-insensitive match on the drop name or group code. */
+    q: z.string().trim().min(1).max(100).optional(),
     status: z
         .enum([
             'DRAFT', 'SUBMITTED', 'IN_REVIEW', 'APPROVED', 'REJECTED',

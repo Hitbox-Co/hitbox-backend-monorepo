@@ -9,7 +9,7 @@ import { createAccessControlModule } from '@hitbox/access-control';
 import { createAuditModule, correlationIdOf } from '@hitbox/audit';
 import { buildFinanceAccess, createFinanceModule } from '@hitbox/finance';
 import { buildPaymentAccess, createPaymentsModule, createStripeGateway } from '@hitbox/payments';
-import { createDashboardModule } from '@hitbox/dashboard';
+import { ReadScope, createDashboardModule, resolveAccess } from '@hitbox/dashboard';
 import { createMediaModule, isPublicKey, S3ObjectStorage } from '@hitbox/media';
 import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
@@ -481,6 +481,17 @@ export function bootstrap(): Bootstrapped {
         // Deferred: the audit module is built further down. Only called at
         // request time, long after bootstrap has finished.
         audit: { record: (input, options) => auditModule.recorder.record(input, options) },
+        // Staff artist screens: sales, royalties, payouts, tax, claims and
+        // followers come from the reporting read model — those tables belong
+        // to other modules. docs/artist/artist-admin-api.md.
+        insights: dashboardModule.artistInsights,
+        // Money on those screens needs payment-royalty:read platform-wide, the
+        // dashboard's rule — the routes themselves are global-only.
+        canSeeMoney: async (req: Request) =>
+            resolveAccess(
+                await accessControlModule.guard.describePrincipal(req),
+                'payment-royalty',
+            )?.scope === ReadScope.GLOBAL,
     });
 
     // The organization directory — read-only, and the other half of the drop
