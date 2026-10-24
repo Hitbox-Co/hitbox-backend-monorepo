@@ -59,22 +59,32 @@ question a review asks, and every event answers it on its own row.
 The code catalog is the seed source and the fast path — not a second gate. A row inserted straight
 into the table still works: the recorder falls back to reading the table for keys it doesn't know.
 
-**57 events: 31 CRITICAL, 13 WARNING, 13 INFO** (as of the artist-collection
+**66 events: 31 CRITICAL, 17 WARNING, 18 INFO** (as of the artist-administration
 events; `AUDIT_EVENT_CATALOG` is the authority — the command in 3 prints the current set).
 
 - **WARNING** — `permission.catalog.sync`, `organization.update`, `artist.collection.archive`,
+  `artist.profile.compliance.attest`, `artist.profile.compliance.revoke`,
+  `artist.profile.deactivate`, `artist.profile.archive`,
   `order.status.change`, `order.shipment.record`, `royalty.payout.schedule`, `release.approve`,
   `release.reject`, `release.reopen`, `supply.vendor.create`, `supply.vendor.update`,
   `supply.batch.create`, `supply.batch.decide`
 - **INFO** — `audit.read`, `artist.collection.create`, `artist.collection.update`,
   `artist.collection.restore`, `artist.collection.reorder`, `artist.collection.drops.add`,
-  `artist.collection.drops.remove`, `royalty.accrue`, `product.create`,
+  `artist.collection.drops.remove`, `artist.profile.update`, `artist.profile.activate`,
+  `artist.profile.restore`, `artist.profile.publish`, `artist.profile.unlist`,
+  `royalty.accrue`, `product.create`,
   `product.update`, `release.submit`, `release.amend`, `content.unlock`
 
 **Artist collections** (`artist.collection.*`, persona group `artist`) record every change an
 artist makes to their collections — actor type `ARTIST`, resource `ArtistCollection` (`Artist`
 for a reorder), before/after snapshots. Written through the artist module's own audit port.
 See [artist-collection/README.md 6](../artist-collection/README.md#6-audit-trail).
+
+**Artist records** (`artist.profile.*`, persona group `hitbox_admin`) record every change HitBox
+staff make to an artist — edits, compliance attestation, activate/deactivate, archive/restore,
+publish/unlist — actor type `HITBOX_ADMIN` with the role that passed as the snapshot, resource
+`Artist`, before/after snapshots and the staff member's `reason`. See
+[artist/artist-admin-api.md 10](../artist/artist-admin-api.md#10-audit-trail-and-events).
 
 ---
 

@@ -355,7 +355,7 @@ GET /api/v1/admin/dashboard/users?period=month
 GET /api/v1/admin/dashboard/orders?period=month&status=SHIPPED&marketId=...&page=1&limit=50
 GET /api/v1/admin/dashboard/finance?period=year
 GET /api/v1/admin/dashboard/markets?period=month
-GET /api/v1/admin/dashboard/products?status=ACTIVE&page=1&limit=50
+GET /api/v1/admin/dashboard/products?status=ACTIVE&artistId=...&q=tee&page=1&limit=50
 GET /api/v1/admin/dashboard/release-approvals?status=PENDING
 GET /api/v1/admin/dashboard/provenance?caseType=CLONED&status=OPEN
 GET /api/v1/admin/dashboard/supply?vendorId=...
@@ -370,7 +370,7 @@ GET /api/v1/admin/dashboard/demand-signals
 | `/orders` | `order:read` | `{ page, limit, total, items[] }` |
 | `/finance` | `payment-royalty:read` | `{ "data": {...} }` |
 | `/markets` | `reports-dashboards:read` | `{ "data": [...] }` |
-| `/products` | `drop:read` | `{ page, limit, total, items[] }` |
+| `/products` | `drop:read` | `{ page, limit, total, items[] }` — `artistId` lists one artist's drops in every status ([artist-admin-api.md 9](../artist/artist-admin-api.md)) |
 | `/release-approvals` | `release-approval:read` | `{ page, limit, total, items[] }` |
 | `/provenance` | `nfc-tag-claim:read` | `{ page, limit, total, summary, items[] }` |
 | `/supply` | `drop:read` | `{ page, limit, total, items[], activeVendors }` |

@@ -389,7 +389,7 @@ packages/artist/tests/artist-self.test.ts
 
 | Not built | Note |
 |---|---|
-| Admin editing of any artist's profile | Staff with `brand-artist-record:manage:global` / Brand Admins (`:organization`) need their own endpoints under `/admin/artists` |
+| Brand Admin editing of their roster's profiles | HitBox staff (platform-wide grant) edit any artist through [artist-admin-api.md](artist-admin-api.md); a Brand Admin's `:organization` grant does not reach those routes yet |
 | Public artist page (`GET /artists/:slug`) | The storefront read of a public profile |
 | Multiple genres per artist | `Artist.genre` is a single column; multi-genre would need a schema change |
 | Social links, website, location | Not columns on `Artist` today |

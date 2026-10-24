@@ -411,10 +411,14 @@ Render the type next to the name.
 |---|---|---|
 | `search` | string | matches name or slug |
 | `organizationId` | uuid | **narrow to one brand's roster** |
-| `isActive` | boolean | |
-| `isPublic` | boolean | profile visibility — unrelated to `isActive` |
-| `includeArchived` | boolean | default `false` |
+| `isActive` | `true` / `false` | `false` = inactive only |
+| `isPublic` | `true` / `false` | profile visibility — unrelated to `isActive`; `false` = unlisted only |
+| `includeArchived` | `true` / `false` | default `false` |
+| `sort` | `name` · `newest` · `oldest` · `drops` · `collections` · `followers` | default `name` (A–Z) |
 | `page` / `limit` | int | `1` / `100` (max 200) |
+
+The flags accept only `true`/`false` (or `1`/`0`); anything else is a 400.
+(They used to read `"false"` as true.)
 
 ```json
 {
@@ -424,13 +428,17 @@ Render the type next to the name.
       "isPublic": true, "isActive": true, "archivedAt": null,
       "organizationId": "f3bb6065-76c0-4fc9-8d57-a3fcd93d9bfa",
       "organizationName": "Kaze (solo)",
-      "counts": { "products": 6, "collections": 2 } }
+      "counts": { "products": 6, "collections": 2, "followers": 9 } }
   ],
   "meta": { "page": 1, "limit": 100, "total": 3, "totalPages": 1 }
 }
 ```
 
 `GET /api/v1/admin/artists/:artistId` returns one.
+
+> The staff side of an artist — full profile, stats, directory summary, and
+> edit / activate / archive / publish actions — is on the same path:
+> [artist/artist-admin-api.md](../artist/artist-admin-api.md).
 
 **Where artist rows come from.** Inviting somebody as an artist through
 `POST /admin/authz/invitations` creates their `Artist` row immediately — before
