@@ -54,6 +54,7 @@ const { INFO, WARNING, CRITICAL } = AuditSeverity;
 const AUTHZ = 'docs/authorization/authorization-architecture.md';
 const AUDIT_DOC = 'docs/audit-logging.md';
 const FINANCE_DOC = 'docs/finance/finance-revenue-ledger.md';
+const ARTIST_ADMIN_DOC = 'docs/artist/artist-admin-api.md';
 
 export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
     // ── Role administration ─────────────────────────────────────────────────
@@ -226,6 +227,74 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         description: 'An artist took a drop out of a collection.',
         defaultSeverity: INFO,
         sourceStories: ['docs/artist-collection/README.md'],
+    },
+
+    // ── Artist records, administered by HitBox staff ────────────────────────
+    // Changing who appears on the storefront, and whether they can sell, is a
+    // staff decision with a reason; switching an artist off or archiving them
+    // is WARNING, as is anything touching the compliance attestation.
+    {
+        eventType: 'artist.profile.update',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff edited an artist's profile (name, handle, bio, genre, or took an image down).",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.compliance.attest',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff attested an artist's compliance.",
+        defaultSeverity: WARNING,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.compliance.revoke',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff withdrew an artist's compliance attestation.",
+        defaultSeverity: WARNING,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.activate',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff activated an artist.",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.deactivate',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff deactivated an artist — their profile is locked.",
+        defaultSeverity: WARNING,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.archive',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff archived an artist.",
+        defaultSeverity: WARNING,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.restore',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff restored an archived artist.",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.publish',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff listed an artist publicly on the storefront.",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.unlist',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff took an artist off the public storefront.",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
     },
 
     // ── Orders ──────────────────────────────────────────────────────────────

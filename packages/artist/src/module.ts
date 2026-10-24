@@ -36,6 +36,16 @@ import type { IArtistImageStorage } from './self/domain/artist-image-storage.int
 import type { IArtistAuditRecorder } from './domain/interfaces/audit-recorder.port';
 import type { IDropCollectionMembership } from './collection/domain/drop-membership.port';
 import { ArtistSelfRepository } from './self/repository/artist-self.repository';
+import {
+    ARTIST_ADMIN_READ_CAPABILITY,
+    ARTIST_ADMIN_UPDATE_CAPABILITY,
+    ARTIST_STATE_ACTIONS,
+} from './admin/constants/artist-admin.constant';
+import { ArtistAdminController } from './admin/controller/artist-admin.controller';
+import type { MoneyVisibilityResolver } from './admin/controller/artist-admin.controller';
+import type { IArtistInsights } from './admin/domain/artist-insights.port';
+import { ArtistAdminRepository } from './admin/repository/artist-admin.repository';
+import { ArtistAdminService } from './admin/service/artist-admin.service';
 import { ArtistSelfService } from './self/service/artist-self.service';
 
 /** Structural guard — the shape of `requirePermission`, not an import. */
@@ -84,6 +94,19 @@ export interface ArtistModuleDeps {
      * something to start by accident. Optional for read-only test setups.
      */
     audit?: IArtistAuditRecorder | undefined;
+    /**
+     * Sales, royalties, payouts, tax, claims and followers for the staff
+     * artist screens, provided by @hitbox/dashboard
+     * (`dashboardModule.artistInsights`) — those tables belong to other
+     * modules. Optional: without it `/stats` answers ARTIST_STATS_UNAVAILABLE
+     * and the profile's payout/tax blocks are null.
+     */
+    insights?: IArtistInsights | undefined;
+    /**
+     * "May this caller see money?" — `payment-royalty:read` at global scope.
+     * Omitted means never: revenue, royalties and payout amounts are left out.
+     */
+    canSeeMoney?: MoneyVisibilityResolver | undefined;
 }
 
 export interface ArtistModule {
@@ -100,12 +123,13 @@ export interface ArtistModule {
      */
     ownership: ArtistOwnershipAdapter;
     /**
-     * The artist directory, mounted at /api/v1/admin/artists.
+     * /api/v1/admin/artists — two surfaces on one path:
      *
-     * Read-only: it fills the artist picker on the drop form and labels
-     * catalog rows. The full artist *profile* screen (bio, compliance
-     * attestation, payout terms) is a separate surface behind
-     * `brand-artist-record:read` and is not built yet.
+     *  • the directory (`GET /`, `GET /:artistId`), `drop:read`: fills the
+     *    artist picker on the drop form and labels catalog rows;
+     *  • staff administration (`/summary`, `/:artistId/profile`, `/stats`,
+     *    edits and state actions), `brand-artist-record:*` platform-wide
+     *    only. docs/artist/artist-admin-api.md.
      */
     createAdminRouter(requireAuth: RequestHandler): Router;
     /**
@@ -145,6 +169,13 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
         audit: deps.audit ?? { record: () => Promise.reject(new Error('artist module built without an audit recorder')) },
         images: deps.images,
         drops: deps.drops,
+        eventBus: deps.eventBus,
+        logger,
+    });
+    const adminService = new ArtistAdminService({
+        artists: new ArtistAdminRepository(deps.prisma),
+        audit: deps.audit ?? { record: () => Promise.reject(new Error('artist module built without an audit recorder')) },
+        insights: deps.insights,
         eventBus: deps.eventBus,
         logger,
     });
@@ -278,21 +309,34 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
         },
 
         createAdminRouter(requireAuth) {
-            if (!deps.guard) {
+            if (!deps.guard || !deps.audit) {
                 throw new Error(
-                    'createArtistModule({ guard }) is required to build the admin router.',
+                    'createArtistModule({ guard, audit }) is required to build the admin router.',
                 );
             }
             const { guard } = deps;
+            const admin = new ArtistAdminController(adminService, deps.canSeeMoney ?? (() => Promise.resolve(false)));
+            // Staff administration: platform-wide grants only. A Brand Admin's
+            // :organization grant and an artist's :own grant do not pass.
+            const staffRead = guard.requirePermission(ARTIST_ADMIN_READ_CAPABILITY, { globalOnly: true });
+            const staffWrite = guard.requirePermission(ARTIST_ADMIN_UPDATE_CAPABILITY, { globalOnly: true });
 
             const router = Router();
             router.use(requireAuth);
             router.get('/', guard.requirePermission(ARTIST_READ_CAPABILITY), controller.list);
+            // Before '/:artistId' so "summary" is never read as an id.
+            router.get('/summary', staffRead, admin.summary);
             router.get(
                 '/:artistId',
                 guard.requirePermission(ARTIST_READ_CAPABILITY),
                 controller.getById,
             );
+            router.get('/:artistId/profile', staffRead, admin.profile);
+            router.get('/:artistId/stats', staffRead, admin.stats);
+            router.patch('/:artistId', staffWrite, admin.update);
+            for (const action of ARTIST_STATE_ACTIONS) {
+                router.post(`/:artistId/${action}`, staffWrite, admin.changeState(action));
+            }
             return router;
         },
     };
