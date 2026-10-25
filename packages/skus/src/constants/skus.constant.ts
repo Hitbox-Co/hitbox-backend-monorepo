@@ -5,6 +5,8 @@ export const SKUS_ERROR_CODES = {
     PRODUCT_NOT_FOUND: 'SKUS_PRODUCT_NOT_FOUND',
     /** Refused: minting would push the edition past `Product.totalSupply`. */
     SUPPLY_EXCEEDED: 'SKUS_SUPPLY_EXCEEDED',
+    /** Minting would take a variant past its own `DropVariant.totalSupply`. */
+    VARIANT_SUPPLY_EXCEEDED: 'SKUS_VARIANT_SUPPLY_EXCEEDED',
     /** Refused: an NFC tag UID is already bound to another unit. */
     TAG_TAKEN: 'SKUS_TAG_TAKEN',
     /** Refused: a concurrent mint won the serial range and retries ran out. */

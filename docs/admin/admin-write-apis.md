@@ -954,6 +954,7 @@ instantly.
 | `SKUS_NOT_FOUND` | 404 | skus |
 | `SKUS_PRODUCT_NOT_FOUND` | 404 | skus |
 | `SKUS_SUPPLY_EXCEEDED` | 409 | skus |
+| `SKUS_VARIANT_SUPPLY_EXCEEDED` | 409 | skus |
 | `SKUS_TAG_TAKEN` | 409 | skus |
 | `SKUS_SERIAL_TAKEN` | 409 | skus |
 | `SKUS_VARIANT_MISMATCH` | 400 | skus |

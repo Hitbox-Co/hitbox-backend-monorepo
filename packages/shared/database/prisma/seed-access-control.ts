@@ -1,5 +1,5 @@
 /**
- * Seeds the authorization catalog: every system permission and the twelve
+ * Seeds the authorization catalog: every system permission and the thirteen
  * system roles, with their grants.
  *
  * Run from the repo root:  pnpm db:seed:authz

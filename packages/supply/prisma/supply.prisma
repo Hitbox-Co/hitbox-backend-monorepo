@@ -2,7 +2,8 @@
 // SUPPLY MODULE SCHEMA  (packages/supply/prisma/supply.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: Vendor, SupplyBatch, NfcTag
+// Owns: Vendor, VendorMember, VendorDropAssignment, VendorVariantAllotment,
+//       SupplyBatch, SupplyBatchLine, NfcTag
 //
 // The physical side: who manufactures tags and merchandise, what arrived, and
 // which chips exist. This is the upstream of the skus module — a Sku's
@@ -41,10 +42,100 @@ model Vendor {
   updatedAt    DateTime   @default(now()) @updatedAt
 
   // ── Own-module back-relations ─────────────────────────────────────────────
-  supplyBatchs SupplyBatch[]
+  supplyBatchs    SupplyBatch[]
+  members         VendorMember[]
+  dropAssignments VendorDropAssignment[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   skus Sku[]
+}
+
+/// A person who signs in to the vendor portal on a vendor's behalf.
+///
+/// Created when a system admin invites an address to a vendor; the row exists
+/// from that moment, before the person has an account, so the admin console can
+/// show "invited, not yet joined". `invitationId` is the StaffInvitation that
+/// carries the VENDOR role, and `userId` is filled in when that invitation is
+/// accepted (or immediately, when the address already had an account).
+///
+/// One account belongs to at most one vendor (`userId` is unique): every vendor
+/// portal request resolves "which vendor am I" from the caller alone, and a
+/// second membership would make that ambiguous.
+///
+/// Access is decided by `status`, not by the role. Revoking a member ends their
+/// portal access on the next request even though the VENDOR role assignment —
+/// which on its own reaches nothing — is left in place.
+model VendorMember {
+  id           String             @id @db.Uuid
+  vendorId     String             @db.Uuid
+  vendor       Vendor             @relation(fields: [vendorId], references: [id])
+  /// Lower-cased at the service boundary, same rule as StaffInvitation.email.
+  email        String             @db.VarChar(320)
+  /// The staff invitation that carries the VENDOR role. Plain id rather than a
+  /// relation: access-control owns that table and nothing here joins to it.
+  invitationId String?            @unique @db.Uuid
+  userId       String?            @unique @db.Uuid
+  user         User?              @relation("VendorMember_user", fields: [userId], references: [id])
+  status       VendorMemberStatus @default(INVITED)
+  invitedById  String             @db.Uuid
+  invitedBy    User               @relation("VendorMember_invitedBy", fields: [invitedById], references: [id])
+  invitedAt    DateTime           @default(now())
+  acceptedAt   DateTime?
+  revokedAt    DateTime?
+  revokedById  String?            @db.Uuid
+  revokeReason String?
+  createdAt    DateTime           @default(now())
+  updatedAt    DateTime           @default(now()) @updatedAt
+
+  @@index([vendorId, status])
+  @@index([email])
+}
+
+/// Which drops a vendor may supply. A vendor portal user can book consignments
+/// and register chip manifests only against a drop listed here for their
+/// vendor; HitBox staff are not limited by it.
+///
+/// Unassigning deletes the row (the audit trail keeps the history). It does not
+/// touch consignments already booked — those stay, and stay visible to the
+/// vendor, because they describe goods that physically shipped.
+model VendorDropAssignment {
+  id           String   @id @db.Uuid
+  vendorId     String   @db.Uuid
+  vendor       Vendor   @relation(fields: [vendorId], references: [id])
+  dropId       String   @db.Uuid
+  drop         Drop     @relation(fields: [dropId], references: [id])
+  assignedById String   @db.Uuid
+  assignedBy   User     @relation("VendorDropAssignment_assignedBy", fields: [assignedById], references: [id])
+  assignedAt   DateTime @default(now())
+  /// Units the vendor is allotted for a drop WITHOUT variants. Null = no cap.
+  /// For a drop with variants this stays null and the per-variant allotments
+  /// below are the plan (their sum is the total).
+  quantity     Int?
+  updatedAt    DateTime @default(now()) @updatedAt
+
+  allotments VendorVariantAllotment[]
+
+  @@unique([vendorId, dropId])
+  @@index([dropId])
+}
+
+/// How many units of one variant a vendor is to supply — "Red / S: 100".
+///
+/// A vendor can book consignments only for variants allotted here, and only up
+/// to `quantity` across all its non-rejected consignments for the drop.
+/// Deleted with its assignment.
+model VendorVariantAllotment {
+  id           String               @id @db.Uuid
+  assignmentId String               @db.Uuid
+  assignment   VendorDropAssignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  variantId    String               @db.Uuid
+  variant      DropVariant          @relation(fields: [variantId], references: [id])
+  quantity     Int
+  createdAt    DateTime             @default(now())
+  updatedAt    DateTime             @default(now()) @updatedAt
+
+  @@unique([assignmentId, variantId])
+  @@index([variantId])
 }
 
 /// A received shipment of tags or merchandise. `sourceFileRef` points at the
@@ -91,6 +182,31 @@ model SupplyBatch {
   // ── Own- and cross-module back-relations ──────────────────────────────────
   skus    Sku[]
   nfcTags NfcTag[]
+  lines   SupplyBatchLine[]
+}
+
+/// The variant breakdown of a consignment — "this carton is 100 S, 100 M,
+/// 100 L". A consignment for a drop with variants has one line per variant and
+/// `SupplyBatch.quantity` is their sum; a drop without variants has no lines.
+///
+/// The row counters mirror the batch's, per variant: every chip registered
+/// against the consignment names its variant, and a line refuses more chips
+/// than its `quantity`.
+model SupplyBatchLine {
+  id           String      @id @db.Uuid
+  batchId      String      @db.Uuid
+  batch        SupplyBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  variantId    String      @db.Uuid
+  variant      DropVariant @relation(fields: [variantId], references: [id])
+  quantity     Int
+  rowsReceived Int         @default(0)
+  rowsAccepted Int         @default(0)
+  rowsRejected Int         @default(0)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @default(now()) @updatedAt
+
+  @@unique([batchId, variantId])
+  @@index([variantId])
 }
 
 /// NFC tag master — one row per physical chip, created from the vendor's
@@ -105,6 +221,11 @@ model NfcTag {
   nfcTagCode      String            @unique @db.VarChar(10) // NT
   supplyBatchId   String            @db.Uuid
   supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
+  /// The variant of the goods this chip is embedded in — set from the
+  /// manifest row when the consignment has variant lines. Binding the chip to
+  /// a unit should match it against `Sku.variantId`.
+  variantId       String?           @db.Uuid
+  variant         DropVariant?      @relation(fields: [variantId], references: [id])
   /// The item this chip is (or was) embedded in.
   skuId           String?           @db.Uuid
   sku             Sku?              @relation("SkuTagHistory", fields: [skuId], references: [id])
@@ -131,6 +252,7 @@ model NfcTag {
   supportCases    SupportCase[]
 
   @@index([skuId])
+  @@index([variantId])
 }
 
 /// Vendor quality control on a chip, recorded before it is bound to anything.
@@ -191,6 +313,15 @@ enum SupplyItemType {
   /// Mixed or general merchandise that does not fall in one category above.
   MERCHANDISE
   OTHER
+}
+
+/// Where a vendor portal membership stands. INVITED until the invitation is
+/// accepted, ACTIVE while the person may use the portal, REVOKED for good — a
+/// revoked member who should come back is invited again as a new row.
+enum VendorMemberStatus {
+  INVITED
+  ACTIVE
+  REVOKED
 }
 
 /// Where a vendor consignment is in its intake review. UPLOADED is the raw

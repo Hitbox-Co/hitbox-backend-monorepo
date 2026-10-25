@@ -69,6 +69,11 @@ export interface ApiRouters {
      */
     adminSupply: Router;
     /**
+     * The vendor portal: a supplier's own staff booking consignments and chip
+     * manifests for the drops HitBox assigned to them. docs/vendor/.
+     */
+    vendor: Router;
+    /**
      * Buyer-facing money routes: POST /checkout and POST /refunds. Owned by
      * the payments module, because a purchase starts with a payment and the
      * dependency between payments and orders runs one way.
@@ -151,6 +156,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/artist-collections', routers.adminArtistCollections);
     api.use('/admin/audit', routers.adminAudit);
     api.use('/admin/supply', routers.adminSupply);
+    api.use('/vendor', routers.vendor);
 
     return api;
 }

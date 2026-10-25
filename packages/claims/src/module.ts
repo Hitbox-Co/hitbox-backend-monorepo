@@ -18,6 +18,12 @@ export interface ClaimsModuleDeps {
      * it and the validate screen's `imageUrl` is null rather than failing.
      */
     mediaUrls?: IMediaUrlResolver | undefined;
+    /**
+     * Hashes a chip UID with the deployment's tag key, so a tap can resolve
+     * units minted from supply consignments. Absent when no key is configured;
+     * taps then resolve legacy `Sku.tagId` only.
+     */
+    tagUidHash?: ((uid: string) => string) | undefined;
 }
 
 /** The routers this module owns, mounted at distinct API prefixes. */
@@ -50,7 +56,7 @@ export interface ClaimsModule {
 export function createClaimsModule(deps: ClaimsModuleDeps): ClaimsModule {
     const logger = createModuleLogger(CLAIMS_MODULE);
 
-    const claims = new ClaimsRepository(deps.prisma);
+    const claims = new ClaimsRepository(deps.prisma, deps.tagUidHash);
     const service = new ClaimsService({
         claims,
         eventBus: deps.eventBus,

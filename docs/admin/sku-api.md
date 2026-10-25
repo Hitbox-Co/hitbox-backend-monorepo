@@ -703,6 +703,7 @@ All errors use the platform envelope:
 | `404` | `SKUS_NOT_FOUND` | no such unit, **or** it belongs to a drop outside your organization |
 | `404` | `SKUS_PRODUCT_NOT_FOUND` | no such drop, **or** outside your organization |
 | `409` | `SKUS_SUPPLY_EXCEEDED` | minting would push the edition past `totalSupply` |
+| `409` | `SKUS_VARIANT_SUPPLY_EXCEEDED` | minting would push a variant past its own `totalSupply`. Enforced inside the mint transaction, on every mint path (this endpoint, drop creation, supply accept). |
 | `409` | `SKUS_TAG_TAKEN` | an NFC tag UID is already bound to another unit |
 | `409` | `SKUS_SERIAL_TAKEN` | five consecutive serial-range collisions |
 | `409` | `SKUS_UNIT_NOT_IN_PRODUCT` | a manifest row names a unit that is not in this drop |

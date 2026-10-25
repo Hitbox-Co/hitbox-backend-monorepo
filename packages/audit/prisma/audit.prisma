@@ -111,6 +111,8 @@ enum AuditActorType {
   HITBOX_EMPLOYEE
   HITBOX_ADMIN
   SYSTEM
+  /// A supplier's own staff, acting through the vendor portal.
+  VENDOR
 }
 
 /// Outcome. DENIED (authorisation refused) is kept distinct from FAILURE

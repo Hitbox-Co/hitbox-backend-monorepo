@@ -29,6 +29,7 @@ export const AuditPersonaGroup = {
     HITBOX_EMPLOYEE: 'hitbox_employee',
     HITBOX_ADMIN: 'hitbox_admin',
     SYSTEM: 'system',
+    VENDOR: 'vendor',
 } as const;
 export type AuditPersonaGroup = (typeof AuditPersonaGroup)[keyof typeof AuditPersonaGroup];
 
@@ -604,6 +605,54 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
             'before/after QC status.',
         defaultSeverity: CRITICAL,
         sourceStories: ['docs/admin/supply-inventory-api.md 8'],
+    },
+    // Vendor portal administration. Inviting someone to a vendor grants them a
+    // role, and assigning a drop decides which goods they may book in — both
+    // are access decisions, so WARNING like the rest of supply administration.
+    // Vendor-portal writes themselves reuse supply.batch.create and
+    // supply.tags.register, recorded with actor type VENDOR.
+    {
+        eventType: 'supply.vendor.member.invite',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'Someone was invited to sign in to the vendor portal for a vendor. Carries ' +
+            'the vendor, the invitation id and whether the role was granted immediately.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
+    },
+    {
+        eventType: 'supply.vendor.member.revoke',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A vendor portal member's access was revoked. Carries the before/after " +
+            'status and the reason.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
+    },
+    {
+        eventType: 'supply.vendor.drop.assign',
+        personaGroup: HITBOX_ADMIN,
+        description: 'A vendor was allowed to supply a drop through the vendor portal.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
+    },
+    {
+        eventType: 'supply.vendor.drop.allotment',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A vendor's allotment for a drop was changed — per variant, or the drop-level " +
+            'quantity. Carries before/after allotments.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
+    },
+    {
+        eventType: 'supply.vendor.drop.unassign',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'A vendor was withdrawn from supplying a drop. Consignments already booked ' +
+            'are untouched.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
     },
 
     // ── Content ─────────────────────────────────────────────────────────────

@@ -189,6 +189,18 @@ filtered empty 200.
 
 The Brand Admin ↔ Brand Employee difference is exactly seven permissions, asserted as a test.
 
+### Business — vendor (supplier staff, own-scoped)
+
+| Role | Scope | Holds |
+|---|---|---|
+| `VENDOR` | OWN | 2 — `vendor-supply:read:own`, `vendor-supply:create:own` |
+
+Granted only through a vendor invitation (`POST /admin/supply/vendors/:id/members`),
+which also writes the `VendorMember` row that says which vendor the account acts
+for. "Own" is resolved from that row, and the drops a vendor may supply are a
+further data filter (`VendorDropAssignment`), not a permission. New resource:
+`VENDOR_SUPPLY`. See [docs/vendor/](../vendor/README.md).
+
 ### Business — HitBox staff (platform-wide)
 
 | Role | Holds | Notes |

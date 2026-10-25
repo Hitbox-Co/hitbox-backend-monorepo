@@ -5,7 +5,12 @@ chip inventory that comes out of them, and the metrics rollup over all of it.
 
 Base path: `/api/v1/admin/supply`
 Module: `@hitbox/supply`
-Owns: `Vendor`, `SupplyBatch`, `NfcTag`
+Owns: `Vendor`, `SupplyBatch`, `NfcTag` (and `VendorMember`, `VendorDropAssignment`)
+
+> **Vendors can now sign in.** Inviting a vendor's staff, assigning them
+> drops, and the vendor-facing portal (`/api/v1/vendor`) are documented in
+> [docs/vendor/](../vendor/README.md). Everything on this page is unchanged and
+> still the staff-side reference.
 
 ---
 
@@ -128,6 +133,11 @@ block is omitted from their metrics rollup.
 | **BUYER_COLLECTOR** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **HITBOX_PLATFORM_ENGINEER** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | **HITBOX_FULL_STACK_ENGINEER** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| **VENDOR** | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+
+`VENDOR` reaches none of these routes. It books consignments and manifests
+through its own portal, confined to its vendor and its assigned drops —
+[vendor/vendor-portal-api.md](../vendor/vendor-portal-api.md).
 
 Derived from the grants each role actually holds — no route in this module
 reads a role name.
@@ -419,6 +429,22 @@ An archived vendor is refused with `409 SUPPLY_VENDOR_ARCHIVED`; an unknown
 `dropId` is a `404` naming the drop rather than a foreign-key error naming a
 constraint.
 
+#### Variant lines (optional for staff)
+
+A consignment for a drop with variants can be split per variant, exactly as
+the vendor portal does:
+
+```json
+{ "vendorId": "b1f2…", "dropId": "d901…", "itemType": "APPAREL",
+  "lines": [ { "variantId": "v1…", "quantity": 100 }, { "variantId": "v2…", "quantity": 100 } ] }
+```
+
+`quantity` then becomes the sum of the lines (if sent too, it must match).
+Each variant must be a live variant of the drop (`400 SUPPLY_VARIANT_INVALID`).
+Staff bookings are **not** capped by vendor allotments. Every consignment
+response now carries `lines[]` (`[]` when not split) — see
+[vendor/vendor-portal-api.md §5](../vendor/vendor-portal-api.md#5-consignments).
+
 ### `POST /api/v1/admin/supply/batches/:batchId/decision`
 
 Requires `nfc-tag-claim:manage:global`.
@@ -441,6 +467,34 @@ An illegal transition is `409 SUPPLY_BATCH_STATE_INVALID`.
 
 ---
 
+#### ACCEPTED takes the chips into stock
+
+`ACCEPTED` now requires a complete manifest: every declared unit must have a
+registered chip, per variant line when the consignment is split. Otherwise the
+response is `409 SUPPLY_MANIFEST_INCOMPLETE` with the shortfall. For a
+consignment booked against a drop, the accept then mints, **in the same
+transaction**, one SKU per chip that did not fail QC. Each unit gets the chip's
+variant and is bound to it (`Sku.currentNfcTagId` ↔ `NfcTag.skuId`, `BOUND`),
+under the drop's `totalSupply` cap (`409 SKUS_SUPPLY_EXCEEDED` rolls the whole
+accept back). The same rules as the admin mint endpoint apply first: release
+approval (`SKUS_NOT_APPROVED`), the drop type's variant rules, and each variant's
+own cap (`PRODUCTS_VARIANT_SUPPLY_EXCEEDED`, re-enforced inside the transaction
+as `SKUS_VARIANT_SUPPLY_EXCEEDED`). The accept locks the consignment row (so a
+double-click is a 409) and serialises accepts per drop. See
+[vendor/vendor-onboarding-flow.md, Step 9](../vendor/vendor-onboarding-flow.md#step-9--hitbox-accepts--units-appear-on-the-drop). The response adds `stock: { minted, units[] }`. A consignment
+with no drop only records the chips as stock. Taps on these units resolve
+through the chip's UID hash.
+
+#### Vendor allotment gate on ACCEPTED
+
+When the consignment's vendor is assigned to its drop through the vendor
+portal, `ACCEPTED` is refused with `409 SUPPLY_ALLOTMENT_INSUFFICIENT` while
+the vendor's accepted units (per variant) plus this consignment would exceed
+the allotment. `details` names the short variants and a `suggestedPatch` for
+`PATCH /admin/supply/vendors/:vendorId/drops/:dropId/allotment`. The same
+block is returned as `allotment` on `GET /batches/:batchId`. Other statuses
+are not gated. See [vendor/vendor-admin-api.md](../vendor/vendor-admin-api.md#accepting-an-over-allotment-consignment).
+
 ## 7. The chip manifest
 
 ### `POST /api/v1/admin/supply/batches/:batchId/tags`
@@ -462,6 +516,15 @@ configured on the deployment (see [13](#13-deployment)).
 Up to **1000 rows** per call (`SUPPLY_MANIFEST_MAX`) — matched to a physical
 carton, and registered in one transaction. A 10,000-chip consignment arrives as
 ten calls.
+
+#### Variant per row
+
+When the consignment has variant lines, every row must carry `variantId` (one
+of the lines), and no line may receive more chips than its `quantity` —
+`SUPPLY_VARIANT_REQUIRED`, `SUPPLY_VARIANT_NOT_IN_BATCH`,
+`SUPPLY_LINE_QUANTITY_EXCEEDED`. A consignment without lines refuses
+`variantId`. The chip's variant is stored on `NfcTag.variantId` and returned on
+chip reads; the response gains `lines[]` with per-variant counters.
 
 #### UIDs are normalised
 
@@ -806,6 +869,11 @@ Standard envelope:
 | `SUPPLY_TAG_UID_DUPLICATED` | 400 | The manifest repeats a UID within itself |
 | `SUPPLY_NO_CHANGES` | 400 | A body that would change nothing |
 | `SUPPLY_TAG_KEY_UNAVAILABLE` | 503 | No chip-UID key configured on this deployment |
+
+Vendor-portal and vendor-administration codes (`SUPPLY_VENDOR_MEMBER_*`,
+`SUPPLY_DROP_NOT_ASSIGNED`, …) are listed in
+[vendor/vendor-admin-api.md §6](../vendor/vendor-admin-api.md#6-errors) and
+[vendor/vendor-portal-api.md §8](../vendor/vendor-portal-api.md#8-errors).
 
 ---
 

@@ -22,6 +22,47 @@ export const SUPPLY_ERROR_CODES = {
     NO_CHANGES: 'SUPPLY_NO_CHANGES',
     /** Refused: a rejection with no note. */
     NOTE_REQUIRED: 'SUPPLY_NOTE_REQUIRED',
+
+    // ── Vendor portal ───────────────────────────────────────────────────────
+    /** The caller's account is not an active member of any vendor. */
+    VENDOR_MEMBERSHIP_REQUIRED: 'SUPPLY_VENDOR_MEMBERSHIP_REQUIRED',
+    VENDOR_MEMBER_NOT_FOUND: 'SUPPLY_VENDOR_MEMBER_NOT_FOUND',
+    /** Refused: the address already has an open or active membership. */
+    VENDOR_MEMBER_EXISTS: 'SUPPLY_VENDOR_MEMBER_EXISTS',
+    /** Refused: the account already belongs to a different vendor. */
+    VENDOR_MEMBER_OTHER_VENDOR: 'SUPPLY_VENDOR_MEMBER_OTHER_VENDOR',
+    /** Refused: the vendor is inactive, so its portal is closed. */
+    VENDOR_INACTIVE: 'SUPPLY_VENDOR_INACTIVE',
+    /** Refused: no invitable email — none in the body and no contactEmail on file. */
+    VENDOR_EMAIL_REQUIRED: 'SUPPLY_VENDOR_EMAIL_REQUIRED',
+    /** Refused: the vendor is not assigned to this drop. */
+    DROP_NOT_ASSIGNED: 'SUPPLY_DROP_NOT_ASSIGNED',
+    DROP_ALREADY_ASSIGNED: 'SUPPLY_DROP_ALREADY_ASSIGNED',
+    // ── Variants ────────────────────────────────────────────────────────────
+    /** A variant id that is not a live variant of the drop. */
+    VARIANT_INVALID: 'SUPPLY_VARIANT_INVALID',
+    /** A consignment split by variant got a manifest row with no variantId. */
+    VARIANT_REQUIRED: 'SUPPLY_VARIANT_REQUIRED',
+    /** A manifest row names a variant the consignment has no line for. */
+    VARIANT_NOT_IN_BATCH: 'SUPPLY_VARIANT_NOT_IN_BATCH',
+    /** A manifest would put more chips on a variant than its line declares. */
+    LINE_QUANTITY_EXCEEDED: 'SUPPLY_LINE_QUANTITY_EXCEEDED',
+    /** A drop with variants must be allotted by variant (and vice versa). */
+    ALLOTMENT_SHAPE_INVALID: 'SUPPLY_ALLOTMENT_SHAPE_INVALID',
+    /** Accept refused: not every declared unit has a registered chip yet. */
+    MANIFEST_INCOMPLETE: 'SUPPLY_MANIFEST_INCOMPLETE',
+    /** Vendor chip upload refused: HitBox has not validated the consignment yet. */
+    BATCH_NOT_VALIDATED: 'SUPPLY_BATCH_NOT_VALIDATED',
+    /** Accept kept colliding with concurrent minting on the same drop. */
+    ACCEPT_CONFLICT: 'SUPPLY_ACCEPT_CONFLICT',
+    /** Accept refused: the consignment's drop no longer exists. */
+    DROP_NOT_FOUND: 'SUPPLY_DROP_NOT_FOUND',
+    /** Accept refused: the vendor's allotment does not cover this consignment. */
+    ALLOTMENT_INSUFFICIENT: 'SUPPLY_ALLOTMENT_INSUFFICIENT',
+    /** An allotment edit would drop below what HitBox has already accepted. */
+    ALLOTMENT_BELOW_ACCEPTED: 'SUPPLY_ALLOTMENT_BELOW_ACCEPTED',
+    /** No identity provider / VENDOR role configured — invitations unavailable. */
+    VENDOR_INVITATIONS_UNAVAILABLE: 'SUPPLY_VENDOR_INVITATIONS_UNAVAILABLE',
 } as const;
 
 /**
@@ -74,6 +115,18 @@ export const SUPPLY_WRITE_CAPABILITY = 'nfc-tag-claim:manage' as const;
  */
 export const SUPPLY_METRICS_CAPABILITY = 'reports-dashboards:read' as const;
 
+/**
+ * The vendor portal (`/api/v1/vendor`). Checked at `own` scope against the
+ * caller's own id, so only a holder of `vendor-supply:*:own` — the VENDOR role
+ * — passes. Which vendor and which drops are then resolved from the caller's
+ * VendorMember row and its VendorDropAssignments, never from the request.
+ */
+export const VENDOR_PORTAL_READ_CAPABILITY = 'vendor-supply:read' as const;
+export const VENDOR_PORTAL_WRITE_CAPABILITY = 'vendor-supply:create' as const;
+
+/** The role a vendor invitation grants. */
+export const VENDOR_ROLE_NAME = 'VENDOR' as const;
+
 export const SUPPLY_DEFAULT_LIMIT = 50;
 export const SUPPLY_MAX_LIMIT = 200;
 
@@ -101,6 +154,12 @@ export const SUPPLY_EVENTS = {
     /** A manifest committed. Payload carries counts, never UIDs. */
     TAGS_REGISTERED: 'supply.tags.registered',
     TAG_QC_RECORDED: 'supply.tag.qc-recorded',
+    VENDOR_MEMBER_INVITED: 'supply.vendor.member-invited',
+    VENDOR_MEMBER_ACTIVATED: 'supply.vendor.member-activated',
+    VENDOR_MEMBER_REVOKED: 'supply.vendor.member-revoked',
+    VENDOR_DROP_ASSIGNED: 'supply.vendor.drop-assigned',
+    VENDOR_DROP_UNASSIGNED: 'supply.vendor.drop-unassigned',
+    VENDOR_ALLOTMENT_UPDATED: 'supply.vendor.allotment-updated',
 } as const;
 
 /**
@@ -117,4 +176,9 @@ export const SUPPLY_AUDIT_EVENTS = {
     BATCH_DECIDE: 'supply.batch.decide',
     TAGS_REGISTER: 'supply.tags.register',
     TAG_QC: 'supply.tag.qc',
+    VENDOR_MEMBER_INVITE: 'supply.vendor.member.invite',
+    VENDOR_MEMBER_REVOKE: 'supply.vendor.member.revoke',
+    VENDOR_DROP_ASSIGN: 'supply.vendor.drop.assign',
+    VENDOR_DROP_UNASSIGN: 'supply.vendor.drop.unassign',
+    VENDOR_DROP_ALLOTMENT: 'supply.vendor.drop.allotment',
 } as const;

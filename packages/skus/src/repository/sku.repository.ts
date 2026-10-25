@@ -151,6 +151,14 @@ export interface MintSpec {
     vendorId?: string | null | undefined;
     provisioningBatchId?: string | null | undefined;
     isActive?: boolean | undefined;
+    /**
+     * Registered chips (`NfcTag.id`) to embed, one per unit by position — the
+     * supply intake path, where a consignment's chips become units on accept.
+     * The unit is born BOUND to its chip through `currentNfcTagId`.
+     */
+    nfcTagIds?: string[] | undefined;
+    /** The consignment the units arrived in. */
+    supplyBatchId?: string | null | undefined;
 }
 
 export interface MintOutcome {
@@ -255,9 +263,11 @@ export class SkuRepository {
         const firstSerial = (highest?.serialNumber ?? 0) + 1;
 
         const tagIds = spec.tagIds ?? [];
+        const nfcTagIds = spec.nfcTagIds ?? [];
         const rows = Array.from({ length: spec.count }, (_, index) => {
             const serialNumber = firstSerial + index;
             const tag = tagIds[index] ?? null;
+            const nfcTagId = nfcTagIds[index] ?? null;
             return {
                 id: randomUUID(),
                 skuCode: formatSkuCode(spec.groupCode, serialNumber),
@@ -271,9 +281,11 @@ export class SkuRepository {
                 // A unit with a tag written to it is BOUND; one waiting for a
                 // tag is UNPROVISIONED. ACTIVE is reached on first claim, by
                 // the claims module — never here.
-                tagLifecycleState: tag
+                tagLifecycleState: tag || nfcTagId
                     ? TagLifecycleState.BOUND
                     : TagLifecycleState.UNPROVISIONED,
+                currentNfcTagId: nfcTagId,
+                supplyBatchId: spec.supplyBatchId ?? null,
                 vendorId: spec.vendorId ?? null,
                 vendorAuthenticatedAt: null,
                 resaleBlocked: false,
@@ -394,6 +406,20 @@ export class SkuRepository {
     /** Units already minted for a drop, counted inside the caller's transaction. */
     countForProduct(tx: Prisma.TransactionClient | PrismaClient, productId: string): Promise<number> {
         return tx.sku.count({ where: { productId } });
+    }
+
+    /** A variant's own cap and how many units it already has, read in `tx`. */
+    async variantCapWithin(
+        tx: Prisma.TransactionClient | PrismaClient,
+        variantId: string,
+    ): Promise<{ variantCode: string; totalSupply: number | null; existing: number } | null> {
+        const variant = await tx.dropVariant.findUnique({
+            where: { id: variantId },
+            select: { variantCode: true, totalSupply: true },
+        });
+        if (!variant) return null;
+        const existing = await tx.sku.count({ where: { variantId } });
+        return { variantCode: variant.variantCode, totalSupply: variant.totalSupply, existing };
     }
 
     // ── Updating ────────────────────────────────────────────────────────────

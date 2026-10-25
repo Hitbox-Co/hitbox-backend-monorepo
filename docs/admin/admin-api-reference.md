@@ -36,7 +36,9 @@
 > [sku-inventory-management.md](sku-inventory-management.md).
 > The physical supply chain upstream of all of it — vendors, consignment
 > intake, the NFC chip inventory and the supply/inventory metrics rollup:
-> [supply-inventory-api.md](supply-inventory-api.md).
+> [supply-inventory-api.md](supply-inventory-api.md). Vendor sign-in (invite
+> vendor users, assign drops, the `/api/v1/vendor` portal):
+> [../vendor/](../vendor/README.md).
 > **How a drop gets approved — who signs it off, the legal compliance
 > tickmark, rejection notes, reopening, and the drops that skip review
 > entirely: [drop-approval-lifecycle.md](drop-approval-lifecycle.md).**

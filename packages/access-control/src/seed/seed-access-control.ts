@@ -9,7 +9,7 @@ export interface SeedResult {
 }
 
 /**
- * Seeds the permission catalog and the twelve system roles.
+ * Seeds the permission catalog and the thirteen system roles.
  *
  * Idempotent — safe to run on every deploy, which is the point: the code
  * catalog is the authority, so re-running reconciles any drift in the

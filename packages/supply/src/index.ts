@@ -36,6 +36,9 @@ export {
     SUPPLY_READ_CAPABILITY,
     SUPPLY_TAG_READ_CAPABILITY,
     SUPPLY_WRITE_CAPABILITY,
+    VENDOR_PORTAL_READ_CAPABILITY,
+    VENDOR_PORTAL_WRITE_CAPABILITY,
+    VENDOR_ROLE_NAME,
 } from './constants/supply.constant';
 
 export {
@@ -68,6 +71,21 @@ export type {
     SupplyMetricsQuery,
     UpdateVendorDto,
     VendorResponse,
+    AssignVendorDropDto,
+    InviteVendorMemberDto,
+    InviteVendorMemberResult,
+    RevokeVendorMemberDto,
+    VendorCreateBatchDto,
+    VendorDropAssignmentResponse,
+    VendorMemberResponse,
+    VendorProfileResponse,
+    UpdateVendorAllotmentDto,
+    PatchVendorAllotmentDto,
+    AllotmentCheck,
+    VariantQuantity,
+    VariantAllotmentResponse,
+    AllotmentProgress,
+    SupplyBatchLineResponse,
 } from './dto/supply.dto';
 
 /**
@@ -94,6 +112,13 @@ export { acceptsRows, canTransition, isTerminal, BATCH_TRANSITIONS } from './dom
 export { NOOP_SUPPLY_AUDIT } from './domain/interfaces/supply-audit.interface';
 export type { ISupplyAudit, SupplyAuditInput } from './domain/interfaces/supply-audit.interface';
 export type { ITagCipher } from './domain/interfaces/tag-cipher.interface';
+export type {
+    IVendorInvitations,
+    VendorInvitationResult,
+} from './domain/interfaces/vendor-invitations.interface';
+export type { SupplyActorType } from './domain/interfaces/supply-audit.interface';
+export type { ISupplyStockMinter } from './domain/interfaces/stock-minter.interface';
+export type { VendorUserIdResolver } from './controller/vendor.controller';
 
 export type { SupplyService, SupplyMutationContext } from './service/supply.service';
 export { percent } from './service/supply.service';

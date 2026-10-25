@@ -52,6 +52,7 @@ export const RESOURCE_DOMAIN: Record<ResourceType, AuthorizationDomain> = {
     [ResourceType.GENERAL_LOCATION]: AuthorizationDomain.BUSINESS,
     [ResourceType.AGE_SPECIFIC_FLAG]: AuthorizationDomain.BUSINESS,
     [ResourceType.ADDRESS]: AuthorizationDomain.BUSINESS,
+    [ResourceType.VENDOR_SUPPLY]: AuthorizationDomain.BUSINESS,
     // ── Technical domain ────────────────────────────────────────────────────
     [ResourceType.APPLICATION]: AuthorizationDomain.TECHNICAL,
     [ResourceType.INFRASTRUCTURE]: AuthorizationDomain.TECHNICAL,
@@ -190,6 +191,7 @@ export const RESOURCE_DISPLAY: Record<ResourceType, string> = {
     [ResourceType.GENERAL_LOCATION]: 'Buyer Location',
     [ResourceType.AGE_SPECIFIC_FLAG]: 'Age-Restricted Flag',
     [ResourceType.ADDRESS]: 'Addresses',
+    [ResourceType.VENDOR_SUPPLY]: 'Vendor Supply',
     [ResourceType.APPLICATION]: 'Application',
     [ResourceType.INFRASTRUCTURE]: 'Infrastructure',
     [ResourceType.OPS_DASHBOARD_INFRA]: 'Ops Dashboards',
@@ -371,6 +373,13 @@ const DEFINITIONS: Record<string, string> = {
     'address:manage:own': 'Manage your own address book.',
     'address:read:global': 'View any address for fulfilment.',
     'address:manage:global': 'Administer any address.',
+
+    // ── Vendor portal ───────────────────────────────────────────────────────
+    // Own scope only: "own" is the caller's vendor, resolved from their
+    // VendorMember row — never from the request. The drops a vendor may supply
+    // are a further filter applied by @hitbox/supply, not a permission.
+    'vendor-supply:read:own': "View your vendor's profile, assigned drops and consignments.",
+    'vendor-supply:create:own': 'Book consignments and register chip manifests for assigned drops.',
 
     // ══ TECHNICAL DOMAIN ════════════════════════════════════════════════════
     'application:read:global': 'View application health and release state.',

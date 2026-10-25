@@ -59,6 +59,9 @@ model User {
   supportCase_reporter     SupportCase[]           @relation("User_reporter")
   supportCase_resolvedBy   SupportCase[]           @relation("User_resolvedBy")
   supplyBatchs             SupplyBatch[]
+  vendorMembership         VendorMember?           @relation("VendorMember_user")
+  vendorMembers_invitedBy  VendorMember[]          @relation("VendorMember_invitedBy")
+  vendorDropAssignments    VendorDropAssignment[]  @relation("VendorDropAssignment_assignedBy")
   invoice_buyer            Invoice[]               @relation("InvoiceBuyer")
   invoice_createdBy        Invoice[]               @relation("InvoiceCreatedBy")
   taxConfiguration_createdBy TaxConfiguration[]    @relation("TaxConfigurationCreatedBy")

@@ -684,3 +684,17 @@ In short: `GET /api/v1/invoices/*` for a buyer's own receipts, and
 `/api/v1/admin/tax/*` for rates, invoice administration, artist tax paperwork
 and return data — where an artist and an operator call the same routes and are
 narrowed by their grant.
+
+---
+
+## Vendor portal endpoints
+
+Supplier staff sign in (invited by a System Admin, password set through the
+ordinary Clerk invitation) and record supply for the drops assigned to their
+vendor:
+
+* [vendor/README.md](vendor/README.md) — overview and the end-to-end flow
+* [vendor/vendor-admin-api.md](vendor/vendor-admin-api.md) — invite/revoke vendor
+  users and assign drops (`/api/v1/admin/supply/vendors/:vendorId/{members,drops}`)
+* [vendor/vendor-portal-api.md](vendor/vendor-portal-api.md) — the vendor's own
+  routes under `/api/v1/vendor`

@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { Request } from 'express';
-import { prisma, OrganizationType } from '@hitbox/database';
+import { prisma, OrganizationType, RoleScopeType } from '@hitbox/database';
 import type { Prisma } from '@hitbox/database';
 import { AppError, createModuleLogger, eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
@@ -23,7 +23,7 @@ import { createOrganizationsModule } from '@hitbox/organizations';
 import { createOrdersModule } from '@hitbox/orders';
 import { createReleasesModule } from '@hitbox/releases';
 import { createSkusModule } from '@hitbox/skus';
-import { createSupplyModule } from '@hitbox/supply';
+import { createSupplyModule, VENDOR_ROLE_NAME } from '@hitbox/supply';
 import {
     buildBuyerTaxAccess,
     buildTaxAccess,
@@ -511,12 +511,76 @@ export function bootstrap(): Bootstrapped {
      * and chip registration then answers 503 instead of writing rows under an
      * improvised key that no real tap would ever match.
      */
+    // One cipher for the deployment: supply registers chips with it and
+    // claims resolves taps with the same hash.
+    const tagCipher = createTagCipher(env);
+
     const supplyModule = createSupplyModule({
         prisma,
         eventBus,
         guard: accessControlModule.guard,
         resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
-        tagCipher: createTagCipher(env),
+        resolveUserId: (req: Request) => req.auth?.accountId,
+        tagCipher,
+        /**
+         * ACCEPTED consignment → sellable units: skus' minting core, inside the
+         * accept transaction, so serials, the drop's totalSupply cap and each
+         * unit's MINT ledger row are skus' own. docs/vendor/vendor-onboarding-flow.md.
+         */
+        stockMinter: {
+            // Release approval + variant rules + variant caps — the same checks
+            // the admin mint endpoint runs, so supply cannot mint around them.
+            assertMintable: (input) => skusModule.minting.assertMintAllowed(input),
+            mintBound: (tx, input) =>
+                skusModule.minting.mintWithin(tx, {
+                    productId: input.productId,
+                    groupCode: input.groupCode,
+                    totalSupply: input.totalSupply,
+                    count: input.nfcTagIds.length,
+                    variantId: input.variantId,
+                    nfcTagIds: input.nfcTagIds,
+                    vendorId: input.vendorId,
+                    supplyBatchId: input.supplyBatchId,
+                    provisioningBatchId: input.provisioningBatchId,
+                    actorId: input.actorId,
+                }),
+        },
+        /**
+         * Vendor portal sign-up is the ordinary staff invitation for the VENDOR
+         * role — identity-provider email, password set at sign-up, role granted
+         * on `users.account.provisioned`. Supply writes the VendorMember row
+         * that says which vendor the account acts for.
+         * docs/vendor/vendor-onboarding-flow.md.
+         */
+        vendorInvitations: {
+            invite: async ({ email, invitedById, inviterPermissions }) => {
+                const role = await prisma.role.findUnique({
+                    where: { name: VENDOR_ROLE_NAME },
+                    select: { id: true },
+                });
+                if (!role) {
+                    throw new AppError(
+                        `The ${VENDOR_ROLE_NAME} role is not seeded. Run pnpm db:seed:authz.`,
+                        503,
+                        'SUPPLY_VENDOR_INVITATIONS_UNAVAILABLE',
+                    );
+                }
+                const result = await accessControlModule.invitations.invite({
+                    dto: { email, roleId: role.id, scopeType: RoleScopeType.OWN },
+                    invitedById,
+                    inviterPermissions,
+                });
+                return {
+                    invitationId: result.invitation.id,
+                    userId: result.invitation.acceptedUserId,
+                    outcome: result.outcome,
+                    expiresAt: result.invitation.expiresAt,
+                };
+            },
+            revoke: async ({ invitationId, revokedById, reason }) => {
+                await accessControlModule.invitations.revoke({ id: invitationId, revokedById, reason });
+            },
+        },
         // Same adapter arrangement as skus and releases: the lambda closes over
         // the recorder and only runs per request, so construction order here
         // does not matter.
@@ -525,7 +589,8 @@ export function bootstrap(): Bootstrapped {
                 eventType: string;
                 actorId: string;
                 organizationId: string | null;
-                resourceType: 'Vendor' | 'SupplyBatch' | 'NfcTag';
+                actorType?: 'HITBOX_ADMIN' | 'VENDOR' | undefined;
+                resourceType: 'Vendor' | 'VendorMember' | 'VendorDropAssignment' | 'SupplyBatch' | 'NfcTag';
                 resourceId: string | null;
                 result: 'SUCCESS' | 'DENIED';
                 correlationId: string;
@@ -535,7 +600,7 @@ export function bootstrap(): Bootstrapped {
             }) =>
                 auditModule.recorder.record({
                     eventType: input.eventType,
-                    actor: { type: 'HITBOX_ADMIN', id: input.actorId },
+                    actor: { type: input.actorType ?? 'HITBOX_ADMIN', id: input.actorId },
                     result: input.result,
                     organizationId: input.organizationId,
                     resource: { type: input.resourceType, id: input.resourceId },
@@ -558,7 +623,12 @@ export function bootstrap(): Bootstrapped {
 
     // NFC authenticity domain: single-tap claim, verify a tag, and read the
     // provenance ledger. Owns ProductClaim + BlockchainLedger.
-    const claimsModule = createClaimsModule({ prisma, eventBus, mediaUrls });
+    const claimsModule = createClaimsModule({
+        prisma,
+        eventBus,
+        mediaUrls,
+        tagUidHash: tagCipher ? (uid: string) => tagCipher.hash(uid) : undefined,
+    });
     const claimsRouters = claimsModule.createRouters(authModule.requireAuth);
 
     // ── Money ───────────────────────────────────────────────────────────────
@@ -751,6 +821,7 @@ export function bootstrap(): Bootstrapped {
         adminSkus: skusModule.createRouter(authModule.requireAuth),
         adminOrganizations: organizationsModule.createRouter(authModule.requireAuth),
         adminSupply: supplyModule.createRouter(authModule.requireAuth),
+        vendor: supplyModule.createVendorRouter(authModule.requireAuth),
         adminArtists: artistModule.createAdminRouter(authModule.requireAuth),
         adminArtistCollections: artistModule.createCollectionsAdminRouter(authModule.requireAuth),
         adminAudit: auditModule.createAdminRouter(authModule.requireAuth),

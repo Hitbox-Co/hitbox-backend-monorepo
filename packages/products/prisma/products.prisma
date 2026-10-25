@@ -93,6 +93,8 @@ model Drop {
   cogsReconciliations CogsReconciliation[]
   /// Vendor consignments received against this drop — see packages/supply.
   supplyBatches       SupplyBatch[]
+  /// Vendors allowed to supply this drop through the vendor portal.
+  vendorAssignments   VendorDropAssignment[]
 }
 
 /// A purchasable option of a drop — "M / Black", "Pack of 5", "A3 Limited".
@@ -137,6 +139,10 @@ model DropVariant {
   skus          Sku[]
   orders        Order[]
   wishlistItems WishlistItem[]
+  /// Vendor supply, per variant — see packages/supply.
+  vendorAllotments VendorVariantAllotment[]
+  supplyBatchLines SupplyBatchLine[]
+  nfcTags          NfcTag[]
 
   @@unique([productId, optionName, optionValue])
   @@unique([productId, optionsKey])
