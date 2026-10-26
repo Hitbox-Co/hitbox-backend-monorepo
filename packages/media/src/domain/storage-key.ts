@@ -11,6 +11,7 @@ import { AssetType } from '@hitbox/database';
  *     exclusive-content/collections/{collectionId}/{assetId}.{ext}
  *     legal-documents/organizations/{organizationId}/{assetId}.{ext}
  *     supply-spreadsheets/vendors/{vendorId}/{assetId}.{ext}
+ *     return-evidence/orders/{orderId}/{assetId}.{ext}
  *     other/{ownerType}/{ownerId}/{assetId}.{ext}
  *
  * Folder-first-by-type because the three things that differ between asset
@@ -36,6 +37,13 @@ export const OwnerType = {
     artist: 'artist',
     user: 'user',
     vendor: 'vendor',
+    /**
+     * A buyer's order — only for return evidence. Like `vendor` it maps to no
+     * `MediaAsset` column: the link is the payments module's `RefundEvidence`
+     * row, and the order id lives in the key so a photo cannot be moved to a
+     * different order's return.
+     */
+    order: 'order',
 } as const;
 export type OwnerType = (typeof OwnerType)[keyof typeof OwnerType];
 
@@ -45,6 +53,7 @@ const TOP_LEVEL: Record<AssetType, string> = {
     [AssetType.EXCLUSIVE_CONTENT]: 'exclusive-content',
     [AssetType.LEGAL_DOCUMENT]: 'legal-documents',
     [AssetType.SUPPLY_SPREADSHEET]: 'supply-spreadsheets',
+    [AssetType.RETURN_EVIDENCE]: 'return-evidence',
     [AssetType.OTHER]: 'other',
 };
 
@@ -56,6 +65,7 @@ const OWNER_FOLDER: Record<OwnerType, string> = {
     artist: 'artists',
     user: 'users',
     vendor: 'vendors',
+    order: 'orders',
 };
 
 /**
@@ -69,6 +79,9 @@ export const ALLOWED_OWNERS: Record<AssetType, OwnerType[]> = {
     [AssetType.EXCLUSIVE_CONTENT]: ['product', 'collection'],
     [AssetType.LEGAL_DOCUMENT]: ['organization'],
     [AssetType.SUPPLY_SPREADSHEET]: ['vendor'],
+    [AssetType.RETURN_EVIDENCE]: ['order'],
+    // Not `order`: return photos go to return-evidence/ only, where the
+    // "never public" guarantee and its lifecycle rule are written.
     [AssetType.OTHER]: ['product', 'collection', 'organization', 'artist', 'user', 'vendor'],
 };
 
@@ -127,6 +140,18 @@ export function buildStorageKey(input: {
     const owner = OWNER_FOLDER[input.ownerType];
     const ext = extensionOf(input.fileName);
     return `${top}/${owner}/${input.ownerId}/${input.assetId}.${ext}`;
+}
+
+/**
+ * The order a return-evidence key was issued for, or null for any other key.
+ *
+ * Read from the key rather than a column because the key is what the upload
+ * URL was signed for: an asset whose key names order A is a photo of order A,
+ * whatever anyone later claims.
+ */
+export function orderOfEvidenceKey(storageRef: string): string | null {
+    const match = /^return-evidence\/orders\/([^/]+)\/[^/]+$/.exec(storageRef);
+    return match?.[1] ?? null;
 }
 
 /** Derived sizes live beside the original so the prefix stays browsable. */

@@ -2,7 +2,7 @@ import { AuthorizationDomain, RoleScopeType } from '@hitbox/database';
 import { RESOURCE_DOMAIN, isCatalogPermission, findCatalogPermission } from './permission-catalog';
 
 /**
- * THE ROLE CATALOG — the twelve system roles, each a named set of catalog
+ * THE ROLE CATALOG — the thirteen system roles, each a named set of catalog
  * permission keys. Seeded into `roles` + `role_permissions` with
  * `isSystem = true`.
  *
@@ -22,7 +22,7 @@ import { RESOURCE_DOMAIN, isCatalogPermission, findCatalogPermission } from './p
  *     HITBOX_PLATFORM_ENGINEER as a second assignment.
  */
 
-export type EntityGroup = 'end_user' | 'brand_artist' | 'hitbox_seller_org';
+export type EntityGroup = 'end_user' | 'brand_artist' | 'hitbox_seller_org' | 'vendor';
 
 export interface RoleDefinition {
     /** Stable machine name; also the unique key in `roles`. */
@@ -150,6 +150,24 @@ const ARTIST: RoleDefinition = {
 };
 
 // ════════════════════════════════════════════════════════════════════════════
+// BUSINESS — vendor (supplier staff)
+// ════════════════════════════════════════════════════════════════════════════
+
+const VENDOR: RoleDefinition = {
+    name: 'VENDOR',
+    displayName: 'Vendor',
+    entityGroup: 'vendor',
+    domain: AuthorizationDomain.BUSINESS,
+    defaultScopeType: RoleScopeType.OWN,
+    description:
+        "A supplier's staff member using the vendor portal. Books consignments and registers chip manifests for the drops HitBox assigned to their vendor — nothing else. Granted through a vendor invitation, which also links the account to its vendor.",
+    permissions: [
+        'vendor-supply:read:own',
+        'vendor-supply:create:own',
+    ],
+};
+
+// ════════════════════════════════════════════════════════════════════════════
 // BUSINESS — HitBox seller org (platform-wide)
 // ════════════════════════════════════════════════════════════════════════════
 
@@ -165,6 +183,7 @@ const HITBOX_SYSTEM_ADMIN: RoleDefinition = {
         'self-profile:manage:global',
         'buyer-profile:manage:global',
         'drop:manage:global',
+        'drop-type:manage:global',
         'release-approval:manage:global',
         'release-approval:override:global',
         'collectible-instance:manage:global',
@@ -340,6 +359,7 @@ export const ROLE_CATALOG: readonly RoleDefinition[] = Object.freeze([
     ARTIST,
     BRAND_ADMIN,
     BRAND_EMPLOYEE,
+    VENDOR,
     HITBOX_SYSTEM_ADMIN,
     HITBOX_DROP_MANAGER,
     HITBOX_CONTENT_MANAGER,

@@ -32,6 +32,11 @@ export const ALLOWED_MIME_TYPES: Record<AssetType, string[]> = {
         'application/vnd.ms-excel',
         'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     ],
+    // HEIC/HEIF because that is what an iPhone camera produces; refusing it
+    // would make "photograph the damage" fail for most phone users.
+    [AssetType.RETURN_EVIDENCE]: [
+        'image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif',
+    ],
     [AssetType.OTHER]: [],
 };
 
@@ -42,6 +47,7 @@ export const MAX_SIZE_BYTES: Record<AssetType, number> = {
     [AssetType.EXCLUSIVE_CONTENT]: 500 * 1024 * 1024,
     [AssetType.LEGAL_DOCUMENT]: 25 * 1024 * 1024,
     [AssetType.SUPPLY_SPREADSHEET]: 25 * 1024 * 1024,
+    [AssetType.RETURN_EVIDENCE]: 15 * 1024 * 1024,
     [AssetType.OTHER]: 25 * 1024 * 1024,
 };
 
@@ -50,6 +56,14 @@ export const UPLOAD_URL_TTL_SECONDS = 300;
 
 /** Presigned GET lifetime. Regenerated per request, never cached server-side. */
 export const DOWNLOAD_URL_TTL_SECONDS = 60;
+
+/**
+ * GET lifetime for return-evidence photos shown on a refund. Longer than the
+ * 60 s above because these render as a gallery an operator studies while
+ * deciding, not a single click-through download; still short enough that a
+ * URL copied out of the page stops working within minutes.
+ */
+export const EVIDENCE_VIEW_URL_TTL_SECONDS = 300;
 
 export const MEDIA_DEFAULT_LIMIT = 20;
 export const MEDIA_MAX_LIMIT = 100;

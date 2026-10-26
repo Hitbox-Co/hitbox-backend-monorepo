@@ -36,6 +36,11 @@
 **There is no SQS queue, no scan worker and no scan callback in this
 deployment.** See 8 for what that means and what was left in place.
 
+Artists upload their own avatar and cover image through
+`/api/v1/artist/me/{avatar|cover}/upload-url` — the same presigned flow into
+`profile-images/artists/…`, without needing the media capability. See
+[artist/artist-profile-api.md §7](../artist/artist-profile-api.md#7-avatar--cover-image--upload-set-remove).
+
 The backend never proxies file bytes. A 500 MB `EXCLUSIVE_CONTENT` upload
 never touches a Railway dyno — only the ~1 KB presign request does.
 
@@ -310,6 +315,12 @@ and leaves the bytes alone.
 }
 ```
 
+`ListBucket` is no longer only for tooling: the return-photo check (7) `HEAD`s
+objects, and S3 only answers `404` for a missing key to a caller that holds
+`ListBucket` — otherwise it says `403`. `HeadObject` itself needs no extra
+action; it is authorised by `s3:GetObject`. Keep the Sid name or rename it,
+but don't drop the statement.
+
 Note the two resource shapes: object actions take `bucket/*`, `ListBucket`
 takes the bucket ARN with no `/*`. Getting that backwards is the usual cause
 of a policy that looks right and denies everything.
@@ -355,6 +366,7 @@ s3://hitbox-media-prod/
 │                         collections/{collectionId}/{assetId}.{ext}    private
 ├── legal-documents/      organizations/{organizationId}/{assetId}.{ext} private
 ├── supply-spreadsheets/  vendors/{vendorId}/{assetId}.{ext}            private
+├── return-evidence/      orders/{orderId}/{assetId}.{ext}              private
 └── other/                {ownerType}/{ownerId}/{assetId}.{ext}         private
 ```
 
@@ -403,6 +415,13 @@ aws s3api put-bucket-lifecycle-configuration --bucket hitbox-media-prod \
 }
 ```
 
+`return-evidence/` (buyer photos of an item being returned) also gets **no
+expiration rule** for now: the photos are the evidence in a refund decision and
+in any later chargeback, and a card network can open a dispute months after
+the sale. If you add one later, make it no shorter than your dispute window
+(≥ 18 months is a safe floor) — and remember an expired object leaves its
+`RefundEvidence` row showing a broken image.
+
 Deliberately **no expiration rule on `exclusive-content/` or
 `legal-documents/`** — those are retention-sensitive, and an object that expires
 out from under a `MediaAsset` row leaves a registry entry pointing at nothing.
@@ -427,7 +446,19 @@ This is the part that differs most from a signed-everything setup.
 | `exclusive-content/` | none | `GET /admin/media/:assetId/url` → 60 s presigned GET |
 | `legal-documents/` | none | Same |
 | `supply-spreadsheets/` | none | Same |
+| `return-evidence/` | none | **Not** via `/admin/media`'s URL route in practice: each refund's `evidence[]` carries **300 s** presigned GETs (`EVIDENCE_VIEW_URL_TTL_SECONDS`), shown to the buyer and to refund staff |
 | `other/` | none | Same |
+
+`return-evidence/` must **never** be added to the public bucket policy. These
+are customer photos — a home, a face, a shipping label with an address. The
+test suite pins the prefix to the private side.
+
+Return-evidence uploads also need **`s3:ListBucket`** (already in the IAM
+policy in 5): before accepting a return the API `HEAD`s each photo to prove
+the bytes arrived, and without `ListBucket` S3 answers a HEAD on a missing key
+with `403` instead of `404`. The adapter refuses to read a 403 as "not
+uploaded" — it surfaces as an error — so a missing grant is loud, not a
+stream of buyers told their photos failed.
 
 `GET /admin/media/:assetId/url` works for **both**. For a public key it returns
 the permanent URL with `expiresIn: null` and `public: true`; for a private key

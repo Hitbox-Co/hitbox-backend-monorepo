@@ -13,6 +13,15 @@ import type { DisputeService } from './dispute.service';
 import type { PaymentService } from './payment.service';
 import type { RefundService } from './refund.service';
 
+/** Stripe `refund.status` → ours. `requires_action` is still waiting on someone. */
+const STRIPE_REFUND_STATUS: Record<string, 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED'> = {
+    pending: 'PENDING',
+    requires_action: 'PENDING',
+    succeeded: 'SUCCEEDED',
+    failed: 'FAILED',
+    canceled: 'CANCELED',
+};
+
 export interface WebhookServiceDeps {
     webhooks: WebhookRepository;
     payments: PaymentRepository;
@@ -169,15 +178,26 @@ export class WebhookService {
                 });
                 return;
             }
-            case 'REFUND_SETTLED': {
-                const refundId = this.stringField(object, 'id');
-                if (refundId) {
-                    await this.deps.refunds.confirmSettlementFromGateway({
-                        gatewayRefundId: refundId,
-                        processedAt: this.timestampOf(payload),
-                        correlationId,
-                    });
-                }
+            case 'REFUND_UPDATED': {
+                const gatewayRefundId = this.stringField(object, 'id');
+                const status = STRIPE_REFUND_STATUS[this.stringField(object, 'status') ?? ''];
+                if (!gatewayRefundId || !status) return;
+                const metadata = object['metadata'] as Record<string, unknown> | undefined;
+                const amount = object['amount'];
+                await this.deps.refunds.applyGatewayRefundUpdate({
+                    eventType,
+                    gatewayRefundId,
+                    status,
+                    failureReason: this.stringField(object, 'failure_reason'),
+                    refundRequestId: this.stringField(metadata, 'refundRequestId'),
+                    // Either may be a bare id or, if expanded, an object.
+                    paymentRefs: ['payment_intent', 'charge']
+                        .map((key) => this.idOf(object[key]))
+                        .filter((ref): ref is string => ref !== null),
+                    amountMinor: typeof amount === 'number' ? amount : null,
+                    occurredAt: this.timestampOf(payload),
+                    correlationId,
+                });
                 return;
             }
             case 'DISPUTE_OPENED':
@@ -259,6 +279,12 @@ export class WebhookService {
             { gatewayRef, transactionId },
             'webhook referenced a charge this platform does not know',
         );
+        return null;
+    }
+
+    private idOf(value: unknown): string | null {
+        if (typeof value === 'string') return value;
+        if (typeof value === 'object' && value !== null) return this.stringField(value as Record<string, unknown>, 'id');
         return null;
     }
 

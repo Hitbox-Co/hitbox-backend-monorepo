@@ -14,6 +14,9 @@
 /// is earned rather than who has it; the grants are ContentUnlock rows.
 model ContentBundle {
   id           String            @id @db.Uuid
+  /// Human-readable record id (`cbd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name         String
   description  String?
   productId    String?           @db.Uuid
@@ -38,6 +41,9 @@ model ContentBundle {
 /// (bundle, asset) so an asset cannot be listed twice in the same bundle.
 model ContentBundleItem {
   id       String        @id @db.Uuid
+  /// Human-readable record id (`cbi…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   bundleId String        @db.Uuid
   bundle   ContentBundle @relation(fields: [bundleId], references: [id])
   assetId  String        @db.Uuid
@@ -54,6 +60,9 @@ model ContentBundleItem {
 /// control.
 model ContentUnlock {
   id              String        @id @db.Uuid
+  /// Human-readable record id (`cul…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId          String        @db.Uuid
   user            User          @relation(fields: [userId], references: [id])
   bundleId        String        @db.Uuid

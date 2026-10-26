@@ -13,11 +13,29 @@
 > Creating the drop itself, the accepted request formats (and the `422`
 > troubleshooting table), and the image gallery:
 > [product-upload-api.md](product-upload-api.md).
+> Drop types, variant rules and generating `DropVariant` rows — the
+> "business SKU", not the serialized `Sku` unit:
+> [drop-types-and-variants.md](drop-types-and-variants.md).
 > Session handling and the Clerk flow: [authentication.md](authentication.md).
 > The rest of the admin write surface: [admin-write-apis.md](admin-write-apis.md).
 > Screen-by-screen reference: [admin-console-api.md](admin-console-api.md).
 
 ---
+
+> ⚠️ **Minting now waits for approval.** An edition cannot be minted until the
+> drop's owner has approved it — `409 SKUS_NOT_APPROVED` otherwise. A drop
+> naming neither an artist nor an organization needs no approval and is
+> mintable immediately, including through the `skus` block on
+> `POST /admin/products`. Full rule:
+> [drop-approval-lifecycle.md 10](drop-approval-lifecycle.md#10-minting-waits-for-approval).
+
+> 🆕 **Minting also checks the drop type's variant rules** — after the
+> approval check, which is unchanged. A drop whose type `REQUIRES` variants
+> (T-shirt, card, poster…) cannot mint without a `variantId`; a `NONE` type
+> (keychain) cannot mint with one; an archived/inactive variant, or one past
+> its own `totalSupply`, is refused. Legacy drops with no type mint exactly as
+> before. Codes and details:
+> [drop-types-and-variants.md §8](drop-types-and-variants.md#8-minting-and-submitting--what-changed).
 
 ## 1. The two things being created
 
@@ -36,9 +54,32 @@ integration mistake:
 number of `Sku` rows is the **fact**. They are allowed to disagree while an
 edition is being minted, and the API tells you the gap (`remainingSupply`).
 
-A unit's ownership history is not written here. The claims module appends the
-`MINT` row of a unit's hash chain on first use, so minting stays a catalog
-operation and the ledger stays append-only under a single owner.
+**Every unit is born with its `MINT` ledger record.** When units are minted
+— through `POST /admin/products/:productId/skus` or the inline `skus` block on
+`POST /admin/products` — each one gets a `BlockchainLedger` row (sequence 0,
+`txType: MINT`, owner `HitBox`, no previous hash) **in the same database
+transaction** that inserts the units. They commit together or roll back
+together: there is never a unit without its MINT record, and never a MINT
+record for a unit that was rolled back.
+
+| MINT row field | Value |
+|---|---|
+| `sequenceNo` | `0` — the start of the chain |
+| `txType` | `MINT` |
+| `previousHash` | `null` |
+| `currentHash` | `SHA-256(groupCode + tagId + "HitBox" + createdAt)` — same formula as every other row |
+| `actorType` / `actorRef` | `USER` + the minting admin's user id (mint endpoint); `SYSTEM` + null (inline mint at drop creation) |
+| `reason` | `Minted` |
+
+`tagId` in the hash is whatever was bound at mint time — usually nothing,
+since tags are normally bound later from the vendor manifest (3a). The genesis
+record describes the unit as it was born.
+
+The ledger table belongs to the claims module, so the skus module writes
+through an injected port (`ISkuMintLedger`, implemented by
+`claimsModule.mintLedger`) and passes it its own transaction client. Units
+minted before this change get their MINT row lazily on first claim, as
+before.
 
 ---
 
@@ -662,6 +703,7 @@ All errors use the platform envelope:
 | `404` | `SKUS_NOT_FOUND` | no such unit, **or** it belongs to a drop outside your organization |
 | `404` | `SKUS_PRODUCT_NOT_FOUND` | no such drop, **or** outside your organization |
 | `409` | `SKUS_SUPPLY_EXCEEDED` | minting would push the edition past `totalSupply` |
+| `409` | `SKUS_VARIANT_SUPPLY_EXCEEDED` | minting would push a variant past its own `totalSupply`. Enforced inside the mint transaction, on every mint path (this endpoint, drop creation, supply accept). |
 | `409` | `SKUS_TAG_TAKEN` | an NFC tag UID is already bound to another unit |
 | `409` | `SKUS_SERIAL_TAKEN` | five consecutive serial-range collisions |
 | `409` | `SKUS_UNIT_NOT_IN_PRODUCT` | a manifest row names a unit that is not in this drop |

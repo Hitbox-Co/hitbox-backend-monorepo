@@ -1,6 +1,7 @@
 import { Prisma } from '@hitbox/database';
 import type { OrderStatus, PrismaClient } from '@hitbox/database';
 import type { ListOrdersQuery } from '../dto/order.dto';
+import { recordStatusChange } from './order-history';
 
 /**
  * The only place in this module that touches Prisma.
@@ -22,6 +23,7 @@ const listSelect = {
     placedAt: true,
     shippedAt: true,
     deliveredAt: true,
+    unitAssignedAt: true,
     unitPrice: true,
     amount: true,
     currency: true,
@@ -34,6 +36,8 @@ export type OrderListRow = Prisma.OrderGetPayload<{ select: typeof listSelect }>
 const detailSelect = {
     ...listSelect,
     gateway: true,
+    paidAt: true,
+    unitAssignedById: true,
     trackingNote: true,
     termsAcceptedAt: true,
     updatedAt: true,
@@ -71,14 +75,28 @@ const detailSelect = {
     paymentTransactions: {
         orderBy: { createdAt: 'desc' },
         select: {
-            id: true, status: true, gateway: true, amount: true,
-            currency: true, needsReview: true, failureReason: true, createdAt: true,
+            id: true, status: true, gateway: true, gatewayRef: true, amount: true,
+            currency: true, needsReview: true, reviewedAt: true, reviewNote: true,
+            failureReason: true, createdAt: true, updatedAt: true,
         },
     },
+    statusHistory: {
+        orderBy: { occurredAt: 'asc' },
+        select: {
+            id: true, fromStatus: true, toStatus: true, source: true, actorId: true,
+            reason: true, metadata: true, occurredAt: true,
+        },
+    },
+    // Newest first: the ACTIVE one, then any it replaced.
+    shipments: { orderBy: { createdAt: 'desc' } },
     refundRequests: {
         orderBy: { createdAt: 'desc' },
         select: {
-            id: true, status: true, amount: true, reason: true, createdAt: true,
+            id: true, status: true, amount: true, currency: true, reason: true, reasonCode: true,
+            physicalReturnRequired: true, physicalReturnConfirmedAt: true, nfcTagCondition: true,
+            approvedAt: true, rejectionReason: true, gatewayRefundId: true, processedAt: true,
+            gatewayStatus: true, gatewayFailureReason: true, gatewayStatusAt: true,
+            claimRevokedAt: true, createdAt: true, updatedAt: true,
         },
     },
 } satisfies Prisma.OrderSelect;
@@ -145,16 +163,34 @@ export class OrderRepository {
         trackingNote?: string | undefined;
         timestamps: Record<string, Date>;
         now: Date;
+        actorId: string;
+        reason?: string | null;
     }): Promise<number> {
-        const result = await this.prisma.order.updateMany({
-            where: { id: input.id, status: input.from },
-            data: {
-                status: input.to,
-                ...(input.trackingNote !== undefined ? { trackingNote: input.trackingNote } : {}),
-                ...input.timestamps,
-                updatedAt: input.now,
-            },
+        return this.prisma.$transaction(async (tx) => {
+            const result = await tx.order.updateMany({
+                where: { id: input.id, status: input.from },
+                data: {
+                    status: input.to,
+                    ...(input.trackingNote !== undefined ? { trackingNote: input.trackingNote } : {}),
+                    ...input.timestamps,
+                    updatedAt: input.now,
+                },
+            });
+            if (result.count === 0) return 0;
+
+            // An operator confirming delivery (from the carrier's own tracking
+            // page — there is no feed) closes the parcel too.
+            if (input.to === 'DELIVERED') {
+                await tx.orderShipment.updateMany({
+                    where: { orderId: input.id, status: 'ACTIVE', deliveredAt: null },
+                    data: { deliveredAt: input.now, deliveredVia: 'ADMIN', updatedAt: input.now },
+                });
+            }
+            await recordStatusChange(tx, {
+                orderId: input.id, from: input.from, to: input.to, source: 'ADMIN',
+                actorId: input.actorId, reason: input.reason ?? null, at: input.now,
+            });
+            return result.count;
         });
-        return result.count;
     }
 }

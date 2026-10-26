@@ -9,6 +9,8 @@ export const PAYMENTS_ERROR_CODES = {
     OUT_OF_STOCK: 'PAYMENTS_OUT_OF_STOCK',
     /** No price is configured for the buyer's market. */
     NO_PRICE: 'PAYMENTS_NO_PRICE',
+    /** Resuming payment on an order that is not awaiting payment. */
+    ORDER_NOT_PAYABLE: 'PAYMENTS_ORDER_NOT_PAYABLE',
     /** The hold expired before payment settled. */
     RESERVATION_EXPIRED: 'PAYMENTS_RESERVATION_EXPIRED',
     /** Webhook signature missing, malformed, or wrong. */
@@ -25,7 +27,46 @@ export const PAYMENTS_ERROR_CODES = {
     AMOUNT_EXCEEDS_CAPTURE: 'PAYMENTS_AMOUNT_EXCEEDS_CAPTURE',
     /** No payment provider adapter is wired on this deployment. */
     GATEWAY_UNAVAILABLE: 'PAYMENTS_GATEWAY_UNAVAILABLE',
+    /** The provider answered and refused (already refunded, unknown charge…). */
+    GATEWAY_REJECTED: 'PAYMENTS_GATEWAY_REJECTED',
+    /** The provider could not be reached, or failed on its side. Safe to retry. */
+    GATEWAY_UNREACHABLE: 'PAYMENTS_GATEWAY_UNREACHABLE',
+    /** A buyer placing a return must attach at least one photo. */
+    RETURN_EVIDENCE_REQUIRED: 'PAYMENTS_RETURN_EVIDENCE_REQUIRED',
+    /** A buyer placing a return must describe the problem properly. */
+    RETURN_DESCRIPTION_TOO_SHORT: 'PAYMENTS_RETURN_DESCRIPTION_TOO_SHORT',
+    /** One or more attached photos cannot be used; `details.problems` says why. */
+    RETURN_EVIDENCE_INVALID: 'PAYMENTS_RETURN_EVIDENCE_INVALID',
+    /** No media bucket on this deployment, so photos cannot be taken. */
+    EVIDENCE_STORAGE_UNAVAILABLE: 'PAYMENTS_EVIDENCE_STORAGE_UNAVAILABLE',
+    /** More than RETURN_WINDOW_DAYS since delivery: no return, and no buyer refund. */
+    RETURN_WINDOW_CLOSED: 'PAYMENTS_RETURN_WINDOW_CLOSED',
 } as const;
+
+// ── Return evidence ─────────────────────────────────────────────────────────
+
+/**
+ * Photos on a return. At least one, because "it arrived damaged" with no
+ * picture is unreviewable; at most eight, because more than that is a
+ * gallery nobody reads and eight parallel HEADs is already the cost of a
+ * request.
+ */
+export const RETURN_EVIDENCE_MIN_PHOTOS = 1;
+export const RETURN_EVIDENCE_MAX_PHOTOS = 8;
+
+/**
+ * Minimum description length on a buyer-placed return, after trimming. The
+ * generic refund `reason` accepts one character; a return needs enough words
+ * for the warehouse to know what to look for ("Tag doesn't scan, sleeve
+ * seam split" is 33).
+ */
+export const RETURN_DESCRIPTION_MIN_LENGTH = 20;
+
+/**
+ * Default return window, in days after delivery. Bootstrap passes
+ * RETURN_WINDOW_DAYS from the environment; this is only the fallback.
+ */
+export const DEFAULT_RETURN_WINDOW_DAYS = 10;
 
 // ── Capabilities (all already in the permission catalog) ────────────────────
 
@@ -59,6 +100,10 @@ export const PAYMENT_EVENTS = {
     REFUND_REQUESTED: 'payments.refund.requested',
     REFUND_APPROVED: 'payments.refund.approved',
     REFUND_PROCESSED: 'payments.refund.processed',
+    /** The provider failed or cancelled a refund after it was processed — the buyer was not paid. */
+    REFUND_FAILED: 'payments.refund.failed',
+    /** A refund was issued at the provider that matches no approved HitBox refund. */
+    REFUND_UNMATCHED: 'payments.refund.unmatched',
     DISPUTE_OPENED: 'payments.dispute.opened',
     DISPUTE_RESOLVED: 'payments.dispute.resolved',
 } as const;
@@ -84,8 +129,11 @@ export const STRIPE_EVENT_MAP: Record<string, string> = {
     'payment_intent.payment_failed': 'PAYMENT_FAILED',
     'charge.succeeded': 'PAYMENT_SUCCEEDED',
     'charge.failed': 'PAYMENT_FAILED',
-    'charge.refunded': 'REFUND_SETTLED',
-    'refund.updated': 'REFUND_SETTLED',
+    // The refund object itself, in every state. `charge.refunded` is left
+    // out: its object is the charge, and these three already cover it.
+    'refund.created': 'REFUND_UPDATED',
+    'refund.updated': 'REFUND_UPDATED',
+    'refund.failed': 'REFUND_UPDATED',
     'charge.dispute.created': 'DISPUTE_OPENED',
     'charge.dispute.closed': 'DISPUTE_CLOSED',
 };

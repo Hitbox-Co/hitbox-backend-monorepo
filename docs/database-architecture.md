@@ -52,7 +52,7 @@ Every model has exactly one owning module. The merge script enforces this — a 
 | **Access control** | `@hitbox/access-control` | `Role`, `Permission`, `RolePermission`, `RoleAssignment` | Authorisation: who may do what, at what scope. |
 | **Organizations** | `@hitbox/organizations` | `Organization` | The tenant root — HitBox, brands, artist-individuals. |
 | **Artist** | `@hitbox/artist` | `Artist`, `ArtistCollection`, `ArtistBrandLink` | Creator identity, curated series, artist↔brand deals. |
-| **Products** | `@hitbox/products` | `Drop`, `DropVariant`, `DropImage`, `DropPrice` | The catalog — what is for sale, in which options, at what price. Tables are still `Product*`; see [v3.1](schema-v3.1-changes.md). |
+| **Products** | `@hitbox/products` | `Drop`, `DropVariant`, `DropVariantOption`, `DropImage`, `DropPrice`, `DropType`, `DropTypeDimension`, `DropTypeDimensionValue` | The catalog — what is for sale, in which options, at what price. Tables were renamed from `Product*` in v3.1.1; see [v3.1](schema-v3.1-changes.md). Also `DropType`, `DropTypeDimension`, `DropTypeDimensionValue`, `DropVariantOption` — the variant rules per product type; see [drop-types-and-variants.md](admin/drop-types-and-variants.md). |
 | **Markets** | `@hitbox/markets` | `Market`, `MarketCountry` | Pricing/currency regions and country→market resolution. |
 | **Releases** | `@hitbox/releases` | `ReleaseApproval` | The review workflow that gates `Drop.status`. |
 | **SKUs** | `@hitbox/skus` | `Sku`, `NfcVerification` | The serialized-item registry: one row per physical collectible, one per tap. `NfcTag` now belongs to `supply` (see below). |
@@ -62,7 +62,7 @@ Every model has exactly one owning module. The merge script enforces this — a 
 | **Content** | `@hitbox/content` | `ContentBundle`, `ContentBundleItem`, `ContentUnlock` | Exclusive content and the per-user grants that open it. |
 | **Evolution** | `@hitbox/evolution` | `EvolutionRule`, `EvolutionEvent` | Collectibles that change as thresholds are crossed. |
 | **Orders** | `@hitbox/orders` | `Order`, `OrderAddress`, `InventoryReservation` | The purchase record and the stock it holds. |
-| **Payments** | `@hitbox/payments` | `PaymentTransaction`, `PaymentGatewayConfig`, `PaymentWebhookEvent`, `RefundRequest`, `DisputeCase` | Everything that talks to a payment provider. See [finance/](finance/README.md). |
+| **Payments** | `@hitbox/payments` | `PaymentTransaction`, `PaymentGatewayConfig`, `PaymentWebhookEvent`, `RefundRequest`, `RefundEvidence`, `DisputeCase` | Everything that talks to a payment provider. `RefundEvidence` links a buyer's return photos (`MediaAsset`, `RETURN_EVIDENCE`) to the refund — written with it in one transaction, never edited, `mediaAssetId` unique. See [finance/](finance/README.md). |
 | **Finance** | `@hitbox/finance` | `RoyaltyRule`, `RoyaltyLedgerEntry`, `RoyaltyPayout`, `AdjustmentEntry`, `FinanceLedgerEntry` | Royalty rules, accrual, payout batches, corrections and the platform ledger. See [finance/](finance/README.md). |
 | **Tax** | `@hitbox/tax` | `TaxConfiguration`, `Invoice`, `InvoiceLineItem`, `InvoiceNumberSequence`, `TaxReturnFiling`, `ArtistTaxDocument`, `TaxAdjustmentEntry` | GST/sales-tax rates, the customer invoice and its PDF, artist tax paperwork and the returns it is all reported on. See [tax/](tax/README.md). |
 | **Notifications** | `@hitbox/notifications` | `NotificationTemplate`, `Notification`, `NotificationPreference` | Templated delivery + per-user channel opt-in. |
@@ -215,7 +215,103 @@ buyer everywhere else.
 
 ---
 
-## 6. Working with the schema
+## 6. Human-readable record ids
+
+Every table carries **`publicCode`** alongside its uuid primary key:
+
+```
+odr066pmre6rmxf03qf1jk     an order
+inv066pmq811yf0h99y3vp     an invoice
+sku066pmqz45abcew2emge     a serialized unit
+```
+
+The uuid is still the key, and **every foreign key still points at it**.
+`publicCode` is the string a person reads down a phone, types into a search
+box, or quotes on a ticket. Nothing joins on it.
+
+### The shape
+
+```
+odr      066pmre6r      mxf03qf1jk
+└prefix  └time, 9 chars └random, 10 chars
+```
+
+| Part | | |
+|---|---|---|
+| **prefix** | 3 lowercase letters | Names the table, so a bare code is self-describing |
+| **time** | 45 bits, ms since 2020-01-01 | Codes sort chronologically, and collisions are confined to one millisecond |
+| **random** | 50 bits from `crypto.randomBytes` | Node's CSPRNG — **not** `Math.random()`, which is seeded per process, so two workers starting together would emit the same stream |
+
+Total: 22 characters. The alphabet is **Crockford Base32**
+(`0123456789abcdefghjkmnpqrstvwxyz`) — it drops **i, l, o, u** because `1`/`l`
+and `0`/`o` are indistinguishable when read aloud, and dropping `u` means no
+generated code can spell an obscenity.
+
+### Why it will not collide at millions of rows
+
+Two codes clash only if generated **in the same millisecond** *and* drawing the
+same 50-bit random value. For `k` rows in one millisecond the chance is about
+`k² / 2⁵¹`:
+
+| rows in the same millisecond | probability of a collision |
+|---|---|
+| 1,000 | 1 in 2,000,000,000 |
+| 10,000 | 1 in 22,000,000 |
+| 100,000 | 1 in 225,000 |
+
+**Total row count does not enter into it** — the timestamp partitions the
+space, so ten million rows over a year collide no more easily than ten thousand
+do. Every column also carries a UNIQUE index, so the one-in-a-billion case is a
+failed insert, never two records sharing a code.
+
+### How it gets written
+
+A **Prisma client extension** (`public-code.extension.ts`), applied once where
+the client is constructed. It covers `create`, `createMany`,
+`createManyAndReturn` and the create branch of `upsert`.
+
+No repository, service or module was changed. Threading a generator call
+through ~200 write sites would have meant a table whose code is *sometimes*
+written, and a code that is sometimes missing is worse than none — the gap only
+shows when somebody cannot find a record.
+
+Consequences worth knowing:
+
+- **Raw SQL bypasses it.** `$queryRaw` / `$executeRaw` do not pass through the
+  client extension. That is fine here because raw SQL is reserved for reads and
+  migrations, but a raw INSERT would leave a NULL code.
+- **A client built with bare `new PrismaClient()` bypasses it too.** Wrap it
+  with `withPublicCodes()` — `prisma/seed.ts` does exactly this.
+- **It never overwrites.** A caller supplying its own `publicCode` keeps it,
+  which is what lets a seed stay reproducible.
+- **Adding a table** is a two-line change: a prefix in `PUBLIC_CODE_PREFIXES`
+  and the column in the partial. A model with no registered prefix simply gets
+  no code.
+
+### The column
+
+```prisma
+publicCode String? @unique @db.VarChar(32)
+```
+
+Nullable on purpose: Postgres unique indexes do not collide on NULLs, so the
+migration applied to 68 tables with existing rows without a backfill and
+without locking them. Rows predating the column stay NULL until backfilled —
+`PUBLIC_CODE_PREFIXES` plus a `ctid`-based UPDATE does that (note `ctid`, not
+`id`: `AuditEventType` is keyed on `eventType` and `AuditRetentionPolicy` on
+`severity`).
+
+### Existing domain codes are unaffected
+
+`Sku.skuCode`, `Drop.groupCode`, `NfcTag.nfcTagCode`, `SkuClaim.claimCode`,
+`Invoice.invoiceNumber` and the rest stay exactly as they were. Those carry
+business meaning — a serial within an edition, a tax-compliant invoice sequence
+— and `publicCode` does not replace them. It is the one field name that exists
+on *every* table, which is what a console needs.
+
+---
+
+## 7. Working with the schema
 
 ### Commands (run from the repo root)
 
@@ -266,7 +362,7 @@ exists. Both are already present in the root `.env`, which
 
 ---
 
-## 7. Current state
+## 8. Current state
 
 Applied to Neon as two migrations — the baseline `20260910073121_init_hitbox_platform` and
 `20260910101500_add_authorization_domain_and_scopes` (the RBAC additions, see

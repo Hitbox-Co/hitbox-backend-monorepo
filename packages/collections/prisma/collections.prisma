@@ -14,6 +14,9 @@
 /// individually revocable by nulling the column.
 model BuyerCollection {
   id         String     @id @db.Uuid
+  /// Human-readable record id (`bcn…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   userId     String     @db.Uuid
   user       User       @relation(fields: [userId], references: [id])
   skuId      String     @db.Uuid

@@ -1,14 +1,15 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { Router } from 'express';
 import type { Request } from 'express';
-import { prisma } from '@hitbox/database';
+import { prisma, OrganizationType, RoleScopeType } from '@hitbox/database';
 import type { Prisma } from '@hitbox/database';
-import { eventBus, env } from '@hitbox/shared';
+import { AppError, createModuleLogger, eventBus, env } from '@hitbox/shared';
 import { createAuthModule } from '@hitbox/auth';
 import { createAccessControlModule } from '@hitbox/access-control';
 import { createAuditModule, correlationIdOf } from '@hitbox/audit';
 import { buildFinanceAccess, createFinanceModule } from '@hitbox/finance';
-import { buildPaymentAccess, createPaymentsModule } from '@hitbox/payments';
-import { createDashboardModule } from '@hitbox/dashboard';
+import { buildPaymentAccess, createPaymentsModule, createStripeGateway } from '@hitbox/payments';
+import { ReadScope, createDashboardModule, resolveAccess } from '@hitbox/dashboard';
 import { createMediaModule, isPublicKey, S3ObjectStorage } from '@hitbox/media';
 import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
@@ -22,7 +23,7 @@ import { createOrganizationsModule } from '@hitbox/organizations';
 import { createOrdersModule } from '@hitbox/orders';
 import { createReleasesModule } from '@hitbox/releases';
 import { createSkusModule } from '@hitbox/skus';
-import { createSupplyModule } from '@hitbox/supply';
+import { createSupplyModule, VENDOR_ROLE_NAME } from '@hitbox/supply';
 import {
     buildBuyerTaxAccess,
     buildTaxAccess,
@@ -31,6 +32,7 @@ import {
     supplierProfilesFromEnv,
 } from '@hitbox/tax';
 import { createLeadsModule } from '@hitbox/leads';
+import { createStripeSecrets } from './adapters/stripe-secrets';
 import { createTagCipher } from './adapters/tag-cipher';
 import { buildRoutes } from './routes';
 
@@ -52,10 +54,11 @@ export interface Bootstrapped {
      */
     webhookRouter: Router;
     /**
-     * Frees stock holds whose checkout never completed. Call it from a
-     * scheduler; it is idempotent and safe to run concurrently.
+     * The checkout sweep: frees stock holds whose checkout never completed,
+     * then cancels orders left unpaid past UNPAID_ORDER_GRACE_SECONDS.
+     * Idempotent and safe to run concurrently (docs/orders/checkout-sweep.md).
      */
-    releaseExpiredReservations(): Promise<number>;
+    runCheckoutSweep(): Promise<{ releasedHolds: number; cancelledOrders: number }>;
     /**
      * Subscribes the authorization cache to cross-instance invalidation
      * broadcasts. Until this runs, each process still caches locally but only
@@ -93,6 +96,11 @@ export function bootstrap(): Bootstrapped {
         // writes the adapter — see docs/authorization/admin-provisioning.md.
         identityInvitations: authModule.invitations,
         invitationTtlHours: env.ADMIN_INVITATION_TTL_HOURS,
+        // An artist invited without a brand still needs an organization: the
+        // ARTIST role's capabilities are organization-scoped, and an assignment
+        // with no organization satisfies none of them. A self-releasing artist
+        // is an organization of one, which is what ARTIST_INDIVIDUAL is for.
+        soloOrganizations: { ensureForArtist: (input) => ensureSoloOrganization(prisma, input) },
     });
 
     // The dashboard reads the caller's grants through the guard's own
@@ -175,6 +183,37 @@ export function bootstrap(): Bootstrapped {
         eventBus,
         guard: accessControlModule.guard,
         resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
+        /**
+         * An edition may not be minted until the drop's owner has approved it
+         * — a unit created for a drop the artist may yet reject is inventory
+         * referring to something nobody will ship.
+         *
+         * Same adapter the catalog uses to gate publication, and the same
+         * deferred-lambda arrangement: `releasesModule` is constructed further
+         * down, and this closure only runs per request.
+         */
+        releaseGate: {
+            describeLatest: (productId: string) =>
+                releasesModule.releaseGate.describeLatest(productId),
+        },
+        /**
+         * The drop type's variant rules — a REQUIRED-variant drop cannot mint
+         * a unit without a variant, a capped variant stops at its cap.
+         * Products owns drop types; deferred lambda because `productsModule`
+         * is constructed further down.
+         */
+        variantPolicy: {
+            checkMint: (input: { productId: string; variantId: string | null; count: number }) =>
+                productsModule.variantPolicy.checkMint(input),
+        },
+        /**
+         * Every unit is born with its MINT ledger record, written inside the
+         * minting transaction. Claims owns BlockchainLedger; deferred lambda
+         * because `claimsModule` is constructed further down.
+         */
+        mintLedger: {
+            recordMintWithin: (tx, input) => claimsModule.mintLedger.recordMintWithin(tx, input),
+        },
         // Adapted onto the real recorder, which is constructed further down —
         // the lambda closes over it and only runs per request, so the order of
         // the two `const`s here does not matter. Same arrangement as releases.
@@ -232,6 +271,50 @@ export function bootstrap(): Bootstrapped {
         // it live, and what currency does it settle in?" before the catalog
         // writes a price against it.
         markets: marketsModule.markets,
+        /**
+         * Releases owns ReleaseApproval, so releases answers "has this drop
+         * cleared review?" before the catalog takes it live. Without this,
+         * publishing is refused rather than allowed — see the port's own note.
+         *
+         * Wrapped in a lambda because `releasesModule` is constructed further
+         * down: the closure only runs per request, so declaration order here
+         * does not matter. Same arrangement as the audit adapters below.
+         */
+        releaseGate: {
+            describeLatest: (productId: string) =>
+                releasesModule.releaseGate.describeLatest(productId),
+            // Pure and synchronous — asked mid-create, when there is no drop
+            // row to look up yet, to refuse a `skus` block on a drop that will
+            // need its owner's approval first.
+            requiresApproval: (ownership: {
+                artistId: string | null;
+                organizationId: string | null;
+            }) => releasesModule.releaseGate.requiresApproval(ownership),
+        },
+        audit: {
+            record: (input: {
+                eventType: string;
+                actorId: string;
+                organizationId: string | null;
+                productId: string;
+                result: 'SUCCESS' | 'DENIED';
+                correlationId: string;
+                before?: Record<string, unknown> | undefined;
+                after?: Record<string, unknown> | undefined;
+                metadata?: Record<string, unknown> | undefined;
+            }) =>
+                auditModule.recorder.record({
+                    eventType: input.eventType,
+                    actor: { type: 'HITBOX_ADMIN', id: input.actorId },
+                    result: input.result,
+                    organizationId: input.organizationId,
+                    resource: { type: 'Drop', id: input.productId },
+                    ...(input.before ? { beforeState: input.before as Prisma.InputJsonValue } : {}),
+                    ...(input.after ? { afterState: input.after as Prisma.InputJsonValue } : {}),
+                    correlationId: input.correlationId,
+                    metadata: (input.metadata ?? {}) as Prisma.InputJsonValue,
+                }),
+        },
     });
 
     /**
@@ -259,6 +342,9 @@ export function bootstrap(): Bootstrapped {
             organizationIds: global ? null : orgIds,
             canSeeMoney: has('payment-royalty:'),
             canSeeBuyer: has('buyer-profile:'),
+            // Drives `money.canRequestRefund` on the order detail; the payments
+            // module enforces the same grant when the refund is actually raised.
+            canRefund: principal.permissions.includes('order:refund:global'),
             canOverride: principal.permissions.includes('release-approval:override:global'),
         };
     };
@@ -310,6 +396,14 @@ export function bootstrap(): Bootstrapped {
         eventBus,
         guard: accessControlModule.guard,
         resolveCaller: adminView,
+        unpaidOrderGraceSeconds: env.UNPAID_ORDER_GRACE_SECONDS,
+        // Deferred: the audit module is built further down. Only called at
+        // request time, long after bootstrap has finished.
+        audit: { record: (input, options) => auditModule.recorder.record(input, options) },
+        mediaUrls,
+        resolveBuyer: (req: Request) => req.auth?.accountId as string,
+        // Same number payments enforces, so the screens never disagree with it.
+        returnWindowDays: env.RETURN_WINDOW_DAYS,
     });
 
     /**
@@ -358,6 +452,8 @@ export function bootstrap(): Bootstrapped {
         guard: accessControlModule.guard,
         resolveCaller: releaseView,
         audit: releaseAudit,
+        // A drop whose type requires variants must have one before review.
+        variantPolicy: productsModule.variantPolicy,
     });
 
     const discoverModule = createDiscoverModule({
@@ -374,6 +470,28 @@ export function bootstrap(): Bootstrapped {
         prisma,
         eventBus,
         guard: accessControlModule.guard,
+        // Artist self-service: "which artist" is always the caller's own.
+        resolveUserId: (req: Request) => req.auth?.accountId,
+        // Media owns MediaAsset and the bucket; undefined on a deploy with no
+        // bucket, in which case avatar/cover uploads are refused clearly.
+        images: mediaModule?.profileImages,
+        // Products owns Drop; artists file their own active drops into their
+        // collections through its adapter. docs/artist-collection/.
+        drops: productsModule.collectionMembership,
+        // Deferred: the audit module is built further down. Only called at
+        // request time, long after bootstrap has finished.
+        audit: { record: (input, options) => auditModule.recorder.record(input, options) },
+        // Staff artist screens: sales, royalties, payouts, tax, claims and
+        // followers come from the reporting read model — those tables belong
+        // to other modules. docs/artist/artist-admin-api.md.
+        insights: dashboardModule.artistInsights,
+        // Money on those screens needs payment-royalty:read platform-wide, the
+        // dashboard's rule — the routes themselves are global-only.
+        canSeeMoney: async (req: Request) =>
+            resolveAccess(
+                await accessControlModule.guard.describePrincipal(req),
+                'payment-royalty',
+            )?.scope === ReadScope.GLOBAL,
     });
 
     // The organization directory — read-only, and the other half of the drop
@@ -393,12 +511,76 @@ export function bootstrap(): Bootstrapped {
      * and chip registration then answers 503 instead of writing rows under an
      * improvised key that no real tap would ever match.
      */
+    // One cipher for the deployment: supply registers chips with it and
+    // claims resolves taps with the same hash.
+    const tagCipher = createTagCipher(env);
+
     const supplyModule = createSupplyModule({
         prisma,
         eventBus,
         guard: accessControlModule.guard,
         resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
-        tagCipher: createTagCipher(env),
+        resolveUserId: (req: Request) => req.auth?.accountId,
+        tagCipher,
+        /**
+         * ACCEPTED consignment → sellable units: skus' minting core, inside the
+         * accept transaction, so serials, the drop's totalSupply cap and each
+         * unit's MINT ledger row are skus' own. docs/vendor/vendor-onboarding-flow.md.
+         */
+        stockMinter: {
+            // Release approval + variant rules + variant caps — the same checks
+            // the admin mint endpoint runs, so supply cannot mint around them.
+            assertMintable: (input) => skusModule.minting.assertMintAllowed(input),
+            mintBound: (tx, input) =>
+                skusModule.minting.mintWithin(tx, {
+                    productId: input.productId,
+                    groupCode: input.groupCode,
+                    totalSupply: input.totalSupply,
+                    count: input.nfcTagIds.length,
+                    variantId: input.variantId,
+                    nfcTagIds: input.nfcTagIds,
+                    vendorId: input.vendorId,
+                    supplyBatchId: input.supplyBatchId,
+                    provisioningBatchId: input.provisioningBatchId,
+                    actorId: input.actorId,
+                }),
+        },
+        /**
+         * Vendor portal sign-up is the ordinary staff invitation for the VENDOR
+         * role — identity-provider email, password set at sign-up, role granted
+         * on `users.account.provisioned`. Supply writes the VendorMember row
+         * that says which vendor the account acts for.
+         * docs/vendor/vendor-onboarding-flow.md.
+         */
+        vendorInvitations: {
+            invite: async ({ email, invitedById, inviterPermissions }) => {
+                const role = await prisma.role.findUnique({
+                    where: { name: VENDOR_ROLE_NAME },
+                    select: { id: true },
+                });
+                if (!role) {
+                    throw new AppError(
+                        `The ${VENDOR_ROLE_NAME} role is not seeded. Run pnpm db:seed:authz.`,
+                        503,
+                        'SUPPLY_VENDOR_INVITATIONS_UNAVAILABLE',
+                    );
+                }
+                const result = await accessControlModule.invitations.invite({
+                    dto: { email, roleId: role.id, scopeType: RoleScopeType.OWN },
+                    invitedById,
+                    inviterPermissions,
+                });
+                return {
+                    invitationId: result.invitation.id,
+                    userId: result.invitation.acceptedUserId,
+                    outcome: result.outcome,
+                    expiresAt: result.invitation.expiresAt,
+                };
+            },
+            revoke: async ({ invitationId, revokedById, reason }) => {
+                await accessControlModule.invitations.revoke({ id: invitationId, revokedById, reason });
+            },
+        },
         // Same adapter arrangement as skus and releases: the lambda closes over
         // the recorder and only runs per request, so construction order here
         // does not matter.
@@ -407,7 +589,8 @@ export function bootstrap(): Bootstrapped {
                 eventType: string;
                 actorId: string;
                 organizationId: string | null;
-                resourceType: 'Vendor' | 'SupplyBatch' | 'NfcTag';
+                actorType?: 'HITBOX_ADMIN' | 'VENDOR' | undefined;
+                resourceType: 'Vendor' | 'VendorMember' | 'VendorDropAssignment' | 'SupplyBatch' | 'NfcTag';
                 resourceId: string | null;
                 result: 'SUCCESS' | 'DENIED';
                 correlationId: string;
@@ -417,7 +600,7 @@ export function bootstrap(): Bootstrapped {
             }) =>
                 auditModule.recorder.record({
                     eventType: input.eventType,
-                    actor: { type: 'HITBOX_ADMIN', id: input.actorId },
+                    actor: { type: input.actorType ?? 'HITBOX_ADMIN', id: input.actorId },
                     result: input.result,
                     organizationId: input.organizationId,
                     resource: { type: input.resourceType, id: input.resourceId },
@@ -440,7 +623,12 @@ export function bootstrap(): Bootstrapped {
 
     // NFC authenticity domain: single-tap claim, verify a tag, and read the
     // provenance ledger. Owns ProductClaim + BlockchainLedger.
-    const claimsModule = createClaimsModule({ prisma, eventBus, mediaUrls });
+    const claimsModule = createClaimsModule({
+        prisma,
+        eventBus,
+        mediaUrls,
+        tagUidHash: tagCipher ? (uid: string) => tagCipher.hash(uid) : undefined,
+    });
     const claimsRouters = claimsModule.createRouters(authModule.requireAuth);
 
     // ── Money ───────────────────────────────────────────────────────────────
@@ -459,9 +647,10 @@ export function bootstrap(): Bootstrapped {
     // exactly that reason — see docs/finance/module-boundaries.md.
 
     /**
-     * The compliance trail. Constructed here for its `recorder` port, which
-     * finance and payments write every money movement through; the audit read
-     * API is a separate surface and is not mounted by this change.
+     * The compliance trail. Its `recorder` port is what every module writes
+     * through; its read API is mounted at /admin/audit (routes.ts), gated on
+     * `audit-log:*` — held platform-wide by HITBOX_SYSTEM_ADMIN only.
+     * docs/audit/audit-logging.md §6.
      */
     const auditModule = createAuditModule({
         prisma,
@@ -473,12 +662,21 @@ export function bootstrap(): Bootstrapped {
                 .map((role) => role.organizationId)
                 .find((id): id is string => id !== null);
             const global = principal.permissions.includes('audit-log:read:global');
+            // GLOBAL only for a platform-wide grant. An organization-scoped
+            // reader with no organization used to fall through to GLOBAL here —
+            // unreachable while the read API was unmounted, a cross-tenant
+            // read once it is — so that case is now refused instead.
+            if (!global && !orgId) {
+                throw AppError.forbidden(
+                    'Your audit access is limited to an organization, and you are not assigned to one.',
+                    'AUTHZ_FORBIDDEN',
+                );
+            }
             return {
                 actor: { type: 'HITBOX_EMPLOYEE' as const, id: principal.userId },
-                scope:
-                    global || !orgId
-                        ? ({ kind: 'GLOBAL' } as const)
-                        : ({ kind: 'ORGANIZATION', organizationId: orgId } as const),
+                scope: global
+                    ? ({ kind: 'GLOBAL' } as const)
+                    : ({ kind: 'ORGANIZATION', organizationId: orgId! } as const),
                 correlationId: correlationIdOf(req as Request & { correlationId?: string }),
             };
         },
@@ -500,15 +698,30 @@ export function bootstrap(): Bootstrapped {
     });
 
     /**
-     * Payments. No gateway adapter is wired on this deployment: the platform
-     * records the order and the pending charge, the buyer completes payment in
-     * the provider's own flow, and the *webhook* is what settles the order —
-     * which is how card payments actually work, and the only statement about
-     * money this system treats as authoritative. Refunds are issued in the
-     * provider's dashboard and their reference supplied to `/process`.
+     * Payments. The Stripe adapter is wired when a Stripe secret key is present
+     * (STRIPE_SECRET_KEY, or STRIPE_SECRET_KEY_<NAME> for an org on its own
+     * account — see adapters/stripe-secrets.ts). With it, checkout creates the
+     * PaymentIntent and refund `/process` issues the refund in Stripe itself.
+     *
+     * Without a key nothing changes from before: the platform records the order
+     * and the pending charge, the buyer pays through the provider's own flow,
+     * and refunds are issued in the dashboard with their reference supplied to
+     * `/process`. Either way the *webhook* is what settles an order — the only
+     * statement about money this system treats as authoritative.
      *
      * Without STRIPE_WEBHOOK_SECRET the webhook route is not mounted at all.
      */
+    const paymentsLogger = createModuleLogger('payments');
+    const stripeSecrets = createStripeSecrets(env, process.env, (message) => paymentsLogger.warn(message));
+    const paymentGateway = stripeSecrets.configured
+        ? createStripeGateway({ resolveSecretKey: stripeSecrets.resolve })
+        : undefined;
+    paymentsLogger.info(
+        { gateway: paymentGateway ? 'STRIPE' : null },
+        paymentGateway
+            ? 'Stripe adapter wired — checkout and refund processing call Stripe'
+            : 'no payment gateway adapter — refunds need a gatewayRefundId from the dashboard',
+    );
     const paymentsModule = createPaymentsModule({
         prisma,
         eventBus,
@@ -518,9 +731,14 @@ export function bootstrap(): Bootstrapped {
         finance: financeModule.postings,
         royalties: financeModule.royaltyReversal,
         claims: claimsModule.revocation,
+        // Media owns MediaAsset and the bucket; undefined with no bucket, in
+        // which case a buyer cannot place a physical return (photos required).
+        returnEvidence: mediaModule?.returnEvidence,
+        gateway: paymentGateway,
         webhookSigningSecret: env.STRIPE_WEBHOOK_SECRET,
         webhookToleranceSeconds: env.PAYMENT_WEBHOOK_TOLERANCE_SECONDS,
         holdSeconds: env.INVENTORY_HOLD_SECONDS,
+        returnWindowDays: env.RETURN_WINDOW_DAYS,
         resolveAccess: async (req: Request) =>
             buildPaymentAccess(await accessControlModule.guard.describePrincipal(req)),
         // requireAuth has already run on every route that uses this, so
@@ -594,13 +812,19 @@ export function bootstrap(): Bootstrapped {
             : mediaUnavailableRouter(),
         adminMarkets: marketsModule.createRouter(authModule.requireAuth),
         adminOrders: ordersModule.createRouter(authModule.requireAuth),
+        orders: ordersModule.createBuyerRouter(authModule.requireAuth),
         adminReleases: releasesModule.createRouter(authModule.requireAuth),
         adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
+        artistSelf: artistModule.createSelfRouter(authModule.requireAuth),
+        adminDropTypes: productsModule.createDropTypesRouter(authModule.requireAuth),
         adminProductSkus: skusModule.createProductRouter(authModule.requireAuth),
         adminSkus: skusModule.createRouter(authModule.requireAuth),
         adminOrganizations: organizationsModule.createRouter(authModule.requireAuth),
         adminSupply: supplyModule.createRouter(authModule.requireAuth),
+        vendor: supplyModule.createVendorRouter(authModule.requireAuth),
         adminArtists: artistModule.createAdminRouter(authModule.requireAuth),
+        adminArtistCollections: artistModule.createCollectionsAdminRouter(authModule.requireAuth),
+        adminAudit: auditModule.createAdminRouter(authModule.requireAuth),
         payments: paymentsModule.createBuyerRouter(authModule.requireAuth),
         adminPayments: paymentsModule.createAdminRouter(authModule.requireAuth),
         adminFinance: financeModule.createRouter(authModule.requireAuth),
@@ -616,7 +840,7 @@ export function bootstrap(): Bootstrapped {
         apiRouter,
         leadsRouter: leadsModule.router,
         webhookRouter: paymentsModule.createWebhookRouter() ?? webhooksUnavailableRouter(),
-        releaseExpiredReservations: () => paymentsModule.releaseExpiredReservations(),
+        runCheckoutSweep: () => ordersModule.runCheckoutSweep(),
         startCaches: () => accessControlModule.startCache(),
         stopCaches: () => accessControlModule.stopCache(),
     };
@@ -663,4 +887,48 @@ function mediaUnavailableRouter(): Router {
         });
     });
     return router;
+}
+
+/**
+ * The `ARTIST_INDIVIDUAL` organization a self-releasing artist is filed under.
+ *
+ * Implements `ISoloOrganizations` for @hitbox/access-control, which declares
+ * the port but owns no organization table. The reason it exists at all is in
+ * that interface: the ARTIST role's capabilities are organization-scoped, so an
+ * artist assigned without an organization can never see their own drops or the
+ * approvals waiting on them — and nothing fails until they open an empty
+ * dashboard days later.
+ *
+ * Idempotent on the invited address. The slug carries a hash of the email
+ * rather than the name, because two artists called "Nova" would otherwise
+ * collide on a UNIQUE column and the second invitation would fail; the name is
+ * still what everyone reads.
+ */
+async function ensureSoloOrganization(
+    db: typeof prisma,
+    input: { name: string | null; email: string },
+): Promise<{ id: string; name: string }> {
+    const email = input.email.trim().toLowerCase();
+    const name = input.name?.trim() || email.split('@')[0] || 'Artist';
+    const slug = `solo-${createHash('sha1').update(email).digest('hex').slice(0, 12)}`;
+
+    const existing = await db.organization.findUnique({
+        where: { slug },
+        select: { id: true, name: true },
+    });
+    if (existing) return existing;
+
+    const now = new Date();
+    return db.organization.create({
+        data: {
+            id: randomUUID(),
+            name,
+            slug,
+            type: OrganizationType.ARTIST_INDIVIDUAL,
+            isActive: true,
+            createdAt: now,
+            updatedAt: now,
+        },
+        select: { id: true, name: true },
+    });
 }

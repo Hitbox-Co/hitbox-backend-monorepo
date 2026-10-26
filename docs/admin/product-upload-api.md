@@ -4,10 +4,27 @@
 > pricing, the image gallery, and the brand/artist pickers the form needs.
 >
 > Serialized units and NFC tags: [sku-api.md](sku-api.md).
+> Drop types and variants (size × color, card packs, …), including the new
+> optional `dropType` field on create:
+> [drop-types-and-variants.md](drop-types-and-variants.md).
 > Session handling and the Clerk flow: [authentication.md](authentication.md).
 > The rest of the admin write surface: [admin-write-apis.md](admin-write-apis.md).
 
 ---
+
+> ⚠️ **The `skus` block is now refused for a drop that names an artist or an
+> organization** (`400 PRODUCTS_NOT_APPROVED`). Units may only be minted once
+> the drop's owner has approved it — create the drop, submit it for review,
+> then mint through `POST /admin/products/:productId/skus`. A drop with neither
+> owner is HitBox's own and still mints at creation. See
+> [drop-approval-lifecycle.md §10](drop-approval-lifecycle.md#10-minting-waits-for-approval).
+
+> 🆕 **`dropType`** — send a drop type code (`"T_SHIRT"`, `"CARD"`…) to give
+> the drop variant rules. Optional; omitted means a legacy drop, exactly as
+> before. A `REQUIRED`-variant type also refuses the `skus` block
+> (`400 PRODUCTS_VARIANTS_REQUIRED`) — add variants first, then mint per
+> variant. Responses now carry `dropType` and a richer `variants[]`. See
+> [drop-types-and-variants.md §6](drop-types-and-variants.md#6-drop-create--update--what-changed).
 
 ## 1. If you are getting `422` on create — read this first
 
@@ -141,7 +158,7 @@ Content-Type: application/json
 | `name` | string 1–255 | **yes** | trimmed |
 | `description` | string ≤5000 | no | `""`/`null` → `null` |
 | `vertical` / `category` / `rarity` | string ≤64 | no | free-form, not enums |
-| `collectionId` / `artistId` / `organizationId` | uuid | no | `null` detaches on PATCH |
+| `collectionId` / `artistId` / `organizationId` | uuid | no | `null` detaches on PATCH. **A `collectionId` must be a live collection of the drop's own `artistId`** — see below |
 | `totalSupply` | int ≥ 0 | no (`0`) | `0` = size not declared yet |
 | `purchaseLimit` | int ≥ 1 | no | omit for unlimited |
 | `releaseStart` / `releaseEnd` | ISO date | no | |
@@ -153,6 +170,19 @@ Content-Type: application/json
 | `skus.count` | int 1–1000 | no | mints the edition in the same transaction |
 | `prices[]` | 1–200 entries | **yes** | at least one market price — see §3 |
 | `images[]` | ≤24 entries | no | attaches uploaded assets as the gallery |
+
+**Collection rule.** A drop may only be filed under a collection that is
+**live** (not deleted by its artist) and belongs to **the drop's own artist**.
+A drop with no `artistId` can't be in a collection. Checked on create, and on
+PATCH whenever `collectionId` or `artistId` is sent — so moving a drop to
+another artist means sending both in one request. Unrelated edits don't
+re-check an existing pairing. The artist sees the drop in their collection
+only once it is active (`status: ACTIVE`, switched on, not archived) — see
+[artist-collection/README.md §3](../artist-collection/README.md#3-the-rules).
+For the collection picker, a System Admin can list the artist's live
+collections from `GET /admin/artist-collections?artistId=…&status=live`; that
+route needs platform-wide `brand-artist-record` read, so other drop-form users
+have no collection picker endpoint yet.
 
 Everything in `prices`, `skus` and `images` is written in the **same
 transaction** as the product. The request either produces a complete drop —
@@ -372,16 +402,23 @@ Render the type next to the name.
 `GET /api/v1/admin/organizations/:organizationId` returns one, as
 `{ "data": OrganizationResponse }`.
 
+> The artist's own profile screen — where artists set their name, genre,
+> bio, avatar and cover — is [artist/artist-profile-api.md](../artist/artist-profile-api.md).
+
 ### `GET /api/v1/admin/artists`
 
 | Param | Type | Notes |
 |---|---|---|
 | `search` | string | matches name or slug |
 | `organizationId` | uuid | **narrow to one brand's roster** |
-| `isActive` | boolean | |
-| `isPublic` | boolean | profile visibility — unrelated to `isActive` |
-| `includeArchived` | boolean | default `false` |
+| `isActive` | `true` / `false` | `false` = inactive only |
+| `isPublic` | `true` / `false` | profile visibility — unrelated to `isActive`; `false` = unlisted only |
+| `includeArchived` | `true` / `false` | default `false` |
+| `sort` | `name` · `newest` · `oldest` · `drops` · `collections` · `followers` | default `name` (A–Z) |
 | `page` / `limit` | int | `1` / `100` (max 200) |
+
+The flags accept only `true`/`false` (or `1`/`0`); anything else is a 400.
+(They used to read `"false"` as true.)
 
 ```json
 {
@@ -391,13 +428,17 @@ Render the type next to the name.
       "isPublic": true, "isActive": true, "archivedAt": null,
       "organizationId": "f3bb6065-76c0-4fc9-8d57-a3fcd93d9bfa",
       "organizationName": "Kaze (solo)",
-      "counts": { "products": 6, "collections": 2 } }
+      "counts": { "products": 6, "collections": 2, "followers": 9 } }
   ],
   "meta": { "page": 1, "limit": 100, "total": 3, "totalPages": 1 }
 }
 ```
 
 `GET /api/v1/admin/artists/:artistId` returns one.
+
+> The staff side of an artist — full profile, stats, directory summary, and
+> edit / activate / archive / publish actions — is on the same path:
+> [artist/artist-admin-api.md](../artist/artist-admin-api.md).
 
 **Where artist rows come from.** Inviting somebody as an artist through
 `POST /admin/authz/invitations` creates their `Artist` row immediately — before
@@ -564,6 +605,9 @@ cascaded, and guessing wrong on every reorder.
 | HTTP | `code` | Raised when |
 |---|---|---|
 | `400` | `BODY_REQUIRED` | no JSON body was parsed — check `Content-Type` |
+| `400` | `PRODUCTS_COLLECTION_NOT_FOUND` | `collectionId` names no collection |
+| `400` | `PRODUCTS_COLLECTION_ARCHIVED` | the collection was deleted by its artist |
+| `400` | `PRODUCTS_COLLECTION_ARTIST_MISMATCH` | the collection belongs to a different artist than the drop's `artistId` — or the drop has no artist. `details`: `collectionArtistId`, `dropArtistId`. Set both together to move a drop to another artist's collection |
 | `400` | `PRODUCTS_MINTING_UNAVAILABLE` | `skus` sent but no minting provider wired in |
 | `400` | `PRODUCTS_SUPPLY_EXCEEDED` | `skus.count` > `totalSupply` in the same payload |
 | `400` | `PRODUCTS_MEDIA_UNAVAILABLE` | `images` sent on a deploy with no bucket configured |

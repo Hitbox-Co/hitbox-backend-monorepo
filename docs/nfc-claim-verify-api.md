@@ -101,8 +101,9 @@ message reads *"You already own …"*.)
    (guarded so two simultaneous taps can't double-claim).
 2. `ProductClaim` with a generated unique `claimCode` (`HBPC` + 6 digits).
    `claimedNo` counts claims on **that SKU** — unique `[skuId, claimedNo]`.
-3. Ledger: a **MINT** row (seq 0, origin = HitBox) if this is the SKU's first
-   ledger activity, then the **CLAIM** row (seq 1).
+3. Ledger: the **CLAIM** row (seq 1), chained onto the MINT row (seq 0) the
+   unit was minted with. For a unit minted before MINT-at-mint existed, the
+   MINT row is written first, in this same transaction.
 4. `ProductHistory` — any open period is closed (`isCurrent = false`,
    `endedAt = now`), then a new one opens with `acquiredVia = CLAIM` and
    `isCurrent = true`. Exactly one row per SKU is ever current.
@@ -332,11 +333,14 @@ works: a product carries no tag, and its SKUs do not exist when it is created,
 so the handler could only ever no-op. It was removed rather than left as
 scaffolding.
 
-The **MINT** row is now written lazily inside the claim transaction, so a chain
-is never missing its origin. The one visible consequence: `GET /ledger/:tagId`
-returns an empty array for a never-claimed item, where it used to return a
-single MINT row. `ClaimsService.ensureOriginForSku(skuId)` is the hook for the
-skus module to call when it binds a tag, once that module grows a service.
+The **MINT** row is written **when the unit is minted**, inside the minting
+transaction (see [admin/sku-api.md §1](admin/sku-api.md#1-the-two-things-being-created)).
+So `GET /ledger/:tagId` on a never-claimed item returns its single MINT row.
+
+Units minted before that change have no MINT row until their first claim,
+which writes it lazily inside the claim transaction — so a chain is never
+missing its origin either way. `ClaimsService.ensureOriginForSku(skuId)`
+remains as an idempotent way to backfill one unit.
 
 ---
 

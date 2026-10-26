@@ -43,6 +43,9 @@
 /// nullable at the column level because US rows have no equivalent.
 model TaxConfiguration {
   id             String     @id @db.Uuid
+  /// Human-readable record id (`txc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// Null means "the default for this jurisdiction", used when no
   /// product-specific row exists. Products are the specific case.
   productId      String?    @db.Uuid
@@ -102,6 +105,9 @@ model TaxConfiguration {
 /// what proves the object in the bucket is still the document that was issued.
 model Invoice {
   id             String        @id @db.Uuid
+  /// Human-readable record id (`inv…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// e.g. 'INV-2026-27-IN-000123'. See domain/invoice-number.ts.
   invoiceNumber  String        @unique @db.VarChar(50)
   invoiceDate    DateTime
@@ -212,6 +218,9 @@ model Invoice {
 /// Every money column is a snapshot; nothing here is recomputed on read.
 model InvoiceLineItem {
   id          String   @id @db.Uuid
+  /// Human-readable record id (`ivl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   invoiceId   String   @db.Uuid
   invoice     Invoice  @relation(fields: [invoiceId], references: [id])
   /// Display order on the document, 1-based.
@@ -254,6 +263,9 @@ model InvoiceLineItem {
 /// series is a compliance finding, a few milliseconds of lock contention is not.
 model InvoiceNumberSequence {
   id          String   @id @db.Uuid
+  /// Human-readable record id (`ins…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   /// Country whose series this is; each jurisdiction numbers independently.
   countryCode String   @db.VarChar(2)
   /// '2026-27' (India, Apr–Mar) or '2026' (US, calendar year).
@@ -279,6 +291,9 @@ model InvoiceNumberSequence {
 /// be substantiated.
 model TaxReturnFiling {
   id             String        @id @db.Uuid
+  /// Human-readable record id (`trf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   filingType     TaxFilingType
   countryCode    String        @db.VarChar(2)
   stateCode      String?       @db.VarChar(2)
@@ -337,6 +352,9 @@ model TaxReturnFiling {
 /// inside the PDF, which is access-controlled as a whole.
 model ArtistTaxDocument {
   id             String   @id @db.Uuid
+  /// Human-readable record id (`atd…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   artistId       String   @db.Uuid
   artist         Artist   @relation(fields: [artistId], references: [id])
   countryCode    String   @db.VarChar(2)
@@ -387,6 +405,9 @@ model ArtistTaxDocument {
 /// document that was issued and the correction that followed.
 model TaxAdjustmentEntry {
   id                 String   @id @db.Uuid
+  /// Human-readable record id (`tad…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   invoiceId          String   @db.Uuid
   invoice            Invoice  @relation(fields: [invoiceId], references: [id])
   adjustmentType     TaxAdjustmentType

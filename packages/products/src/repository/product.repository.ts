@@ -45,7 +45,12 @@ const basePriceArgs = {
 const listInclude = {
     dropImages: imageArgs,
     dropPrices: basePriceArgs,
-    dropVariants: { where: { archivedAt: null }, orderBy: { position: 'asc' } },
+    dropVariants: {
+        where: { archivedAt: null },
+        orderBy: { position: 'asc' },
+        include: { options: { orderBy: { position: 'asc' } } },
+    },
+    dropType: { select: { code: true, name: true, variantMode: true } },
     collection: { include: { artist: true } },
     artist: true,
 } satisfies Prisma.DropInclude;
@@ -194,6 +199,27 @@ export const PUBLIC_PRODUCT_WHERE: Prisma.DropWhereInput = {
     archivedAt: null,
 };
 
+/** What collection membership needs to know about a drop. */
+const membershipSelect = {
+    id: true,
+    publicCode: true,
+    name: true,
+    groupCode: true,
+    status: true,
+    isActive: true,
+    archivedAt: true,
+    artistId: true,
+    collectionId: true,
+    totalSupply: true,
+    publishedAt: true,
+    collection: { select: { id: true, name: true } },
+} satisfies Prisma.DropSelect;
+
+export type MembershipDropRow = Prisma.DropGetPayload<{ select: typeof membershipSelect }>;
+
+/** A precondition stopped holding between check and write. Rolls the batch back. */
+class MembershipRaceError extends Error { }
+
 export class ProductRepository {
     constructor(
         private readonly prisma: PrismaClient,
@@ -291,6 +317,19 @@ export class ProductRepository {
         return result;
     }
 
+    /**
+     * Who owns a collection, and whether it is archived — what filing a drop
+     * under it is checked against. Reads the artist module's table directly,
+     * the same documented shortcut as the `collection` include on every
+     * product read; on extraction it becomes a call to the artist service.
+     */
+    findCollectionOwner(collectionId: string): Promise<{ artistId: string; archivedAt: Date | null } | null> {
+        return this.prisma.artistCollection.findUnique({
+            where: { id: collectionId },
+            select: { artistId: true, archivedAt: true },
+        });
+    }
+
     async findById(id: string): Promise<ProductWithRelations | null> {
         const cached = await this.cache.getEntity<ProductWithRelations>('id', id);
         if (cached) return cached;
@@ -301,6 +340,25 @@ export class ProductRepository {
         });
         if (product) await this.cache.setEntity('id', id, product);
         return product;
+    }
+
+    /**
+     * Which organization owns this drop — nothing else.
+     *
+     * For the route guards, which have to tell the authorization engine whose
+     * record is being reached before the service loads it. Deliberately not
+     * `findById`: that pulls every relation the detail screen needs, and a
+     * permission check should not cost a join it will not read. Returns null
+     * for a drop that does not exist, so a caller with no grant and a caller
+     * asking about a missing id are refused identically rather than the 403
+     * becoming an existence oracle.
+     */
+    async organizationIdOf(id: string): Promise<string | null> {
+        const drop = await this.prisma.drop.findUnique({
+            where: { id },
+            select: { organizationId: true },
+        });
+        return drop?.organizationId ?? null;
     }
 
     /**
@@ -481,6 +539,103 @@ export class ProductRepository {
             this.cache.invalidateLists(),
         ]);
         return product;
+    }
+
+    // ── Collection membership (driven by the artist module's port) ──────
+
+    /**
+     * An artist's active drops that could go into `collectionId`: unfiled
+     * ones, plus — with `includeFiled` — ones in the artist's *other*
+     * collections. Never ones already in it.
+     */
+    async listAssignableToCollection(input: {
+        artistId: string;
+        collectionId: string;
+        includeFiled: boolean;
+        q?: string | undefined;
+        skip: number;
+        take: number;
+    }) {
+        const where: Prisma.DropWhereInput = {
+            ...PUBLIC_PRODUCT_WHERE,
+            artistId: input.artistId,
+            // `{ not: x }` alone would also drop NULL rows — SQL's three-valued
+            // logic — so "anything but this collection" spells out the NULLs.
+            ...(input.includeFiled
+                ? { OR: [{ collectionId: null }, { collectionId: { not: input.collectionId } }] }
+                : { collectionId: null }),
+            ...(input.q
+                ? {
+                    AND: [{
+                        OR: [
+                            { name: { contains: input.q, mode: 'insensitive' } },
+                            { groupCode: { contains: input.q } },
+                        ],
+                    }],
+                }
+                : {}),
+        };
+        const [total, items] = await Promise.all([
+            this.prisma.drop.count({ where }),
+            this.prisma.drop.findMany({
+                where,
+                orderBy: [{ publishedAt: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }, { id: 'asc' }],
+                skip: input.skip,
+                take: input.take,
+                select: membershipSelect,
+            }),
+        ]);
+        return { total, items };
+    }
+
+    /** The facts an add is checked against, for each id that exists. */
+    findForMembership(dropIds: string[]) {
+        return this.prisma.drop.findMany({ where: { id: { in: dropIds } }, select: membershipSelect });
+    }
+
+    /**
+     * Files drops under a collection (or takes one out, `collectionId: null`),
+     * all or nothing.
+     *
+     * The `where` repeats every precondition the caller checked — same artist,
+     * still active, still where the caller saw it — so a drop retired, moved
+     * or reassigned between the check and the write is not silently moved
+     * anyway: the row count comes up short and the transaction rolls back.
+     */
+    async setCollection(input: {
+        drops: { id: string; expectedCollectionId: string | null }[];
+        artistId: string;
+        collectionId: string | null;
+        requireActive: boolean;
+    }): Promise<boolean> {
+        const now = new Date();
+        const rows = await this.prisma.$transaction(async (tx) => {
+            for (const drop of input.drops) {
+                const result = await tx.drop.updateMany({
+                    where: {
+                        id: drop.id,
+                        artistId: input.artistId,
+                        collectionId: drop.expectedCollectionId,
+                        ...(input.requireActive ? PUBLIC_PRODUCT_WHERE : {}),
+                    },
+                    data: { collectionId: input.collectionId, updatedAt: now },
+                });
+                if (result.count !== 1) throw new MembershipRaceError();
+            }
+            return tx.drop.findMany({
+                where: { id: { in: input.drops.map((d) => d.id) } },
+                select: { id: true, groupCode: true },
+            });
+        }).catch((error: unknown) => {
+            if (error instanceof MembershipRaceError) return null;
+            throw error;
+        });
+        if (!rows) return false;
+        await Promise.all([
+            ...rows.map((row) => this.cache.invalidateEntity(row.id, row.groupCode)),
+            this.cache.invalidateLists(),
+        ]);
+        return true;
     }
 
     // ── Gallery ─────────────────────────────────────────────────────────
@@ -793,6 +948,58 @@ export class ProductRepository {
      * delete from the kill switch, and leaving `isActive` true on an archived
      * row would make it visible to any query that checks only one of them.
      */
+    /**
+     * Price points actually in force on a drop — the "is there anything to
+     * sell?" check behind publication.
+     *
+     * Uses the same `currentPrice()` window every other price read uses, rather
+     * than a second notion of "in force". A superseded row is still a row since
+     * prices became versioned, so counting by status alone would let a drop go
+     * live on a price that expired last week.
+     */
+    countActivePrices(productId: string): Promise<number> {
+        return this.prisma.dropPrice.count({
+            where: {
+                dropId: productId,
+                status: DropPriceStatus.ACTIVE,
+                ...ProductRepository.currentPrice(),
+            },
+        });
+    }
+
+    /**
+     * Serialized units minted against a drop.
+     *
+     * A dedicated count rather than a call into the performance aggregate,
+     * which computes a dozen figures for a screen; publication needs one
+     * number and asks one question. Reading `Sku` from here follows the
+     * precedent already set by the detail and performance reads above —
+     * @hitbox/skus owns writing that table, not reading it.
+     */
+    countSkus(productId: string): Promise<number> {
+        return this.prisma.sku.count({ where: { productId } });
+    }
+
+    /**
+     * Takes a drop live.
+     *
+     * Separate from `update()` because it writes a column `update()` must not:
+     * `publishedAt` records when the drop actually went out, and is set once.
+     * Routing it through the generic updater would put it back within reach of
+     * a field patch, which is the thing this endpoint exists to prevent.
+     */
+    async publish(
+        id: string,
+        options: { status: DropStatus; setPublishedAt: boolean },
+    ): Promise<ProductWithRelations> {
+        const now = new Date();
+        return this.update(id, {
+            status: options.status,
+            ...(options.setPublishedAt ? { publishedAt: now } : {}),
+            updatedAt: now,
+        });
+    }
+
     async archive(id: string): Promise<ProductWithRelations> {
         const now = new Date();
         const product = await this.prisma.drop.update({

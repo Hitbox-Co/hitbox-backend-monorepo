@@ -6,12 +6,17 @@
  * port speaks plain records — no Prisma types cross it — so this module never
  * imports the audit module or its JSON types.
  */
+/** Who performed a supply write: HitBox staff, or a vendor through the portal. */
+export type SupplyActorType = 'HITBOX_ADMIN' | 'VENDOR';
+
 export interface SupplyAuditInput {
     eventType: string;
     actorId: string;
+    /** Defaults to HITBOX_ADMIN — every route but the vendor portal is staff-only. */
+    actorType?: SupplyActorType | undefined;
     organizationId: string | null;
     /** The row the event is about: a vendor, a batch or a tag. */
-    resourceType: 'Vendor' | 'SupplyBatch' | 'NfcTag';
+    resourceType: 'Vendor' | 'VendorMember' | 'VendorDropAssignment' | 'SupplyBatch' | 'NfcTag';
     resourceId: string | null;
     result: 'SUCCESS' | 'DENIED';
     correlationId: string;

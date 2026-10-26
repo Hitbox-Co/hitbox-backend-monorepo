@@ -2,3 +2,93 @@ export const ARTIST_MODULE = 'artist' as const;
 
 /** Fallback used if an ArtistCollection somehow reports a non-positive cap. */
 export const DEFAULT_COLLECTION_MAX_LIMIT = 10;
+
+/**
+ * Artist collections — an artist curating THEIR OWN series of drops, and
+ * HitBox monitoring all of them. docs/artist-collection/.
+ *
+ * No new permission: a collection is part of the artist's record, so the
+ * artist side uses the same `brand-artist-record:*:own` grants as
+ * `/artist/me` (held by the ARTIST role only), and the monitoring side uses
+ * `brand-artist-record:read` at **global** scope — satisfied by
+ * `brand-artist-record:manage:global`, which HITBOX_SYSTEM_ADMIN holds.
+ */
+export const COLLECTION_READ_CAPABILITY = 'brand-artist-record:read' as const;
+export const COLLECTION_WRITE_CAPABILITY = 'brand-artist-record:update' as const;
+
+export const ARTIST_COLLECTION_ERROR_CODES = {
+    NOT_FOUND: 'ARTIST_COLLECTION_NOT_FOUND',
+    /** Another collection (any artist's) already uses this slug. */
+    SLUG_TAKEN: 'ARTIST_COLLECTION_SLUG_TAKEN',
+    /** One of your live collections already has this name. */
+    NAME_TAKEN: 'ARTIST_COLLECTION_NAME_TAKEN',
+    /** Archived collections are read-only. */
+    ARCHIVED: 'ARTIST_COLLECTION_ARCHIVED',
+    /** It still holds drops that are not retired — archiving would orphan them. */
+    HAS_DROPS: 'ARTIST_COLLECTION_HAS_DROPS',
+    /** The artist already has the maximum number of live collections. */
+    LIMIT_REACHED: 'ARTIST_COLLECTION_LIMIT_REACHED',
+    /** The reorder list must name every live collection exactly once. */
+    ORDER_MISMATCH: 'ARTIST_COLLECTION_ORDER_MISMATCH',
+    /** Restore was asked for a collection that isn't archived. */
+    NOT_ARCHIVED: 'ARTIST_COLLECTION_NOT_ARCHIVED',
+    /** One or more drops can't be added; `details.problems` says which and why. */
+    DROPS_INVALID: 'ARTIST_COLLECTION_DROPS_INVALID',
+    /** The drop isn't in this collection. */
+    DROP_NOT_IN_COLLECTION: 'ARTIST_COLLECTION_DROP_NOT_IN_COLLECTION',
+    /** A drop changed (retired, moved, reassigned) between the check and the write. */
+    DROPS_CHANGED: 'ARTIST_COLLECTION_DROPS_CHANGED',
+    /** No drop catalog is wired on this deployment. */
+    DROPS_UNAVAILABLE: 'ARTIST_COLLECTION_DROPS_UNAVAILABLE',
+} as const;
+
+/** Drops one add request may carry. */
+export const MAX_DROPS_PER_ADD = 50;
+
+/**
+ * Which drops the artist is shown: **active** and **their own**.
+ *
+ * "Active" is exactly the public catalog's definition (products'
+ * `PUBLIC_PRODUCT_WHERE`): status ACTIVE, not switched off, not archived. Kept
+ * as a copy because the artist module must not import products; change both
+ * together. "Their own" (`Drop.artistId` = the collection's artist) is added at
+ * each query, and products now refuses to file a drop under another artist's
+ * collection, so a mismatch can only be legacy data.
+ */
+export const ACTIVE_DROP_WHERE = {
+    status: 'ACTIVE',
+    isActive: true,
+    archivedAt: null,
+} as const;
+
+/** Audit event types — registered in @hitbox/audit's AUDIT_EVENT_CATALOG. */
+export const ARTIST_AUDIT_EVENTS = {
+    COLLECTION_CREATE: 'artist.collection.create',
+    COLLECTION_UPDATE: 'artist.collection.update',
+    COLLECTION_ARCHIVE: 'artist.collection.archive',
+    COLLECTION_RESTORE: 'artist.collection.restore',
+    COLLECTION_REORDER: 'artist.collection.reorder',
+    COLLECTION_DROPS_ADD: 'artist.collection.drops.add',
+    COLLECTION_DROPS_REMOVE: 'artist.collection.drops.remove',
+} as const;
+
+export const COLLECTION_NAME_MAX = 120;
+export const COLLECTION_DESCRIPTION_MAX = 2000;
+/**
+ * Live (non-archived) collections per artist. A guard against runaway
+ * clients, not a product rule — raise it freely.
+ */
+export const MAX_LIVE_COLLECTIONS_PER_ARTIST = 50;
+
+export const ARTIST_COLLECTION_EVENTS = {
+    CREATED: 'artist.collection.created',
+    UPDATED: 'artist.collection.updated',
+    ARCHIVED: 'artist.collection.archived',
+    RESTORED: 'artist.collection.restored',
+    REORDERED: 'artist.collection.reordered',
+    DROPS_ADDED: 'artist.collection.drops-added',
+    DROP_REMOVED: 'artist.collection.drop-removed',
+} as const;
+
+export const COLLECTION_DEFAULT_LIMIT = 20;
+export const COLLECTION_MAX_LIMIT = 100;

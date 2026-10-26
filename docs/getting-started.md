@@ -89,6 +89,27 @@ what it repairs and why is in
 
 Each `ArtistCollection` is seeded with a `maximumLimit` (the progress denominator) and one seed user (`liam_collects`) owns products across two collections, so `GET /collections/me/stats` returns meaningful numbers (owned 3 / total 20 = 15%).
 
+#### Admin demo data
+
+```bash
+pnpm db:seed:demo       # every business table, sized for the admin dashboard
+pnpm db:seed:finance    # just the finance tables, rebuilt from existing data
+```
+
+`db:seed:demo` is **destructive**: it deletes and re-creates every business row
+(it leaves the `Role` / `Permission` catalog alone). It also clears the four
+tables `db:backfill:v31` fills — `NfcTag`, `NfcVerification`, `CogsReconciliation`
+and `ExceptionCase` — without re-creating them, so re-run the backfill after it.
+
+`db:seed:finance` is the finance slice on its own. It creates no artist and no
+order; it reads the artists, drops, orders and claims already present and
+derives the royalty rules, accruals, payout batches, corrections and platform
+ledger from them — computing the money with `@hitbox/finance`'s own
+`calculateRoyalty` / `resolveRule` / `splitsOf` rather than a second formula
+that could drift from the one the API runs. `db:seed:demo` calls it at the end.
+What it produces, and the deals it models, are in
+[finance/demo-data.md](finance/demo-data.md).
+
 It is **idempotent**: every run wipes and re-creates the catalog data. Real accounts are safe — only users whose `clerkUserId` starts with `seed_` are touched. The script lives at [packages/shared/database/prisma/seed.ts](../packages/shared/database/prisma/seed.ts); edit the `USERS` / `ARTISTS` / `PRODUCTS` arrays at the top to shape the data.
 
 > Never edit `packages/shared/database/prisma/schema.prisma` — it is generated.

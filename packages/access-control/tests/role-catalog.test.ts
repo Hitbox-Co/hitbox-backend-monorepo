@@ -11,6 +11,7 @@ import { isCatalogPermission } from '../src/domain/permission-catalog';
  */
 
 const EXPECTED: Record<string, string[]> = {
+    VENDOR: ['vendor-supply:read:own', 'vendor-supply:create:own'],
     BUYER_COLLECTOR: [
         'address:manage:own',
         'collectible-instance:read:public',
@@ -77,6 +78,7 @@ const EXPECTED: Record<string, string[]> = {
         'collectible-instance:manage:global',
         'content-unlock:manage:global',
         'drop:manage:global',
+        'drop-type:manage:global',
         'employee-role-mgmt:assign:global',
         'employee-role-mgmt:delete:global',
         'employee-role-mgmt:manage:global',
@@ -157,7 +159,7 @@ const EXPECTED: Record<string, string[]> = {
 };
 
 describe('role catalog', () => {
-    it('defines exactly the twelve expected roles', () => {
+    it('defines exactly the thirteen expected roles', () => {
         expect([...ROLE_NAMES].sort()).toEqual(Object.keys(EXPECTED).sort());
     });
 

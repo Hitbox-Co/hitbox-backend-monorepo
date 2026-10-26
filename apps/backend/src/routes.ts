@@ -32,10 +32,16 @@ export interface ApiRouters {
     adminMarkets: Router;
     /** Order list, full detail with SKU units, and status transitions. */
     adminOrders: Router;
+    /** A buyer's own order tracking — docs/orders/order-history-and-shipments.md. */
+    orders: Router;
     /** Release approval queue: review, decide, compliance sign-off. */
     adminReleases: Router;
     /** Catalog administration: product detail with performance + SKU units, CRUD. */
     adminProducts: Router;
+    /** Artist self-service — docs/artist/artist-profile-api.md. */
+    artistSelf: Router;
+    /** Drop types & variant rules — docs/admin/drop-types-and-variants.md. */
+    adminDropTypes: Router;
     /** Serialized units of one drop: mint, list, summary. */
     adminProductSkus: Router;
     /** Serialized units across drops: cross-drop list and single-unit detail. */
@@ -47,6 +53,14 @@ export interface ApiRouters {
      */
     adminOrganizations: Router;
     adminArtists: Router;
+    /** HitBox monitoring of artist collections — docs/artist-collection/. */
+    adminArtistCollections: Router;
+    /**
+     * The audit trail's read API: events, correlation lookup, event types,
+     * retention. Gated on `audit-log:*`. Bulk export stays unmounted until a
+     * step-up gate is supplied. docs/audit/audit-logging.md §6.
+     */
+    adminAudit: Router;
     /**
      * The physical supply chain: vendors, consignments, the NFC chip inventory
      * and the supply/inventory metrics rollup. ONE namespace — a Drop Manager
@@ -54,6 +68,11 @@ export interface ApiRouters {
      * manifest call the same routes and are narrowed by their grants.
      */
     adminSupply: Router;
+    /**
+     * The vendor portal: a supplier's own staff booking consignments and chip
+     * manifests for the drops HitBox assigned to them. docs/vendor/.
+     */
+    vendor: Router;
     /**
      * Buyer-facing money routes: POST /checkout and POST /refunds. Owned by
      * the payments module, because a purchase starts with a payment and the
@@ -109,6 +128,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/authz', routers.authz);
     // Buyer money routes sit beside /orders rather than under /admin: these
     // are the two things a buyer does with their own wallet.
+    api.use('/orders', routers.orders);
     api.use('/', routers.payments);
     // The buyer's receipts sit beside their orders and their wallet, for the
     // same reason: these are things a buyer does with their own purchases.
@@ -128,10 +148,15 @@ export function buildRoutes(routers: ApiRouters): Router {
     // is one refactor away from breaking silently.
     api.use('/admin/products/:productId/skus', routers.adminProductSkus);
     api.use('/admin/products', routers.adminProducts);
+    api.use('/artist', routers.artistSelf);
+    api.use('/admin/drop-types', routers.adminDropTypes);
     api.use('/admin/skus', routers.adminSkus);
     api.use('/admin/organizations', routers.adminOrganizations);
     api.use('/admin/artists', routers.adminArtists);
+    api.use('/admin/artist-collections', routers.adminArtistCollections);
+    api.use('/admin/audit', routers.adminAudit);
     api.use('/admin/supply', routers.adminSupply);
+    api.use('/vendor', routers.vendor);
 
     return api;
 }

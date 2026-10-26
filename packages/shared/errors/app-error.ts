@@ -10,8 +10,13 @@ export class AppError extends Error {
         Error.captureStackTrace(this, this.constructor);
     }
 
+    /**
+     * An expected outcome rather than a bug: every 4xx, plus 503 — thrown on
+     * purpose when a deployment lacks a feature's configuration (no tag UID
+     * key, no identity provider), which is an operator's to-do, not a crash.
+     */
     get isOperational(): boolean {
-        return this.statusCode < 500;
+        return this.statusCode < 500 || this.statusCode === 503;
     }
 
     static badRequest(

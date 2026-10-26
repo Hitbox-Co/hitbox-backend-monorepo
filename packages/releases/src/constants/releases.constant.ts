@@ -33,9 +33,52 @@ export const LEGAL_COMPLIANCE_STATEMENT =
     'disclosures are accurate, and that I am authorised to give this confirmation ' +
     'on behalf of its owner.';
 
+/**
+ * The comment written on a review that passed because nobody owned the drop.
+ *
+ * Fixed wording rather than free text so the case is greppable in the trail and
+ * a screen can recognise it without parsing prose.
+ */
+export const AUTO_APPROVAL_COMMENT =
+    'Auto-approved: this drop names no artist and no organization, so there is ' +
+    'no owner whose approval the review exists to capture.';
+
 export const RELEASE_READ_CAPABILITY = 'release-approval:read' as const;
-/** Recording a decision — approve, reject, or amend the compliance sign-off. */
+/** Administering the queue — amending a reviewer's notes on an open review. */
 export const RELEASE_DECIDE_CAPABILITY = 'release-approval:manage' as const;
+
+/**
+ * Sending a drop for review.
+ *
+ * `drop:manage`, NOT a release capability, and the distinction is the point:
+ * submitting is something you do to **your own drop**, so whoever may edit the
+ * drop may submit it. `HITBOX_DROP_MANAGER` holds `drop:manage:global` and only
+ * `release-approval:read:global` — gating submit on a release capability locked
+ * the role out of sending its own drops for review.
+ */
+export const RELEASE_SUBMIT_CAPABILITY = 'drop:manage' as const;
+
+/**
+ * Recording a decision. Any ONE of these reaches the endpoint.
+ *
+ * Three capabilities for one route because three genuinely different powers
+ * arrive at it, and no single one of them is held by everybody entitled to
+ * call it:
+ *
+ *   `approve` — the owner signing their own drop off (ARTIST, BRAND_ADMIN)
+ *   `reject`  — the same owner refusing it
+ *   `manage`  — whoever administers the queue (HITBOX_SYSTEM_ADMIN)
+ *
+ * Reaching the endpoint is not the same as being allowed to decide: which
+ * party may approve *this* drop is resolved against the loaded row in
+ * domain/approval-authority.ts, and an administrator holding `manage` still
+ * cannot approve a brand's drop.
+ */
+export const RELEASE_DECISION_CAPABILITIES = [
+    'release-approval:approve',
+    'release-approval:reject',
+    'release-approval:manage',
+] as const;
 /**
  * Reversing a decision that has already been recorded. Held only at `:global`
  * by HITBOX_SYSTEM_ADMIN, which is what keeps "I changed my mind" separate

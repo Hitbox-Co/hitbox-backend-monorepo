@@ -58,7 +58,13 @@ export interface IOrderLedger {
     markFailed(input: { orderId: string; reason: string }): Promise<boolean>;
 
     /** Refund completed: order → REFUNDED. */
-    markRefunded(input: { orderId: string; refundedAt: Date }): Promise<boolean>;
+    markRefunded(input: {
+        orderId: string;
+        refundedAt: Date;
+        /** Recorded on the order's status history. */
+        refundRequestId?: string;
+        actorId?: string | null;
+    }): Promise<boolean>;
 
     /** The money facts a refund or a chargeback needs. */
     findOrderSummary(orderId: string): Promise<{
@@ -71,7 +77,15 @@ export interface IOrderLedger {
         amount: string;
         currency: string;
         gateway: string;
+        /** When the item was delivered — starts the return window. Null until then. */
+        deliveredAt: Date | null;
     } | null>;
+
+    /**
+     * The unit an unpaid order is still holding, if the hold has not expired
+     * — what resuming a checkout needs. Null once it has lapsed.
+     */
+    findLiveHold(orderId: string): Promise<{ reservationId: string; skuId: string; expiresAt: Date } | null>;
 
     /** Releases every hold that has passed its expiry. Returns how many. */
     releaseExpiredReservations(now: Date): Promise<number>;

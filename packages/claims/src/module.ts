@@ -8,6 +8,7 @@ import { ClaimsController } from './controller/claims.controller';
 import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
 import { ClaimsRepository } from './repository/claims.repository';
 import { ClaimsService } from './service/claims.service';
+import { MintLedgerWriter } from './repository/mint-ledger.writer';
 
 export interface ClaimsModuleDeps {
     prisma: PrismaClient;
@@ -22,6 +23,12 @@ export interface ClaimsModuleDeps {
      * flag without touching process.env; bootstrap leaves it unset.
      */
     claimTokenRequired?: boolean;
+    /**
+     * Hashes a chip UID with the deployment's tag key, so a tap can resolve
+     * units minted from supply consignments. Absent when no key is configured;
+     * taps then resolve legacy `Sku.tagId` only.
+     */
+    tagUidHash?: ((uid: string) => string) | undefined;
 }
 
 /** The routers this module owns, mounted at distinct API prefixes. */
@@ -42,6 +49,11 @@ export interface ClaimsModule {
      * import — claims is the provider here and bootstrap connects the two.
      */
     revocation: Pick<ClaimsService, 'revokeClaim'>;
+    /**
+     * Skus' `ISkuMintLedger`: writes each new unit's MINT ledger record
+     * inside the minting transaction, so no unit exists without one.
+     */
+    mintLedger: MintLedgerWriter;
     /** requireAuth comes from the auth module at bootstrap. */
     createRouters(requireAuth: RequestHandler): ClaimsRouters;
 }
@@ -49,7 +61,7 @@ export interface ClaimsModule {
 export function createClaimsModule(deps: ClaimsModuleDeps): ClaimsModule {
     const logger = createModuleLogger(CLAIMS_MODULE);
 
-    const claims = new ClaimsRepository(deps.prisma);
+    const claims = new ClaimsRepository(deps.prisma, deps.tagUidHash);
     const service = new ClaimsService({
         claims,
         eventBus: deps.eventBus,
@@ -58,16 +70,16 @@ export function createClaimsModule(deps: ClaimsModuleDeps): ClaimsModule {
         claimTokenRequired: deps.claimTokenRequired ?? env.CLAIM_TOKEN_REQUIRED,
     });
 
-    // No product-created subscription any more. It wrote the "First Time"
-    // origin ledger row for a tagged product, but tags moved to Sku: a product
-    // carries none, and its SKUs do not exist when it is created, so the
-    // handler could only ever no-op. The MINT row is written lazily inside the
-    // claim transaction instead, and `service.ensureOriginForSku(skuId)` is
-    // the hook for the skus module to call when it binds a tag.
+    // The MINT row is written when a unit is minted, inside the minting
+    // transaction (`mintLedger` below, called by the skus module). The lazy
+    // origin paths — inside the claim transaction and
+    // `service.ensureOriginForSku(skuId)` — remain for units minted before
+    // that existed; for every newer unit they find the row and no-op.
 
     return {
         service,
         revocation: service,
+        mintLedger: new MintLedgerWriter(),
         createRouters(requireAuth) {
             const controller = new ClaimsController(service);
 

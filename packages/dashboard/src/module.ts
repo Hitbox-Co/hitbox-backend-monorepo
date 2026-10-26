@@ -7,6 +7,8 @@ import { DashboardController } from './controller/dashboard.controller';
 import type { PrincipalResolver } from './controller/dashboard.controller';
 import { DashboardRepository } from './repository/dashboard.repository';
 import { DashboardService } from './service/dashboard.service';
+import { ArtistInsightsAdapter } from './adapter/artist-insights.adapter';
+import { ArtistInsightsRepository } from './repository/artist-insights.repository';
 
 /**
  * The admin dashboard: one permission-driven reporting API, not a set of
@@ -43,6 +45,12 @@ export interface DashboardModuleDeps {
 export interface DashboardModule {
     /** Mounted under /admin/dashboard. */
     createRouter(requireAuth: RequestHandler): Router;
+    /**
+     * Injected into createArtistModule — artist's `IArtistInsights` port:
+     * sales, royalties, payouts, tax, claims and followers for one artist.
+     * Read-only, like everything here. docs/artist/artist-admin-api.md.
+     */
+    artistInsights: ArtistInsightsAdapter;
 }
 
 export function createDashboardModule(deps: DashboardModuleDeps): DashboardModule {
@@ -52,6 +60,8 @@ export function createDashboardModule(deps: DashboardModuleDeps): DashboardModul
     const controller = new DashboardController(service, deps.resolvePrincipal);
 
     return {
+        artistInsights: new ArtistInsightsAdapter(new ArtistInsightsRepository(deps.prisma)),
+
         createRouter(requireAuth) {
             const router = Router();
             // Authentication is required for every route; authorization is

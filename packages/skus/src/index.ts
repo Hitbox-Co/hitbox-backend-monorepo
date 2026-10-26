@@ -80,6 +80,7 @@ export type { SkuUpdateChanges, SkuUpdatePlan, SkuUpdateTarget } from './domain/
 export { assertFiltersPermitted, forbiddenFilters, GATED_FILTERS } from './domain/sku-filters';
 
 export { NOOP_SKU_AUDIT } from './domain/interfaces/sku-audit.interface';
+export type { ISkuReleaseGate, SkuReleaseVerdict } from './domain/interfaces/release-gate.interface';
 export type { ISkuAudit, SkuAuditInput } from './domain/interfaces/sku-audit.interface';
 
 export type { SkuService, InlineMintSpec, SkuMutationContext } from './service/sku.service';

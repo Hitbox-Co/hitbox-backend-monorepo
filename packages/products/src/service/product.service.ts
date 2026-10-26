@@ -2,8 +2,9 @@ import { randomInt, randomUUID } from 'node:crypto';
 import type { Logger } from 'pino';
 import { AppError } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
-import { ComplianceStatus, Prisma } from '@hitbox/database';
+import { ComplianceStatus, DropStatus, Prisma } from '@hitbox/database';
 import {
+    PRODUCT_AUDIT_EVENTS,
     PRODUCT_CODE_MAX_ATTEMPTS,
     PRODUCT_CODE_UNIQUE_LENGTH,
     PRODUCT_EVENTS,
@@ -17,6 +18,13 @@ import type {
 } from '../domain/interfaces/sku-minting.interface';
 import type { IMediaAssets } from '../domain/interfaces/media-assets.interface';
 import type { IMarketLookup } from '../domain/interfaces/market-lookup.interface';
+import type { IProductAudit } from '../domain/interfaces/product-audit.interface';
+import type { DropTypeRepository, DropTypeRow } from '../drop-type/drop-type.repository';
+import type { VariantRepository } from '../variant/variant.repository';
+import type {
+    IReleaseGate,
+    ReleaseGateVerdict,
+} from '../domain/interfaces/release-gate.interface';
 import type {
     AttachProductImagesDto,
     CreateProductDto,
@@ -25,6 +33,8 @@ import type {
     ProductImageResponse,
     ProductPriceInput,
     ProductPriceResponse,
+    ClearedReview,
+    PublishProductDto,
     ReplaceProductImagesDto,
     SetProductPricesDto,
     UpdateProductDto,
@@ -43,8 +53,23 @@ import type {
     SkuUnitRow,
 } from '../repository/product.repository';
 
+/** What `POST /admin/products/:id/publish` returns. */
+export interface PublishProductResult {
+    product: ProductResponse;
+    /** The review this publication cleared. */
+    clearedReview: ClearedReview;
+}
+
 interface ProductServiceDeps {
     products: ProductRepository;
+    /**
+     * Resolves `dropType` on create/update. Optional so existing test
+     * harnesses build without it; a `dropType` sent to a service without it
+     * is refused rather than ignored.
+     */
+    dropTypes?: DropTypeRepository | undefined;
+    /** Answers "does this drop have variants yet?" — a drop's type locks once it does. */
+    variants?: VariantRepository | undefined;
     eventBus: IEventBus;
     logger: Logger;
     /** Optional: without it, image URLs come back null rather than failing. */
@@ -67,6 +92,22 @@ interface ProductServiceDeps {
      * pointing at markets nobody validated.
      */
     markets?: IMarketLookup | undefined;
+    /**
+     * Answers "has this drop cleared review?". Provided by @hitbox/releases,
+     * which owns `ReleaseApproval`.
+     *
+     * Optional so a test harness can build the service without it — but
+     * publishing is **refused** when it is absent rather than allowed. A
+     * deployment that cannot verify an approval must not take drops live on
+     * the assumption that one exists.
+     */
+    releaseGate?: IReleaseGate | undefined;
+    /**
+     * The compliance trail for publication. Optional so tests need not wire
+     * the audit module; a server must pass the real recorder, or a drop goes
+     * live with nothing recording who did it.
+     */
+    audit?: IProductAudit | undefined;
 }
 
 /**
@@ -107,7 +148,22 @@ export interface ProductResponse {
     images: string[];
     /** Base price in the default market, or null when none is configured. */
     price: { amount: string | null; currency: string; isFree: boolean } | null;
-    variants: { id: string; label: string; optionName: string; optionValue: string }[];
+    /** The product type, or null for a legacy (untyped) drop. */
+    dropType: { code: string; name: string; variantMode: string } | null;
+    /**
+     * Active variants. `optionName` / `optionValue` are unchanged for existing
+     * clients; `options` is the per-dimension breakdown, with color swatches.
+     */
+    variants: {
+        id: string;
+        variantCode: string;
+        label: string;
+        optionName: string;
+        optionValue: string;
+        options: { dimension: string; value: string; label: string; hexCode: string | null }[];
+        totalSupply: number | null;
+        isActive: boolean;
+    }[];
 }
 
 /**
@@ -234,17 +290,63 @@ export class ProductService {
             collectionId,
             artistId,
             organizationId,
+            dropType: dropTypeCode,
             skus,
             images,
             prices,
             ...fields
         } = dto;
 
+        const dropType = dropTypeCode ? await this.requireActiveDropType(dropTypeCode) : null;
+        await this.assertCollectionFits(collectionId ?? null, artistId ?? null);
+
+        // A REQUIRED-variant drop has no variants at the moment it is created,
+        // so units minted inline would belong to no variant — a T-shirt with no
+        // size. Create the drop, add variants, then mint per variant.
+        if (skus && dropType?.variantMode === 'REQUIRED') {
+            throw AppError.badRequest(
+                `Every unit of a ${dropType.name} must belong to a variant, and this drop has none yet. ` +
+                'Create it without `skus`, add variants, then mint through ' +
+                'POST /admin/products/:productId/skus with a variantId.',
+                PRODUCTS_ERROR_CODES.VARIANTS_REQUIRED,
+            );
+        }
+
         if (skus && !this.deps.skuMinting) {
             throw AppError.badRequest(
                 'This deployment cannot mint units; create the drop without `skus`.',
                 PRODUCTS_ERROR_CODES.MINTING_UNAVAILABLE,
             );
+        }
+
+        /**
+         * Units may not be minted for a drop that will need its owner's
+         * approval — the approval has to come first.
+         *
+         * A drop is born in DRAFT, so an owned drop is never approved at the
+         * moment it is created and a `skus` block here could never be
+         * legitimate. Minting it anyway would create serialized inventory for
+         * a drop the artist may yet reject, which somebody then has to
+         * reconcile against nothing.
+         *
+         * A drop naming neither an artist nor an organization has no owner to
+         * ask, so it stays mintable at creation exactly as before. That is
+         * asked through the gate rather than re-derived here, so the authority
+         * rule lives in one place — see domain/interfaces/release-gate.interface.ts.
+         */
+        if (skus && this.deps.releaseGate) {
+            const needsApproval = this.deps.releaseGate.requiresApproval({
+                artistId: dto.artistId ?? null,
+                organizationId: dto.organizationId ?? null,
+            });
+            if (needsApproval) {
+                throw AppError.badRequest(
+                    'This drop belongs to an artist or organization, so its units cannot be ' +
+                    'minted until its owner has approved it. Create the drop, submit it for ' +
+                    'review, then mint through POST /admin/products/:productId/skus.',
+                    PRODUCTS_ERROR_CODES.NOT_APPROVED,
+                );
+            }
         }
         // Checked before the insert as well as inside the mint, because the
         // message differs: here it is "your request contradicts itself", there
@@ -294,6 +396,10 @@ export class ProductService {
                     ...(artistId && { artist: { connect: { id: artistId } } }),
                     ...(organizationId && {
                         organization: { connect: { id: organizationId } },
+                    }),
+                    ...(dropType && {
+                        dropType: { connect: { id: dropType.id } },
+                        dropTypeVersion: dropType.version,
                     }),
                 },
                     // Runs inside the product's own transaction; a failure in
@@ -360,10 +466,41 @@ export class ProductService {
     }
 
     async update(id: string, dto: UpdateProductDto): Promise<ProductResponse> {
-        await this.requireById(id); // 404 before update
-        const { collectionId, artistId, organizationId, ...fields } = dto;
+        const current = await this.requireById(id); // 404 before update
+        const { collectionId, artistId, organizationId, dropType: dropTypeCode, ...fields } = dto;
+
+        // Re-checked only when either side of the pairing changes, so an
+        // unrelated edit never trips over a pairing that predates the rule.
+        if (collectionId !== undefined || artistId !== undefined) {
+            await this.assertCollectionFits(
+                collectionId !== undefined ? collectionId || null : current.collectionId,
+                artistId !== undefined ? artistId || null : current.artistId,
+            );
+        }
+
+        // The type decides which variants are valid, so it is fixed once the
+        // drop has any — changing it would orphan them under rules they were
+        // never checked against.
+        let dropTypeChange: Prisma.DropUpdateInput = {};
+        if (dropTypeCode !== undefined && dropTypeCode !== (current.dropType?.code ?? null)) {
+            if (this.deps.variants && (await this.deps.variants.hasAny(id))) {
+                throw AppError.conflict(
+                    'This drop already has variants, so its drop type cannot change. ' +
+                    'Remove the variants first, or create a new drop.',
+                    PRODUCTS_ERROR_CODES.DROP_TYPE_LOCKED,
+                );
+            }
+            if (dropTypeCode === null) {
+                dropTypeChange = { dropType: { disconnect: true }, dropTypeVersion: null };
+            } else {
+                const type = await this.requireActiveDropType(dropTypeCode);
+                dropTypeChange = { dropType: { connect: { id: type.id } }, dropTypeVersion: type.version };
+            }
+        }
+
         const product = await this.deps.products.update(id, {
             ...fields,
+            ...dropTypeChange,
             ...relationUpdate('collection', collectionId),
             ...relationUpdate('artist', artistId),
             ...relationUpdate('organization', organizationId),
@@ -376,6 +513,188 @@ export class ProductService {
         await this.requireById(id);
         await this.deps.products.archive(id);
         await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_ARCHIVED, { productId: id });
+    }
+
+    /**
+     * Takes a drop live.
+     *
+     * The last gate before a drop becomes purchasable, and the reason it is a
+     * route of its own rather than `PATCH { status }`: every check below is a
+     * question about the drop's **whole state**, not about one field, and a
+     * generic field-patcher has nowhere to put them.
+     *
+     * The checks run in a deliberate order — cheapest and most fundamental
+     * first, so the reason a caller gets back is the most useful one rather
+     * than whichever check happened to be written first.
+     */
+    async publish(input: {
+        id: string;
+        dto: PublishProductDto;
+        actorId: string;
+        correlationId: string;
+    }): Promise<PublishProductResult> {
+        const product = await this.requireById(input.id);
+
+        // 1. Is it a drop that can be live at all?
+        if (product.archivedAt !== null) {
+            throw AppError.conflict(
+                'This drop is archived. Restore it before publishing.',
+                PRODUCTS_ERROR_CODES.NOT_PUBLISHABLE,
+            );
+        }
+        if (product.status === input.dto.target) {
+            throw AppError.conflict(
+                `This drop is already ${input.dto.target}.`,
+                PRODUCTS_ERROR_CODES.NOT_PUBLISHABLE,
+            );
+        }
+        if (
+            product.status === DropStatus.ENDED ||
+            product.status === DropStatus.ARCHIVED
+        ) {
+            throw AppError.conflict(
+                `A drop that is ${product.status} cannot be published again.`,
+                PRODUCTS_ERROR_CODES.NOT_PUBLISHABLE,
+            );
+        }
+
+        // 2. Has its owner approved it?
+        //
+        // Refused rather than skipped when the gate is not wired in. A
+        // deployment that cannot verify an approval must not take drops live
+        // on the assumption one exists — that is precisely the hole this
+        // endpoint was built to close.
+        if (!this.deps.releaseGate) {
+            throw AppError.badRequest(
+                'Publication is unavailable on this deployment: approvals cannot be verified.',
+                PRODUCTS_ERROR_CODES.RELEASE_GATE_UNAVAILABLE,
+            );
+        }
+        const review = await this.deps.releaseGate.describeLatest(input.id);
+        if (!review.cleared) {
+            await this.recordPublishAttempt(input, product, review, 'DENIED');
+            throw AppError.conflict(
+                review.reason ?? 'This drop has not been approved for release.',
+                PRODUCTS_ERROR_CODES.NOT_APPROVED,
+                {
+                    approvalId: review.approvalId,
+                    version: review.version,
+                    status: review.status,
+                },
+            );
+        }
+
+        // 3. Is its compliance evidence complete?
+        //
+        // Checked again here rather than trusted from the approval: the
+        // approval was recorded against the drop as it stood then, and these
+        // fields are editable afterwards. An age flag added after sign-off
+        // would otherwise go live unchecked.
+        if (product.isAgeSpecific && product.minimumAge === null) {
+            throw AppError.badRequest(
+                'This drop is age-restricted but carries no minimum age. Set one before publishing.',
+                PRODUCTS_ERROR_CODES.PUBLISH_BLOCKED,
+                { field: 'minimumAge' },
+            );
+        }
+
+        // 4. Is there anything to sell?
+        const priceCount = await this.deps.products.countActivePrices(input.id);
+        if (priceCount === 0) {
+            throw AppError.badRequest(
+                'This drop has no active price. Add one before publishing.',
+                PRODUCTS_ERROR_CODES.PUBLISH_BLOCKED,
+                { field: 'prices' },
+            );
+        }
+
+        // A drop declaring supply but holding no serialized units would be
+        // purchasable with nothing to deliver.
+        if (product.totalSupply > 0) {
+            const minted = await this.deps.products.countSkus(input.id);
+            if (minted === 0) {
+                throw AppError.badRequest(
+                    `This drop declares ${product.totalSupply} units but none have been minted. ` +
+                    'Mint the edition before publishing.',
+                    PRODUCTS_ERROR_CODES.PUBLISH_BLOCKED,
+                    { field: 'skus', totalSupply: product.totalSupply, minted: 0 },
+                );
+            }
+        }
+
+        // ── Go live ─────────────────────────────────────────────────────────
+        const published = await this.deps.products.publish(input.id, {
+            status: input.dto.target,
+            // First publication only. A drop staged to PUBLISHED and later
+            // moved to ACTIVE keeps the moment it first went out, which is what
+            // `publishedAt` means — `publishAt` is the scheduled intent and is
+            // a different column.
+            setPublishedAt: product.publishedAt === null,
+        });
+
+        await this.recordPublishAttempt(input, product, review, 'SUCCESS');
+
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_PUBLISHED, {
+            productId: input.id,
+            status: input.dto.target,
+            approvalId: review.approvalId,
+            authority: review.authority,
+            actorId: input.actorId,
+        });
+        this.deps.logger.info(
+            {
+                productId: input.id,
+                from: product.status,
+                to: input.dto.target,
+                approvalId: review.approvalId,
+                authority: review.authority,
+            },
+            'drop published',
+        );
+
+        return {
+            product: this.toResponse(published),
+            clearedReview: {
+                approvalId: review.approvalId,
+                version: review.version,
+                status: review.status,
+                authority: review.authority,
+            },
+        };
+    }
+
+    /**
+     * Records the attempt, allowed or refused.
+     *
+     * A refused publication is worth recording: someone trying to take an
+     * unapproved drop live is exactly what the approval rule exists to stop,
+     * and the refusal leaves no other trace.
+     */
+    private async recordPublishAttempt(
+        input: { id: string; dto: PublishProductDto; actorId: string; correlationId: string },
+        product: ProductWithRelations,
+        review: ReleaseGateVerdict,
+        result: 'SUCCESS' | 'DENIED',
+    ): Promise<void> {
+        if (!this.deps.audit) return;
+        await this.deps.audit.record({
+            eventType: PRODUCT_AUDIT_EVENTS.PUBLISH,
+            actorId: input.actorId,
+            organizationId: product.organizationId,
+            productId: input.id,
+            result,
+            correlationId: input.correlationId,
+            before: { status: product.status, publishedAt: product.publishedAt },
+            ...(result === 'SUCCESS' ? { after: { status: input.dto.target } } : {}),
+            metadata: {
+                approvalId: review.approvalId,
+                approvalVersion: review.version,
+                approvalStatus: review.status,
+                authority: review.authority,
+                ...(result === 'DENIED' ? { reason: review.reason } : {}),
+                ...(input.dto.note ? { note: input.dto.note } : {}),
+            },
+        });
     }
 
     // ── Prices ──────────────────────────────────────────────────────────
@@ -788,6 +1107,40 @@ export class ProductService {
         };
     }
 
+    /**
+     * A drop may only be filed under a **live** collection of **its own
+     * artist** — docs/artist-collection/README.md §3.
+     *
+     * Without this a drop could land in another artist's series (and show on
+     * their page and count toward their buyers' collection progress), or in a
+     * collection its artist has deleted. A drop with no artist can't be in a
+     * collection at all: collections are per artist, so there would be nothing
+     * to match against.
+     */
+    private async assertCollectionFits(collectionId: string | null, artistId: string | null): Promise<void> {
+        if (!collectionId) return;
+        const collection = await this.deps.products.findCollectionOwner(collectionId);
+        if (!collection) {
+            throw AppError.badRequest('That collection does not exist.', PRODUCTS_ERROR_CODES.COLLECTION_NOT_FOUND, { collectionId });
+        }
+        if (collection.archivedAt) {
+            throw AppError.badRequest(
+                'That collection has been deleted by its artist, so drops can no longer be added to it.',
+                PRODUCTS_ERROR_CODES.COLLECTION_ARCHIVED,
+                { collectionId },
+            );
+        }
+        if (collection.artistId !== artistId) {
+            throw AppError.badRequest(
+                artistId
+                    ? "A drop can only be in one of its own artist's collections."
+                    : "Set the drop's artist before putting it in a collection — collections belong to one artist.",
+                PRODUCTS_ERROR_CODES.COLLECTION_ARTIST_MISMATCH,
+                { collectionId, collectionArtistId: collection.artistId, dropArtistId: artistId },
+            );
+        }
+    }
+
     private async requireById(id: string): Promise<ProductWithRelations> {
         const product = await this.deps.products.findById(id);
         if (!product) {
@@ -834,13 +1187,47 @@ export class ProductService {
                     isFree: price.isFree,
                 }
                 : null,
+            dropType: product.dropType
+                ? {
+                    code: product.dropType.code,
+                    name: product.dropType.name,
+                    variantMode: product.dropType.variantMode,
+                }
+                : null,
             variants: product.dropVariants.map((variant) => ({
                 id: variant.id,
+                variantCode: variant.variantCode,
                 label: variant.label,
                 optionName: variant.optionName,
                 optionValue: variant.optionValue,
+                options: variant.options.map((option) => ({
+                    dimension: option.dimensionCode,
+                    value: option.valueCode,
+                    label: option.valueLabel,
+                    hexCode: option.hexCode,
+                })),
+                totalSupply: variant.totalSupply,
+                isActive: variant.isActive,
             })),
         };
+    }
+
+    /** An active drop type by code, or 404. */
+    private async requireActiveDropType(code: string): Promise<DropTypeRow> {
+        if (!this.deps.dropTypes) {
+            throw AppError.badRequest(
+                'This deployment has no drop types configured; create the drop without `dropType`.',
+                PRODUCTS_ERROR_CODES.DROP_TYPE_NOT_FOUND,
+            );
+        }
+        const type = await this.deps.dropTypes.findByCode(code);
+        if (!type || !type.isActive) {
+            throw AppError.notFound(
+                `Drop type ${code} not found. GET /admin/drop-types lists the available types.`,
+                PRODUCTS_ERROR_CODES.DROP_TYPE_NOT_FOUND,
+            );
+        }
+        return type;
     }
 
     private isUniqueViolation(error: unknown, field: string): boolean {

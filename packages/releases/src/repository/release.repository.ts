@@ -1,6 +1,13 @@
 import { randomUUID } from 'node:crypto';
-import { ApprovalAuthority, ApprovalStatus, ComplianceStatus, DropStatus, Prisma } from '@hitbox/database';
-import type { OrganizationType, PrismaClient } from '@hitbox/database';
+import {
+    ApprovalAuthority,
+    ApprovalStatus,
+    ComplianceStatus,
+    DropStatus,
+    OrganizationType,
+    Prisma,
+} from '@hitbox/database';
+import type { PrismaClient } from '@hitbox/database';
 import type { ListReleaseApprovalsQuery } from '../dto/release.dto';
 
 const approvalSelect = {
@@ -93,6 +100,22 @@ export class ReleaseRepository {
     /** Every decision on one product, newest version first. */
     findHistoryForProduct(productId: string): Promise<ReleaseApprovalRow[]> {
         return this.prisma.releaseApproval.findMany({
+            where: { productId },
+            select: approvalSelect,
+            orderBy: { version: 'desc' },
+        });
+    }
+
+    /**
+     * The most recent review for a drop, whatever its state.
+     *
+     * Backs the publication gate. The **latest** version, deliberately: an
+     * older APPROVED version does not license publication once a newer one has
+     * been rejected or reopened, and asking "is there any approved version"
+     * would let a drop go live on a decision that has since been superseded.
+     */
+    findLatestForProduct(productId: string): Promise<ReleaseApprovalRow | null> {
+        return this.prisma.releaseApproval.findFirst({
             where: { productId },
             select: approvalSelect,
             orderBy: { version: 'desc' },
@@ -196,6 +219,95 @@ export class ReleaseRepository {
             await tx.drop.update({
                 where: { id: input.productId },
                 data: { status: DropStatus.SUBMITTED, updatedAt: now },
+            });
+        });
+
+        return (await this.findById(id))!;
+    }
+
+    /**
+     * The HitBox organization, which unowned drops are filed under.
+     *
+     * Looked up by `type` rather than held as a configured id, because
+     * `OrganizationType.HITBOX` is what *makes* an organization the platform's
+     * own — a configured id could drift from it and nothing would notice.
+     *
+     * Returns null when no such organization exists (a database that was never
+     * seeded). The caller treats that as "leave the drop unfiled" rather than
+     * failing the submit, because refusing to review a drop over a missing
+     * reference row would be a strange way to learn about it.
+     */
+    async findHitboxOrganizationId(): Promise<string | null> {
+        const organization = await this.prisma.organization.findFirst({
+            where: { type: OrganizationType.HITBOX, archivedAt: null },
+            select: { id: true },
+            // Deterministic when a database somehow holds two: the oldest is
+            // the real one, a later duplicate is the mistake.
+            orderBy: { createdAt: 'asc' },
+        });
+        return organization?.id ?? null;
+    }
+
+    /**
+     * Opens a review that is already decided, for a drop with no owner to ask.
+     *
+     * One transaction doing three things, and it has to be one transaction: the
+     * approval row, the drop's status, and — when the drop was unfiled — the
+     * HitBox organization it is filed under. A partial application here leaves
+     * a drop that is APPROVED but owned by nobody, or owned by HitBox with no
+     * approval explaining why.
+     *
+     * `legalComplianceAccepted` stays **false**. Nobody accepted anything; the
+     * review passed because there was no one to ask. Recording `true` would put
+     * a legal acceptance in the trail that no person ever gave, which is the
+     * exact failure the authority rule exists to prevent — see
+     * domain/approval-authority.ts.
+     */
+    async autoApprove(input: {
+        productId: string;
+        approverId: string;
+        version: number;
+        comment: string;
+        /** Set when the drop had no organization and is being filed under HitBox. */
+        assignOrganizationId: string | null;
+    }): Promise<ReleaseApprovalRow> {
+        const id = randomUUID();
+        const now = new Date();
+
+        await this.prisma.$transaction(async (tx) => {
+            await tx.releaseApproval.create({
+                data: {
+                    id,
+                    productId: input.productId,
+                    approverId: input.approverId,
+                    status: ApprovalStatus.APPROVED,
+                    comment: input.comment,
+                    version: input.version,
+                    complianceStatus: ComplianceStatus.CLEARED,
+                    authority: ApprovalAuthority.NONE,
+                    requiredArtistId: null,
+                    requiredOrganizationId: input.assignOrganizationId,
+                    legalComplianceAccepted: false,
+                    legalComplianceVersion: null,
+                    // Decided at the moment it was opened. `checkedById` stays
+                    // null: no person checked it, and naming the submitter would
+                    // read as a sign-off they did not give.
+                    decidedAt: now,
+                    checkedById: null,
+                    createdAt: now,
+                    updatedAt: now,
+                },
+            });
+            await tx.drop.update({
+                where: { id: input.productId },
+                data: {
+                    status: DropStatus.APPROVED,
+                    complianceStatus: ComplianceStatus.CLEARED,
+                    ...(input.assignOrganizationId
+                        ? { organizationId: input.assignOrganizationId }
+                        : {}),
+                    updatedAt: now,
+                },
             });
         });
 

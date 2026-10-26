@@ -22,6 +22,13 @@
 > Product upload, request-format rules (and `422` troubleshooting), market
 > pricing, the image gallery, and the brand/artist pickers:
 > [product-upload-api.md](product-upload-api.md).
+> Drop types (T-Shirt, Card, Poster…), variant rules, color swatches and
+> generating a drop's variants:
+> [drop-types-and-variants.md](drop-types-and-variants.md).
+> Artists editing their own profile (name, handle, bio, genre, avatar, cover):
+> [../artist/artist-profile-api.md](../artist/artist-profile-api.md).
+> Packing orders — scanning the physical unit (NFC tag) that goes into each
+> parcel: [../orders/order-unit-assignment-api.md](../orders/order-unit-assignment-api.md).
 > Minting SKU units, NFC tag manifests, and per-role unit visibility:
 > [sku-api.md](sku-api.md).
 > Editing units afterwards — trust flags, tag lifecycle, archival, batch edits
@@ -29,7 +36,12 @@
 > [sku-inventory-management.md](sku-inventory-management.md).
 > The physical supply chain upstream of all of it — vendors, consignment
 > intake, the NFC chip inventory and the supply/inventory metrics rollup:
-> [supply-inventory-api.md](supply-inventory-api.md).
+> [supply-inventory-api.md](supply-inventory-api.md). Vendor sign-in (invite
+> vendor users, assign drops, the `/api/v1/vendor` portal):
+> [../vendor/](../vendor/README.md).
+> **How a drop gets approved — who signs it off, the legal compliance
+> tickmark, rejection notes, reopening, and the drops that skip review
+> entirely: [drop-approval-lifecycle.md](drop-approval-lifecycle.md).**
 > Session handling and the Clerk flow are in
 > [authentication.md](authentication.md).
 >
@@ -345,7 +357,7 @@ GET /api/v1/admin/dashboard/users?period=month
 GET /api/v1/admin/dashboard/orders?period=month&status=SHIPPED&marketId=...&page=1&limit=50
 GET /api/v1/admin/dashboard/finance?period=year
 GET /api/v1/admin/dashboard/markets?period=month
-GET /api/v1/admin/dashboard/products?status=ACTIVE&page=1&limit=50
+GET /api/v1/admin/dashboard/products?status=ACTIVE&artistId=...&q=tee&page=1&limit=50
 GET /api/v1/admin/dashboard/release-approvals?status=PENDING
 GET /api/v1/admin/dashboard/provenance?caseType=CLONED&status=OPEN
 GET /api/v1/admin/dashboard/supply?vendorId=...
@@ -360,7 +372,7 @@ GET /api/v1/admin/dashboard/demand-signals
 | `/orders` | `order:read` | `{ page, limit, total, items[] }` |
 | `/finance` | `payment-royalty:read` | `{ "data": {...} }` |
 | `/markets` | `reports-dashboards:read` | `{ "data": [...] }` |
-| `/products` | `drop:read` | `{ page, limit, total, items[] }` |
+| `/products` | `drop:read` | `{ page, limit, total, items[] }` — `artistId` lists one artist's drops in every status ([artist-admin-api.md 9](../artist/artist-admin-api.md)) |
 | `/release-approvals` | `release-approval:read` | `{ page, limit, total, items[] }` |
 | `/provenance` | `nfc-tag-claim:read` | `{ page, limit, total, summary, items[] }` |
 | `/supply` | `drop:read` | `{ page, limit, total, items[], activeVendors }` |
@@ -600,7 +612,13 @@ call. It is `null` for every other asset type; those need
 | `EXCLUSIVE_CONTENT` | `product`, `collection` | images, mp4, mpeg, pdf | 500 MB |
 | `LEGAL_DOCUMENT` | `organization` | pdf | 25 MB |
 | `SUPPLY_SPREADSHEET` | `vendor` | csv, xls, xlsx | 25 MB |
-| `OTHER` | any | any | 25 MB |
+| `RETURN_EVIDENCE` | `order` | jpeg, png, webp, heic, heif | 15 MB — **not on this route** (422). Buyers upload return photos via `POST /refunds/evidence/upload-url`; see [order-payments-and-refunds-api.md §6.0](../orders/order-payments-and-refunds-api.md#60-placing-a-return--photos-and-description) |
+| `OTHER` | any except `order` | any | 25 MB |
+
+Return photos are listed by `GET /admin/media?assetType=RETURN_EVIDENCE` for
+platform-wide media readers only — they carry no organization, so an
+organization-scoped grant never reaches them. Show them to operators from the
+refund detail (`evidence[]`) rather than the media library.
 
 Errors: `UNSUPPORTED_MIME_TYPE`, `FILE_TOO_LARGE`, `INVALID_OWNER` (wrong owner
 type for that asset type), `SCOPE_MISMATCH` (owner outside your organization) —

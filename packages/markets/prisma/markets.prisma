@@ -12,6 +12,9 @@
 /// carry `isDefault = true` — the fallback when a buyer's country maps nowhere.
 model Market {
   id         String    @id @db.Uuid
+  /// Human-readable record id (`mkt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   code       String    @unique
   name       String
   currency   Currency
@@ -34,6 +37,9 @@ model Market {
 /// a country belongs to exactly one market and resolution is unambiguous.
 model MarketCountry {
   id          String   @id @db.Uuid
+  /// Human-readable record id (`mkc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   marketId    String   @db.Uuid
   market      Market   @relation(fields: [marketId], references: [id])
   countryCode String   @unique

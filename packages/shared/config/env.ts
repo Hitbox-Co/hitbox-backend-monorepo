@@ -181,20 +181,26 @@ const envSchema = z.object({
      * abandoned basket does not keep a one-of-500 unit off sale for an hour.
      */
     INVENTORY_HOLD_SECONDS: z.coerce.number().int().positive().default(900),
-
-    // ── Claim integrity (US-P018) ─────────────────────────────────────────
     /**
-     * Require the one-shot claim token on POST /claims/:tagId/confirm.
-     *
-     * Off by default, and that default is the rollout: app builds shipped
-     * before the token exists send no `claimToken`, and turning this on
-     * before they are gone would break every one of them. A token that IS
-     * sent is always checked in full regardless of this flag.
+     * Days after delivery (`Order.deliveredAt`) during which an item may be
+     * returned. After it closes no return can be placed — by the buyer or by
+     * staff — and a buyer cannot request any refund on that delivered order.
+     * Read by both the payments module (which enforces it) and the orders
+     * module (which shows it), so the two can never disagree.
      */
-    CLAIM_TOKEN_REQUIRED: z
-        .enum(['true', 'false'])
-        .default('false')
-        .transform((value) => value === 'true'),
+    RETURN_WINDOW_DAYS: z.coerce.number().int().positive().default(10),
+    /**
+     * How long an unpaid order survives after its hold expires before the
+     * checkout sweep cancels it. A card payment that settles inside this
+     * window is still honoured if nobody else took the unit.
+     */
+    UNPAID_ORDER_GRACE_SECONDS: z.coerce.number().int().nonnegative().default(1800),
+    /**
+     * How often the server runs the checkout sweep (release expired holds,
+     * cancel unpaid orders). 0 turns the in-process timer off — for a
+     * deployment that runs `pnpm jobs:checkout-sweep` from an external cron.
+     */
+    CHECKOUT_SWEEP_INTERVAL_SECONDS: z.coerce.number().int().nonnegative().default(60),
 });
 
 export type Env = z.infer<typeof envSchema>;

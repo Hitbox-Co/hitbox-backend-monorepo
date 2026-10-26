@@ -14,6 +14,9 @@
 /// EVENT_SPECIFIC rules that a single integer cannot express.
 model EvolutionRule {
   id              String                 @id @db.Uuid
+  /// Human-readable record id (`evr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name            String
   collectionId    String?                @db.Uuid
   collection      ArtistCollection?      @relation(fields: [collectionId], references: [id])
@@ -36,6 +39,9 @@ model EvolutionRule {
 /// reward is never granted twice.
 model EvolutionEvent {
   id          String        @id @db.Uuid
+  /// Human-readable record id (`eve…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   ruleId      String        @db.Uuid
   rule        EvolutionRule @relation(fields: [ruleId], references: [id])
   skuId       String        @db.Uuid

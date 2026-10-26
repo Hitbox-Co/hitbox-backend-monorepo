@@ -436,13 +436,21 @@ export class DashboardService {
 
     async products(
         principal: DashboardPrincipal,
-        query: DashboardQuery & { page: number; limit: number; status?: string | undefined },
+        query: DashboardQuery & {
+            page: number;
+            limit: number;
+            status?: string | undefined;
+            artistId?: string | undefined;
+            q?: string | undefined;
+        },
     ) {
         const { view } = this.prepare(principal, query);
         requireSection(view, 'drop');
         const { total, items } = await this.deps.repository.listProducts({
             orgIds: view.organizationIds,
             status: query.status,
+            artistId: query.artistId,
+            q: query.q,
             skip: (query.page - 1) * query.limit,
             take: query.limit,
         });

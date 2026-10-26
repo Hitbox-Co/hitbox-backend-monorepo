@@ -291,6 +291,7 @@ function defaultScopeFor(entityGroup: string): RoleScopeType {
         case 'brand_artist':
             return RoleScopeType.ORGANIZATION;
         case 'end_user':
+        case 'vendor':
             return RoleScopeType.OWN;
         default:
             return RoleScopeType.GLOBAL;

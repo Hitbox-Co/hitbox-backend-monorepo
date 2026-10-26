@@ -241,7 +241,9 @@ other API keys on — the additions are for the human reading the table.
   "data": {
     // …every field from the list item, plus:
     "gateway": "STRIPE",
-    "trackingNote": "DHL 7741…",
+    "trackingNote": "DHL Express 7741…",   // legacy text; the real data is `shipment`
+    // + history[], shipment, shipments[], canRecordShipment, canCorrectShipment
+    //   — see orders/order-history-and-shipments.md §6
     "termsAcceptedAt": "2026-09-11T05:29:00.000Z",
     "updatedAt": "…", "archivedAt": null,
     "market": { "id": "5a9e…", "code": "IN", "name": "India", "currency": "INR" },
@@ -291,13 +293,21 @@ not five. This is what makes "why has this not shipped" answerable.
 `allowedTransitions` is precomputed so the UI enables exactly the buttons that
 will work, instead of discovering the rule by getting a 400.
 
+> **Money:** the order detail's `money` summary, payments, refunds and the
+> refund workflow (with `allowedActions` per refund) are documented in
+> [orders/order-payments-and-refunds-api.md](../orders/order-payments-and-refunds-api.md).
+>
+> **Packing:** which physical unit (NFC tag) goes into the parcel is chosen
+> by scanning at packing, and an order can't move to `SHIPPED` until that's
+> done — see [orders/order-unit-assignment-api.md](../orders/order-unit-assignment-api.md).
+> Until then `skuId` is a provisional placeholder.
+
 ### `PATCH /admin/orders/:orderId/status`
 
 ```jsonc
 {
-  "status": "SHIPPED",              // PROCESSING | SHIPPED | DELIVERED | CANCELLED
-  "trackingNote": "DHL 7741…",      // optional
-  "reason": "Customer requested"    // REQUIRED when status is CANCELLED
+  "status": "DELIVERED",            // PROCESSING | DELIVERED | CANCELLED (unpaid orders only)
+  "reason": "Carrier shows delivered" // REQUIRED when status is CANCELLED; recorded on the order history
 }
 ```
 
@@ -307,14 +317,27 @@ not need a second fetch.
 #### The lifecycle graph
 
 ```text
-PENDING_PAYMENT ──▶ CANCELLED
+PENDING_PAYMENT ──▶ CANCELLED   (by an admin, or the checkout sweep when unpaid)
        │
        ▼ (payments module)
      PAID ──▶ PROCESSING ──▶ SHIPPED ──▶ DELIVERED
-       │            │
-       ▼            ▼
-   CANCELLED    CANCELLED
+       └────────────┴──────────────┴───────────┴──▶ REFUNDED (refund pipeline)
 ```
+
+**Only an unpaid order can be cancelled.** Cancelling a `PENDING_PAYMENT`
+order also releases its stock hold, so the unit is back on sale at once. A
+`PAID` / `PROCESSING` order is refused with `ORDERS_CANCEL_REQUIRES_REFUND`:
+the buyer has paid, so "cancel" is a refund (`physicalReturnRequired: false`),
+which returns the money and puts the never-shipped unit back on sale. Unpaid
+orders are also cancelled automatically by the checkout sweep. See
+[orders/checkout-sweep.md](../orders/checkout-sweep.md).
+
+**`SHIPPED` is set by recording the shipment**, never through this endpoint
+(`400 ORDERS_SHIPMENT_REQUIRED`): `POST /admin/orders/:orderId/shipment` with the
+carrier and tracking number, which the buyer then sees. Every status change, by
+anyone or anything, is also written to the order's `history[]`, and changes made
+here are audited (`order.status.change`). See
+[orders/order-history-and-shipments.md](../orders/order-history-and-shipments.md).
 
 **`PAID` and `REFUNDED` are not settable by hand.** They are written by the
 payments and refund pipelines, and an operator typing them would decouple the
@@ -327,6 +350,8 @@ be refunded, it cannot go back to being in transit.
 | Code | Status | When |
 |---|---|---|
 | `ORDERS_STATUS_NOT_SETTABLE` | 400 | Tried to set `PAID` / `REFUNDED` |
+| `ORDERS_SHIPMENT_REQUIRED` | 400 | Tried to set `SHIPPED`. Record the shipment instead |
+| `ORDERS_CANCEL_REQUIRES_REFUND` | 400 | Tried to cancel a `PAID` / `PROCESSING` order. Refund it instead |
 | `ORDERS_INVALID_TRANSITION` | 400 | e.g. `DELIVERED → PROCESSING`. `details` carries `{ from, to, allowed[] }` |
 | `ORDERS_INVALID_TRANSITION` | 409 | Another operator changed it first — reload and retry |
 | `ORDERS_NOT_FOUND` | 404 | Missing **or** out of your scope |
@@ -336,7 +361,7 @@ a double-clicked button should not read as a failure.
 
 `shippedAt` / `deliveredAt` are stamped automatically on entering those states.
 The status change is guarded by the order's current status at the database
-(`updateMany … WHERE status = from`), so two simultaneous "Mark shipped"
+(`updateMany … WHERE status = from`), so two simultaneous "Mark delivered"
 clicks produce one update and one clean 409 rather than a lost write.
 
 ---
@@ -929,6 +954,7 @@ instantly.
 | `SKUS_NOT_FOUND` | 404 | skus |
 | `SKUS_PRODUCT_NOT_FOUND` | 404 | skus |
 | `SKUS_SUPPLY_EXCEEDED` | 409 | skus |
+| `SKUS_VARIANT_SUPPLY_EXCEEDED` | 409 | skus |
 | `SKUS_TAG_TAKEN` | 409 | skus |
 | `SKUS_SERIAL_TAKEN` | 409 | skus |
 | `SKUS_VARIANT_MISMATCH` | 400 | skus |

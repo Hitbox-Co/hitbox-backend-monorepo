@@ -29,6 +29,7 @@ export const AuditPersonaGroup = {
     HITBOX_EMPLOYEE: 'hitbox_employee',
     HITBOX_ADMIN: 'hitbox_admin',
     SYSTEM: 'system',
+    VENDOR: 'vendor',
 } as const;
 export type AuditPersonaGroup = (typeof AuditPersonaGroup)[keyof typeof AuditPersonaGroup];
 
@@ -47,13 +48,14 @@ export interface AuditEventTypeDefinition {
     sourceStories: string[];
 }
 
-const { BUYER, BRAND_EMPLOYEE, HITBOX_EMPLOYEE, HITBOX_ADMIN, SYSTEM } = AuditPersonaGroup;
+const { BUYER, BRAND_EMPLOYEE, ARTIST, HITBOX_EMPLOYEE, HITBOX_ADMIN, SYSTEM } = AuditPersonaGroup;
 const { INFO, WARNING, CRITICAL } = AuditSeverity;
 
 /** Shorthand for the doc citations below. */
 const AUTHZ = 'docs/authorization/authorization-architecture.md';
 const AUDIT_DOC = 'docs/audit-logging.md';
 const FINANCE_DOC = 'docs/finance/finance-revenue-ledger.md';
+const ARTIST_ADMIN_DOC = 'docs/artist/artist-admin-api.md';
 
 export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
     // ── Role administration ─────────────────────────────────────────────────
@@ -173,6 +175,145 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         description: 'A user account was deleted or anonymised.',
         defaultSeverity: CRITICAL,
         sourceStories: [`${AUDIT_DOC} write-paths`],
+    },
+
+    // ── Artist collections ──────────────────────────────────────────────────
+    // An artist curating their own series — docs/artist-collection/. Every
+    // change is recorded so HitBox's monitoring view has a trail behind it.
+    {
+        eventType: 'artist.collection.create',
+        personaGroup: ARTIST,
+        description: 'An artist created a collection.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.update',
+        personaGroup: ARTIST,
+        description: 'An artist edited a collection — name, address, description, visibility or hero image.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.archive',
+        personaGroup: ARTIST,
+        description: 'An artist deleted (archived) a collection, taking it off the storefront.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.restore',
+        personaGroup: ARTIST,
+        description: 'An artist restored an archived collection.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.reorder',
+        personaGroup: ARTIST,
+        description: 'An artist changed the order of their collections.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.drops.add',
+        personaGroup: ARTIST,
+        description: 'An artist added their own drops to a collection (or moved them from another of theirs).',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+    {
+        eventType: 'artist.collection.drops.remove',
+        personaGroup: ARTIST,
+        description: 'An artist took a drop out of a collection.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/artist-collection/README.md'],
+    },
+
+    // ── Artist records, administered by HitBox staff ────────────────────────
+    // Changing who appears on the storefront, and whether they can sell, is a
+    // staff decision with a reason; switching an artist off or archiving them
+    // is WARNING, as is anything touching the compliance attestation.
+    {
+        eventType: 'artist.profile.update',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff edited an artist's profile (name, handle, bio, genre, or took an image down).",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.compliance.attest',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff attested an artist's compliance.",
+        defaultSeverity: WARNING,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.compliance.revoke',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff withdrew an artist's compliance attestation.",
+        defaultSeverity: WARNING,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.activate',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff activated an artist.",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.deactivate',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff deactivated an artist — their profile is locked.",
+        defaultSeverity: WARNING,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.archive',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff archived an artist.",
+        defaultSeverity: WARNING,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.restore',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff restored an archived artist.",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.publish',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff listed an artist publicly on the storefront.",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+    {
+        eventType: 'artist.profile.unlist',
+        personaGroup: HITBOX_ADMIN,
+        description: "HitBox staff took an artist off the public storefront.",
+        defaultSeverity: INFO,
+        sourceStories: [ARTIST_ADMIN_DOC],
+    },
+
+    // ── Orders ──────────────────────────────────────────────────────────────
+    // What a person does to an order. System-driven changes (webhook, sweep,
+    // NFC tap) are on the order's own status history instead.
+    {
+        eventType: 'order.status.change',
+        personaGroup: HITBOX_EMPLOYEE,
+        description: 'An operator changed an order’s status (processing, delivered, cancelled).',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/orders/order-history-and-shipments.md'],
+    },
+    {
+        eventType: 'order.shipment.record',
+        personaGroup: HITBOX_EMPLOYEE,
+        description: 'An operator recorded or corrected an order’s carrier and tracking number.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/orders/order-history-and-shipments.md'],
     },
 
     // ── Money ───────────────────────────────────────────────────────────────
@@ -382,6 +523,23 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         sourceStories: ['docs/admin/sku-inventory-management.md 4'],
     },
 
+    // ── Publication ─────────────────────────────────────────────────────────
+    {
+        eventType: 'product.publish',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'A drop was taken live, or an attempt to take it live was refused. Carries ' +
+            'the review it cleared (id, version, authority) so "who authorised this" is ' +
+            'answerable from the trail alone. DENIED rows record an attempt to publish ' +
+            'a drop whose owner had not approved it.',
+        // CRITICAL because this is the moment a drop becomes purchasable by the
+        // public, and because a DENIED row here is an attempt to bypass the
+        // owner's approval — the single thing the release authority rule exists
+        // to prevent.
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/admin/drop-approval-lifecycle.md §10'],
+    },
+
     // ── Supply intake ───────────────────────────────────────────────────────
     // Chain of custody. Taking delivery of 5,000 chips is the moment the
     // platform becomes accountable for them, so the whole intake path is
@@ -447,6 +605,54 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
             'before/after QC status.',
         defaultSeverity: CRITICAL,
         sourceStories: ['docs/admin/supply-inventory-api.md 8'],
+    },
+    // Vendor portal administration. Inviting someone to a vendor grants them a
+    // role, and assigning a drop decides which goods they may book in — both
+    // are access decisions, so WARNING like the rest of supply administration.
+    // Vendor-portal writes themselves reuse supply.batch.create and
+    // supply.tags.register, recorded with actor type VENDOR.
+    {
+        eventType: 'supply.vendor.member.invite',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'Someone was invited to sign in to the vendor portal for a vendor. Carries ' +
+            'the vendor, the invitation id and whether the role was granted immediately.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
+    },
+    {
+        eventType: 'supply.vendor.member.revoke',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A vendor portal member's access was revoked. Carries the before/after " +
+            'status and the reason.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
+    },
+    {
+        eventType: 'supply.vendor.drop.assign',
+        personaGroup: HITBOX_ADMIN,
+        description: 'A vendor was allowed to supply a drop through the vendor portal.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
+    },
+    {
+        eventType: 'supply.vendor.drop.allotment',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A vendor's allotment for a drop was changed — per variant, or the drop-level " +
+            'quantity. Carries before/after allotments.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
+    },
+    {
+        eventType: 'supply.vendor.drop.unassign',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'A vendor was withdrawn from supplying a drop. Consignments already booked ' +
+            'are untouched.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/vendor/vendor-admin-api.md'],
     },
 
     // ── Content ─────────────────────────────────────────────────────────────

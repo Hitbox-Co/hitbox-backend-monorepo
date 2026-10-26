@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { Prisma } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
 import { slugify } from '../domain/artist-role';
-import type { ListArtistsQuery } from '../dto/artist.dto';
+import type { ArtistSort, ListArtistsQuery } from '../dto/artist.dto';
 
 /**
  * Directory projection.
@@ -25,7 +25,7 @@ const artistSelect = {
     invitationId: true,
     organizationId: true,
     organization: { select: { name: true } },
-    _count: { select: { drops: true, artistCollections: true } },
+    _count: { select: { drops: true, artistCollections: true, follows: true } },
 } satisfies Prisma.ArtistSelect;
 
 export type ArtistRow = Prisma.ArtistGetPayload<{ select: typeof artistSelect }>;
@@ -55,8 +55,8 @@ export class ArtistRepository {
             this.prisma.artist.findMany({
                 where,
                 select: artistSelect,
-                // Alphabetical — this backs a picker scanned by eye.
-                orderBy: { name: 'asc' },
+                // A–Z by default — this backs a picker scanned by eye.
+                orderBy: ORDER_BY[query.sort],
                 skip: (query.page - 1) * query.limit,
                 take: query.limit,
             }),
@@ -148,6 +148,19 @@ export class ArtistRepository {
         });
     }
 }
+
+/**
+ * Every ordering ends on a unique key, so a page boundary never shows the
+ * same artist twice (or skips one) when two of them tie.
+ */
+const ORDER_BY: Record<ArtistSort, Prisma.ArtistOrderByWithRelationInput[]> = {
+    name: [{ name: 'asc' }, { id: 'asc' }],
+    newest: [{ createdAt: 'desc' }, { id: 'asc' }],
+    oldest: [{ createdAt: 'asc' }, { id: 'asc' }],
+    drops: [{ drops: { _count: 'desc' } }, { name: 'asc' }, { id: 'asc' }],
+    collections: [{ artistCollections: { _count: 'desc' } }, { name: 'asc' }, { id: 'asc' }],
+    followers: [{ follows: { _count: 'desc' } }, { name: 'asc' }, { id: 'asc' }],
+};
 
 const SLUG_ATTEMPTS = 5;
 

@@ -18,7 +18,13 @@ export interface ReleaseAuditInput {
     eventType: string;
     actorId: string;
     /** Which hat the actor was wearing on this drop — see `auditActorType`. */
-    actorType: 'ARTIST' | 'BRAND_EMPLOYEE' | 'HITBOX_ADMIN';
+    /**
+     * Which hat the actor wore on this review. `SYSTEM` is not a person: it
+     * records a decision the platform made on its own, which today means a
+     * drop that auto-passed because nobody owned it. Naming the submitter there
+     * would put a sign-off in the trail that they never gave.
+     */
+    actorType: 'ARTIST' | 'BRAND_EMPLOYEE' | 'HITBOX_ADMIN' | 'SYSTEM';
     /** The drop's owner, so the trail can be filtered by brand. */
     organizationId: string | null;
     approvalId: string;

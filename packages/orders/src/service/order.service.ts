@@ -9,6 +9,7 @@ import {
     canTransition,
     timestampsFor,
 } from '../domain/order-status';
+import { buildMoneySummary } from '../domain/order-money';
 import type {
     ChangeOrderStatusDto,
     ListOrdersQuery,
@@ -21,6 +22,10 @@ import type {
     OrderListRow,
     OrderRepository,
 } from '../repository/order.repository';
+import type { OrderWriteRepository } from '../repository/order-write.repository';
+import type { IOrdersAuditRecorder } from '../domain/interfaces/audit-recorder.port';
+import { ORDERS_AUDIT_EVENTS, auditActorType, toShipmentView } from './order-shipment.service';
+import { randomUUID } from 'node:crypto';
 
 /**
  * What the caller is allowed to see. Resolved from their grants by the
@@ -33,12 +38,21 @@ export interface OrderView {
     canSeeMoney: boolean;
     /** `buyer-profile:read` — the buyer's email and name. */
     canSeeBuyer: boolean;
+    /**
+     * `order:refund:global` — may start and drive refunds. Optional so older
+     * callers stay valid; absent means "no".
+     */
+    canRefund?: boolean;
 }
 
 export interface OrderServiceDeps {
     orders: OrderRepository;
+    writes: OrderWriteRepository;
+    audit: IOrdersAuditRecorder;
     eventBus: IEventBus;
     logger: Logger;
+    /** RETURN_WINDOW_DAYS, for `money.returnWindowEndsAt`. */
+    returnWindowDays: number;
 }
 
 export class OrderService {
@@ -83,6 +97,8 @@ export class OrderService {
             trackingNote: order.trackingNote,
             termsAcceptedAt: order.termsAcceptedAt?.toISOString() ?? null,
             updatedAt: order.updatedAt.toISOString(),
+            paidAt: order.paidAt?.toISOString() ?? null,
+            unitAssignedById: order.unitAssignedById,
             archivedAt: order.archivedAt?.toISOString() ?? null,
             market: order.market
                 ? {
@@ -108,27 +124,79 @@ export class OrderService {
             })),
             // Precomputed so the UI enables exactly the buttons that will work,
             // instead of discovering the rule by getting a 409.
-            allowedTransitions: ORDER_STATUS_TRANSITIONS[order.status].filter((status) =>
-                ADMIN_SETTABLE_STATUSES.includes(status),
+            // SHIPPED is withheld until a packer has scanned the unit.
+            allowedTransitions: ORDER_STATUS_TRANSITIONS[order.status].filter(
+                (status) => ADMIN_SETTABLE_STATUSES.includes(status) && status !== OrderStatus.SHIPPED,
             ),
+            canRecordShipment:
+                order.status === OrderStatus.PROCESSING &&
+                order.unitAssignedAt !== null &&
+                !order.shipments.some((s) => s.status === 'ACTIVE'),
+            canCorrectShipment:
+                order.status === OrderStatus.SHIPPED && order.shipments.some((s) => s.status === 'ACTIVE'),
+            shipment: (() => {
+                const active = order.shipments.find((s) => s.status === 'ACTIVE');
+                return active ? toShipmentView(active) : null;
+            })(),
+            shipments: order.shipments.map(toShipmentView),
+            history: order.statusHistory.map((row) => ({
+                id: row.id,
+                fromStatus: row.fromStatus,
+                toStatus: row.toStatus,
+                source: row.source,
+                actorId: row.actorId,
+                reason: row.reason,
+                metadata: row.metadata,
+                occurredAt: row.occurredAt.toISOString(),
+            })),
         };
 
         if (view.canSeeMoney) {
+            detail.money = buildMoneySummary({
+                orderStatus: order.status,
+                orderAmount: order.amount,
+                currency: order.currency,
+                payments: order.paymentTransactions,
+                refunds: order.refundRequests,
+                callerCanRefund: view.canRefund === true,
+                // Staff: a closed window means "no return", not "no refund".
+                deliveredAt: order.deliveredAt,
+                returnWindowDays: this.deps.returnWindowDays,
+            });
             detail.payments = order.paymentTransactions.map((payment) => ({
                 id: payment.id,
                 status: payment.status,
                 gateway: payment.gateway,
-                amount: payment.amount.toString(),
+                gatewayRef: payment.gatewayRef,
+                amount: payment.amount.toFixed(2),
                 currency: payment.currency,
+                needsReview: payment.needsReview,
+                reviewedAt: payment.reviewedAt?.toISOString() ?? null,
+                reviewNote: payment.reviewNote,
+                failureReason: payment.failureReason,
                 createdAt: payment.createdAt.toISOString(),
+                updatedAt: payment.updatedAt.toISOString(),
             }));
             detail.refunds = order.refundRequests.map((refund) => ({
                 id: refund.id,
                 status: refund.status,
-                amount: refund.amount?.toString() ?? null,
-                currency: order.currency,
+                reasonCode: refund.reasonCode,
                 reason: refund.reason,
+                amount: refund.amount?.toFixed(2) ?? null,
+                currency: refund.currency ?? order.currency,
+                physicalReturnRequired: refund.physicalReturnRequired,
+                physicalReturnConfirmedAt: refund.physicalReturnConfirmedAt?.toISOString() ?? null,
+                nfcTagCondition: refund.nfcTagCondition,
+                approvedAt: refund.approvedAt?.toISOString() ?? null,
+                rejectionReason: refund.rejectionReason,
+                gatewayRefundId: refund.gatewayRefundId,
+                gatewayStatus: refund.gatewayStatus,
+                gatewayFailureReason: refund.gatewayFailureReason,
+                gatewayStatusAt: refund.gatewayStatusAt?.toISOString() ?? null,
+                processedAt: refund.processedAt?.toISOString() ?? null,
+                claimRevokedAt: refund.claimRevokedAt?.toISOString() ?? null,
                 createdAt: refund.createdAt.toISOString(),
+                updatedAt: refund.updatedAt.toISOString(),
             }));
         }
 
@@ -157,6 +225,21 @@ export class OrderService {
                 ORDERS_ERROR_CODES.STATUS_NOT_SETTABLE,
             );
         }
+        if (to === OrderStatus.CANCELLED && (order.status === OrderStatus.PAID || order.status === OrderStatus.PROCESSING)) {
+            throw AppError.badRequest(
+                'This order has been paid. Cancel it by refunding it (POST /refunds with ' +
+                'physicalReturnRequired: false) — that returns the money and puts the unit back on sale.',
+                ORDERS_ERROR_CODES.CANCEL_REQUIRES_REFUND,
+                { status: order.status },
+            );
+        }
+        if (to === OrderStatus.SHIPPED) {
+            throw AppError.badRequest(
+                'An order ships by recording its carrier and tracking number: ' +
+                'POST /admin/orders/:orderId/shipment.',
+                ORDERS_ERROR_CODES.SHIPMENT_REQUIRED,
+            );
+        }
         if (order.status === to) {
             // Idempotent rather than an error — a double-clicked button should
             // not read as a failure.
@@ -171,14 +254,29 @@ export class OrderService {
         }
 
         const now = new Date();
-        const changed = await this.deps.orders.changeStatus({
-            id: input.id,
-            from: order.status,
-            to,
-            trackingNote: input.dto.trackingNote,
-            timestamps: timestampsFor(to, now),
-            now,
-        });
+        // Cancelling an unpaid order also releases its stock hold; every other
+        // transition is a plain guarded status write.
+        const changed =
+            to === OrderStatus.CANCELLED
+                ? Number(
+                    await this.deps.writes.cancelUnpaid({
+                        orderId: input.id,
+                        now,
+                        source: 'ADMIN',
+                        actorId: input.actorId,
+                        reason: input.dto.reason ?? null,
+                    }),
+                )
+                : await this.deps.orders.changeStatus({
+                    id: input.id,
+                    from: order.status,
+                    to,
+                    trackingNote: input.dto.trackingNote,
+                    timestamps: timestampsFor(to, now),
+                    now,
+                    actorId: input.actorId,
+                    reason: input.dto.reason ?? null,
+                });
 
         if (changed === 0) {
             throw AppError.conflict(
@@ -187,6 +285,16 @@ export class OrderService {
             );
         }
 
+        await this.deps.audit.record({
+            eventType: ORDERS_AUDIT_EVENTS.STATUS_CHANGE,
+            actor: { type: auditActorType(input.view), id: input.actorId },
+            result: 'SUCCESS',
+            organizationId: order.organizationId,
+            resource: { type: 'Order', id: input.id },
+            beforeState: { status: order.status },
+            afterState: { status: to, reason: input.dto.reason ?? null },
+            correlationId: randomUUID(),
+        });
         await this.deps.eventBus.publish(ORDER_EVENTS.STATUS_CHANGED, {
             orderId: input.id,
             from: order.status,
@@ -238,6 +346,7 @@ export class OrderService {
             placedAt: row.placedAt.toISOString(),
             shippedAt: row.shippedAt?.toISOString() ?? null,
             deliveredAt: row.deliveredAt?.toISOString() ?? null,
+            unitAssignedAt: row.unitAssignedAt?.toISOString() ?? null,
         };
 
         if (view.canSeeBuyer) {

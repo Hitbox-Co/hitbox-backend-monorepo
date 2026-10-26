@@ -34,6 +34,7 @@ export const RESOURCE_DOMAIN: Record<ResourceType, AuthorizationDomain> = {
     [ResourceType.SELF_PROFILE]: AuthorizationDomain.BUSINESS,
     [ResourceType.BUYER_PROFILE]: AuthorizationDomain.BUSINESS,
     [ResourceType.DROP]: AuthorizationDomain.BUSINESS,
+    [ResourceType.DROP_TYPE]: AuthorizationDomain.BUSINESS,
     [ResourceType.RELEASE_APPROVAL]: AuthorizationDomain.BUSINESS,
     [ResourceType.COLLECTIBLE_INSTANCE]: AuthorizationDomain.BUSINESS,
     [ResourceType.REPORTS_DASHBOARDS]: AuthorizationDomain.BUSINESS,
@@ -51,6 +52,7 @@ export const RESOURCE_DOMAIN: Record<ResourceType, AuthorizationDomain> = {
     [ResourceType.GENERAL_LOCATION]: AuthorizationDomain.BUSINESS,
     [ResourceType.AGE_SPECIFIC_FLAG]: AuthorizationDomain.BUSINESS,
     [ResourceType.ADDRESS]: AuthorizationDomain.BUSINESS,
+    [ResourceType.VENDOR_SUPPLY]: AuthorizationDomain.BUSINESS,
     // ── Technical domain ────────────────────────────────────────────────────
     [ResourceType.APPLICATION]: AuthorizationDomain.TECHNICAL,
     [ResourceType.INFRASTRUCTURE]: AuthorizationDomain.TECHNICAL,
@@ -171,6 +173,7 @@ export const RESOURCE_DISPLAY: Record<ResourceType, string> = {
     [ResourceType.SELF_PROFILE]: 'My Profile',
     [ResourceType.BUYER_PROFILE]: 'Buyer Profiles',
     [ResourceType.DROP]: 'Drops & Products',
+    [ResourceType.DROP_TYPE]: 'Drop Types & Variant Rules',
     [ResourceType.RELEASE_APPROVAL]: 'Release Approvals',
     [ResourceType.COLLECTIBLE_INSTANCE]: 'Collectible Instances',
     [ResourceType.REPORTS_DASHBOARDS]: 'Reports & Dashboards',
@@ -188,6 +191,7 @@ export const RESOURCE_DISPLAY: Record<ResourceType, string> = {
     [ResourceType.GENERAL_LOCATION]: 'Buyer Location',
     [ResourceType.AGE_SPECIFIC_FLAG]: 'Age-Restricted Flag',
     [ResourceType.ADDRESS]: 'Addresses',
+    [ResourceType.VENDOR_SUPPLY]: 'Vendor Supply',
     [ResourceType.APPLICATION]: 'Application',
     [ResourceType.INFRASTRUCTURE]: 'Infrastructure',
     [ResourceType.OPS_DASHBOARD_INFRA]: 'Ops Dashboards',
@@ -258,6 +262,10 @@ const DEFINITIONS: Record<string, string> = {
     'drop:read:global': 'View any drop, including unpublished.',
     'drop:manage:organization': "Create, edit and retire your organization's drops.",
     'drop:manage:global': 'Create, edit and retire any drop on the platform.',
+
+    // ── Drop types (variant configuration) ──────────────────────────────────
+    'drop-type:manage:global':
+        'Create and edit drop types — their variant dimensions, values, colors and rules.',
 
     // ── Release approval workflow ───────────────────────────────────────────
     'release-approval:read:organization': "View your organization's pending releases.",
@@ -365,6 +373,13 @@ const DEFINITIONS: Record<string, string> = {
     'address:manage:own': 'Manage your own address book.',
     'address:read:global': 'View any address for fulfilment.',
     'address:manage:global': 'Administer any address.',
+
+    // ── Vendor portal ───────────────────────────────────────────────────────
+    // Own scope only: "own" is the caller's vendor, resolved from their
+    // VendorMember row — never from the request. The drops a vendor may supply
+    // are a further filter applied by @hitbox/supply, not a permission.
+    'vendor-supply:read:own': "View your vendor's profile, assigned drops and consignments.",
+    'vendor-supply:create:own': 'Book consignments and register chip manifests for assigned drops.',
 
     // ══ TECHNICAL DOMAIN ════════════════════════════════════════════════════
     'application:read:global': 'View application health and release state.',

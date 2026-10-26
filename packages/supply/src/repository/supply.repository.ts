@@ -7,11 +7,15 @@ import {
     TagLifecycleState,
 } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
+import { AppError } from '@hitbox/shared';
+import { SUPPLY_ERROR_CODES } from '../constants/supply.constant';
+import { acceptsRows } from '../domain/batch-state';
 import type {
     ListBatchesQuery,
     ListTagsQuery,
     ListVendorsQuery,
     SupplyMetricsQuery,
+    VariantQuantity,
 } from '../dto/supply.dto';
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -66,6 +70,17 @@ const batchSelect = {
     notes: true,
     createdAt: true,
     updatedAt: true,
+    lines: {
+        select: {
+            variantId: true,
+            variant: { select: { variantCode: true, label: true, position: true } },
+            quantity: true,
+            rowsReceived: true,
+            rowsAccepted: true,
+            rowsRejected: true,
+        },
+        orderBy: { variant: { position: 'asc' } },
+    },
     _count: { select: { nfcTags: true } },
 } satisfies Prisma.SupplyBatchSelect;
 
@@ -75,6 +90,7 @@ const tagSelect = {
     id: true,
     nfcTagCode: true,
     supplyBatchId: true,
+    variantId: true,
     supplyBatch: {
         select: {
             id: true,
@@ -108,6 +124,19 @@ export interface SealedTag {
     keyReference: string;
     qcStatus: QcStatus;
     qcNotes: string | undefined;
+    /** Set when the consignment has variant lines. */
+    variantId: string | undefined;
+}
+
+/** A drop's variant, as the allotment and line checks need it. */
+export interface DropVariantRow {
+    id: string;
+    variantCode: string;
+    label: string;
+    optionsKey: string;
+    position: number;
+    isActive: boolean;
+    archivedAt: Date | null;
 }
 
 /** The only place in this module that touches Prisma. */
@@ -236,8 +265,9 @@ export class SupplyRepository {
         sourceFileRef?: string | undefined;
         notes?: string | undefined;
         enteredById: string;
+        lines?: VariantQuantity[] | undefined;
     }): Promise<BatchRow> {
-        const { dropId, ...rest } = data;
+        const { dropId, lines, ...rest } = data;
         return this.prisma.supplyBatch.create({
             data: {
                 id: randomUUID(),
@@ -248,6 +278,17 @@ export class SupplyRepository {
                 rowsRejected: 0,
                 ...rest,
                 ...(dropId ? { dropId } : {}),
+                ...(lines?.length
+                    ? {
+                        lines: {
+                            create: lines.map((line) => ({
+                                id: randomUUID(),
+                                variantId: line.variantId,
+                                quantity: line.quantity,
+                            })),
+                        },
+                    }
+                    : {}),
             },
             select: batchSelect,
         });
@@ -255,6 +296,156 @@ export class SupplyRepository {
 
     updateBatch(id: string, data: Prisma.SupplyBatchUpdateInput): Promise<BatchRow> {
         return this.prisma.supplyBatch.update({ where: { id }, data, select: batchSelect });
+    }
+
+    private async assertStillAcceptsRows(
+        tx: Prisma.TransactionClient,
+        batchId: string,
+        tags: SealedTag[],
+    ): Promise<void> {
+        const locked = await this.lockBatchWithin(tx, batchId);
+        if (!locked || !acceptsRows(locked.status)) {
+            throw AppError.conflict(
+                `This consignment is ${locked?.status ?? 'gone'} and no longer accepts rows.`,
+                SUPPLY_ERROR_CODES.BATCH_STATE_INVALID,
+            );
+        }
+        if (locked.rowsReceived + tags.length > locked.quantity) {
+            throw AppError.conflict(
+                `Registering ${tags.length} rows would exceed the declared quantity ` +
+                `(${locked.rowsReceived} of ${locked.quantity} already registered).`,
+                SUPPLY_ERROR_CODES.BATCH_QUANTITY_EXCEEDED,
+            );
+        }
+        const adding = new Map<string, number>();
+        for (const tag of tags) {
+            if (tag.variantId) adding.set(tag.variantId, (adding.get(tag.variantId) ?? 0) + 1);
+        }
+        if (adding.size === 0) return;
+        const lines = await tx.supplyBatchLine.findMany({
+            where: { batchId },
+            select: { variantId: true, quantity: true, rowsReceived: true },
+        });
+        const over = lines.filter(
+            (line) => line.rowsReceived + (adding.get(line.variantId) ?? 0) > line.quantity,
+        );
+        if (over.length > 0) {
+            throw AppError.conflict(
+                'The manifest would put more chips on a variant than its line declares.',
+                SUPPLY_ERROR_CODES.LINE_QUANTITY_EXCEEDED,
+                {
+                    lines: over.map((line) => ({
+                        variantId: line.variantId,
+                        quantity: line.quantity,
+                        alreadyRegistered: line.rowsReceived,
+                        requested: adding.get(line.variantId),
+                    })),
+                },
+            );
+        }
+    }
+
+    // ── Locks ───────────────────────────────────────────────────────────────
+
+    /** `SELECT … FOR UPDATE` on the batch: the row every intake write serialises on. */
+    async lockBatchWithin(
+        tx: Prisma.TransactionClient,
+        batchId: string,
+    ): Promise<{ status: SupplyBatchStatus; quantity: number; rowsReceived: number } | null> {
+        const rows = await tx.$queryRaw<
+            { status: SupplyBatchStatus; quantity: number; rowsReceived: number }[]
+        >`SELECT "status", "quantity", "rowsReceived"
+            FROM "SupplyBatch" WHERE "id" = ${batchId}::uuid FOR UPDATE`;
+        return rows[0] ?? null;
+    }
+
+    /**
+     * Serialises every accept into one drop for the rest of the transaction.
+     * Two cartons of the same drop accepted at once would otherwise each pass
+     * the allotment and the caps on numbers that exclude the other.
+     */
+    async lockDropWithin(tx: Prisma.TransactionClient, dropId: string): Promise<void> {
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${dropId}, 0))`;
+    }
+
+    // ── Accept into stock ───────────────────────────────────────────────────
+
+    /**
+     * Interactive transaction for the accept: status, mint and chip binding
+     * commit together. Generous timeout — a 1,000-unit carton is 1,000 inserts.
+     */
+    transaction<T>(fn: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+        return this.prisma.$transaction(fn, { timeout: 120_000, maxWait: 10_000 });
+    }
+
+    updateBatchWithin(
+        tx: Prisma.TransactionClient,
+        id: string,
+        data: Prisma.SupplyBatchUpdateInput,
+    ): Promise<BatchRow> {
+        return tx.supplyBatch.update({ where: { id }, data, select: batchSelect });
+    }
+
+    /** What the mint needs to know about the drop. */
+    findDropForMint(
+        tx: Prisma.TransactionClient,
+        dropId: string,
+    ): Promise<{ groupCode: string; totalSupply: number } | null> {
+        return tx.drop.findUnique({
+            where: { id: dropId },
+            select: { groupCode: true, totalSupply: true },
+        });
+    }
+
+    /**
+     * The consignment's chips that become units: not failed QC, not already
+     * in a unit. In platform-code order, so serial numbers follow the order
+     * chips were registered.
+     */
+    findChipsToStock(
+        tx: Prisma.TransactionClient,
+        batchId: string,
+    ): Promise<{ id: string; variantId: string | null }[]> {
+        return tx.nfcTag.findMany({
+            where: { supplyBatchId: batchId, skuId: null, qcStatus: { not: QcStatus.FAILED } },
+            select: { id: true, variantId: true },
+            orderBy: { nfcTagCode: 'asc' },
+        });
+    }
+
+    /**
+     * Points each chip at the unit minted around it. One statement rather
+     * than one update per chip: the unit already names its chip
+     * (`Sku.currentNfcTagId`), so the join is the whole mapping.
+     */
+    async bindChipsToUnits(tx: Prisma.TransactionClient, batchId: string): Promise<number> {
+        return tx.$executeRaw`
+            UPDATE "NfcTag" AS t
+               SET "skuId" = s."id",
+                   "boundAt" = NOW(),
+                   "lifecycleState" = 'BOUND'::"TagLifecycleState",
+                   "updatedAt" = NOW()
+              FROM "Sku" AS s
+             WHERE s."currentNfcTagId" = t."id"
+               AND t."supplyBatchId" = ${batchId}::uuid
+               AND t."skuId" IS NULL`;
+    }
+
+    /** Every variant of a drop, archived ones included, in display order. */
+    findDropVariants(dropId: string): Promise<DropVariantRow[]> {
+        return this.prisma.dropVariant.findMany({
+            where: { productId: dropId },
+            select: {
+                id: true,
+                variantCode: true,
+                label: true,
+                optionsKey: true,
+                position: true,
+                isActive: true,
+                archivedAt: true,
+            },
+            orderBy: { position: 'asc' },
+        });
     }
 
     /** Does this drop exist, and which organization owns it? */
@@ -345,6 +536,13 @@ export class SupplyRepository {
         tags: SealedTag[];
     }): Promise<{ created: number; batch: BatchRow }> {
         return this.prisma.$transaction(async (tx) => {
+            // The service checked status and quantities before hashing; two
+            // manifests for one carton (or a manifest racing the accept) could
+            // both have passed. Lock the batch row and check again against the
+            // settled numbers — the decision and every other manifest for this
+            // batch wait on the same lock.
+            await this.assertStillAcceptsRows(tx, input.batchId, input.tags);
+
             const last = await tx.nfcTag.findFirst({
                 orderBy: { nfcTagCode: 'desc' },
                 select: { nfcTagCode: true },
@@ -364,9 +562,30 @@ export class SupplyRepository {
                         ? {}
                         : { qcReportedAt: new Date() }),
                     ...(tag.qcNotes ? { qcNotes: tag.qcNotes } : {}),
+                    ...(tag.variantId ? { variantId: tag.variantId } : {}),
                     lifecycleState: TagLifecycleState.UNPROVISIONED,
                 })),
             });
+
+            // Same counters per variant line, when the consignment has lines.
+            const perVariant = new Map<string, { received: number; accepted: number }>();
+            for (const tag of input.tags) {
+                if (!tag.variantId) continue;
+                const entry = perVariant.get(tag.variantId) ?? { received: 0, accepted: 0 };
+                entry.received += 1;
+                if (tag.qcStatus !== QcStatus.FAILED) entry.accepted += 1;
+                perVariant.set(tag.variantId, entry);
+            }
+            for (const [variantId, counts] of perVariant) {
+                await tx.supplyBatchLine.update({
+                    where: { batchId_variantId: { batchId: input.batchId, variantId } },
+                    data: {
+                        rowsReceived: { increment: counts.received },
+                        rowsAccepted: { increment: counts.accepted },
+                        rowsRejected: { increment: counts.received - counts.accepted },
+                    },
+                });
+            }
 
             // Counters are incremented rather than assigned: a carton arrives
             // as several manifest calls, and assigning would make the last one

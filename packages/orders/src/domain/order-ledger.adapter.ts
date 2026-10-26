@@ -66,7 +66,7 @@ export class OrderLedgerAdapter {
         return this.orders.markFailed(input);
     }
 
-    markRefunded(input: { orderId: string; refundedAt: Date }): Promise<boolean> {
+    markRefunded(input: { orderId: string; refundedAt: Date; refundRequestId?: string; actorId?: string | null }): Promise<boolean> {
         return this.orders.markRefunded(input);
     }
 
@@ -83,7 +83,13 @@ export class OrderLedgerAdapter {
             amount: order.amount.toFixed(2),
             currency: order.currency,
             gateway: order.gateway,
+            // Starts the return window — payments enforces RETURN_WINDOW_DAYS from it.
+            deliveredAt: order.deliveredAt,
         };
+    }
+
+    findLiveHold(orderId: string) {
+        return this.orders.findLiveHold(orderId);
     }
 
     releaseExpiredReservations(now: Date): Promise<number> {

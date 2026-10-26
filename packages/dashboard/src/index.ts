@@ -9,6 +9,9 @@
 export { createDashboardModule } from './module';
 export type { DashboardModule, DashboardModuleDeps } from './module';
 
+// Implements @hitbox/artist's IArtistInsights port.
+export { ArtistInsightsAdapter } from './adapter/artist-insights.adapter';
+
 export {
     DASHBOARD_ERROR_CODES,
     DASHBOARD_MODULE,

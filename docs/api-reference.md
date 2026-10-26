@@ -662,7 +662,10 @@ separately, together with the design they implement:
   capability and payloads
 * [finance/README.md](finance/README.md) — the rest of the finance documentation
 
-In short: `POST /api/v1/checkout` and `POST /api/v1/refunds` for buyers,
+In short: `POST /api/v1/checkout`, `POST /api/v1/refunds` (a return needs
+photos from `POST /api/v1/refunds/evidence/upload-url` and a ≥ 20-character
+description, and is only possible within 10 days of delivery — [orders/order-payments-and-refunds-api.md §6.0](orders/order-payments-and-refunds-api.md#60-placing-a-return--photos-and-description))
+and `GET /api/v1/refunds/:refundId` for buyers,
 `/api/v1/admin/payments/*` and `/api/v1/admin/finance/*` for operators, and
 `POST /webhooks/payments/stripe` (outside `/api/v1`) for the provider.
 
@@ -681,3 +684,17 @@ In short: `GET /api/v1/invoices/*` for a buyer's own receipts, and
 `/api/v1/admin/tax/*` for rates, invoice administration, artist tax paperwork
 and return data — where an artist and an operator call the same routes and are
 narrowed by their grant.
+
+---
+
+## Vendor portal endpoints
+
+Supplier staff sign in (invited by a System Admin, password set through the
+ordinary Clerk invitation) and record supply for the drops assigned to their
+vendor:
+
+* [vendor/README.md](vendor/README.md) — overview and the end-to-end flow
+* [vendor/vendor-admin-api.md](vendor/vendor-admin-api.md) — invite/revoke vendor
+  users and assign drops (`/api/v1/admin/supply/vendors/:vendorId/{members,drops}`)
+* [vendor/vendor-portal-api.md](vendor/vendor-portal-api.md) — the vendor's own
+  routes under `/api/v1/vendor`

@@ -67,12 +67,16 @@ across currencies for the same reason.
 — long enough for a 3-D Secure challenge, short enough that an abandoned basket
 does not keep a one-of-500 unit off sale for an hour).
 
-`bootstrap()` returns `releaseExpiredReservations()` for a scheduler to call. It
-is idempotent and safe to run concurrently. **It is not scheduled by this
-change** — there is no job runner in this app yet; see
-[coverage-matrix.md](coverage-matrix.md). Until one exists, an expired hold is
-still correctly *ignored* by the availability query (it filters on
-`expiresAt > now`), so the unit is sellable; the sweeper only tidies the row.
+The **checkout sweep** runs every minute in the API server
+(`CHECKOUT_SWEEP_INTERVAL_SECONDS`, or `pnpm jobs:checkout-sweep` from an
+external cron). It releases expired holds and cancels orders left unpaid for
+`UNPAID_ORDER_GRACE_SECONDS` (default 30 min) after their hold expired.
+
+A payment that settles after its hold expired is still honoured if nobody else
+took the unit. If someone did, settlement is refused without committing
+anything, and the payment is parked `needsReview`. Checkout, settlement and the
+packing swap lock the unit's row, so one unit can't be sold twice. Details:
+[orders/checkout-sweep.md](../orders/checkout-sweep.md).
 
 ## The webhook endpoint
 
@@ -156,7 +160,7 @@ not by hoping the provider tries again.
 | --- | --- |
 | `payment_intent.succeeded`, `charge.succeeded` | `PaymentService.settle` — order PAID, stock committed, revenue booked |
 | `payment_intent.payment_failed`, `charge.failed` | `PaymentService.fail` — order CANCELLED, hold released |
-| `charge.refunded`, `refund.updated` | Fills in `processedAt` on a refund initiated elsewhere |
+| `refund.created`, `refund.updated`, `refund.failed` | Updates the refund's `gatewayStatus` (never backwards); a FAILED/CANCELED refund is flagged, audited and published as `payments.refund.failed`; a refund issued in the Stripe dashboard is matched to the order's APPROVED refund and processed. See [stripe-adapter.md §6](stripe-adapter.md#6-refund-webhooks--what-happens-after-process) |
 | `charge.dispute.created` | Opens a `DisputeCase` |
 | `charge.dispute.closed` | Resolves it; a loss books the chargeback and reverses the royalty |
 | anything else | Recorded, acknowledged, ignored |
@@ -165,9 +169,15 @@ That last row matters: an endpoint that 400s on an event type it did not ask for
 is an endpoint the provider eventually disables, taking the events that matter
 with it.
 
-## Running without a gateway adapter
+## Running with or without a gateway adapter
 
-`IPaymentGateway` is optional, and this deployment wires none.
+`IPaymentGateway` is optional. The Stripe adapter is wired when
+`STRIPE_SECRET_KEY` (or a `STRIPE_SECRET_KEY_<NAME>`) is set: checkout then
+creates the PaymentIntent, and refund `process` issues the refund in Stripe
+itself. Setup, key resolution, errors and local testing:
+[stripe-adapter.md](stripe-adapter.md).
+
+With no key set, no adapter is wired.
 
 Without it the platform still takes checkouts (order + hold + pending charge are
 recorded), still ingests webhooks (which is how settlement is confirmed), and

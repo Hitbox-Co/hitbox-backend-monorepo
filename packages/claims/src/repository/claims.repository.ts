@@ -160,11 +160,41 @@ export function basePriceOf(
 }
 
 export class ClaimsRepository {
-    constructor(private readonly prisma: PrismaClient) { }
+    constructor(
+        private readonly prisma: PrismaClient,
+        /**
+         * Hashes a chip UID the way @hitbox/supply registered it. Lets a tap
+         * find a unit minted from a vendor consignment, whose UID is stored
+         * only hashed + encrypted on its NfcTag (never as `Sku.tagId`).
+         */
+        private readonly tagUidHash?: ((uid: string) => string) | undefined,
+    ) { }
 
     /** The tag is unique on `Sku`, so this resolves at most one item. */
-    findSkuByTagId(tagId: string): Promise<SkuForTag | null> {
-        return this.prisma.sku.findUnique({ where: { tagId }, include: skuByTagInclude });
+    /**
+     * A tap's tag id → its unit. Two places a chip can be recorded:
+     *
+     *   1. `Sku.tagId` — the legacy column, the UID in the clear;
+     *   2. the unit's current NfcTag, by UID hash — every unit minted from an
+     *      accepted supply consignment.
+     *
+     * The UID is normalised as the manifest normalised it (separators
+     * stripped, upper-case) before hashing, or the same chip would hash
+     * differently depending on how a reader formats it.
+     */
+    async findSkuByTagId(tagId: string): Promise<SkuForTag | null> {
+        const legacy = await this.prisma.sku.findUnique({
+            where: { tagId },
+            include: skuByTagInclude,
+        });
+        if (legacy || !this.tagUidHash) return legacy;
+
+        const normalised = tagId.replace(/[\s:-]/g, '').toUpperCase();
+        if (!/^[0-9A-F]{8,64}$/.test(normalised)) return null;
+        return this.prisma.sku.findFirst({
+            where: { currentNfcTag: { tagUidHash: this.tagUidHash(normalised) } },
+            include: skuByTagInclude,
+        });
     }
 
     findSkuById(id: string): Promise<SkuForTag | null> {

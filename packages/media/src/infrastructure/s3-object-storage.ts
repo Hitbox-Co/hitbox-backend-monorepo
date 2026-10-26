@@ -1,4 +1,10 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+    GetObjectCommand,
+    HeadObjectCommand,
+    PutObjectCommand,
+    S3Client,
+    S3ServiceException,
+} from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import type {
     IObjectStorage,
@@ -85,6 +91,29 @@ export class S3ObjectStorage implements IObjectStorage {
             expiresIn: input.expiresInSeconds,
         });
         return { url, expiresIn: input.expiresInSeconds };
+    }
+
+    async headObject(
+        key: string,
+    ): Promise<{ sizeBytes: number; contentType: string | null } | null> {
+        try {
+            const head = await this.client.send(
+                new HeadObjectCommand({ Bucket: this.config.bucket, Key: key }),
+            );
+            return { sizeBytes: head.ContentLength ?? 0, contentType: head.ContentType ?? null };
+        } catch (error) {
+            // Only a definite 404 means "not there". A 403 is a missing
+            // s3:ListBucket grant (S3 then hides 404s behind 403s), and
+            // reporting that as "the buyer never uploaded" would blame the
+            // buyer for an IAM fault — so it propagates.
+            if (
+                error instanceof S3ServiceException &&
+                (error.name === 'NotFound' || error.$metadata.httpStatusCode === 404)
+            ) {
+                return null;
+            }
+            throw error;
+        }
     }
 
     async presignDownload(input: {

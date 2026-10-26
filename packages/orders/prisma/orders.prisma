@@ -15,6 +15,9 @@
 /// time so later catalog or market edits never rewrite an order's totals.
 model Order {
   id             String          @id @db.Uuid
+  /// Human-readable record id (`odr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   buyerId        String          @db.Uuid
   buyer          User            @relation(fields: [buyerId], references: [id])
   productId      String          @db.Uuid
@@ -49,6 +52,14 @@ model Order {
   shippedAt       DateTime?
   deliveredAt     DateTime?
   trackingNote    String?
+  /// When a packer scanned the physical unit going into this parcel and it was
+  /// confirmed as the order's unit. Null = the unit is still PROVISIONAL (held
+  /// at checkout, not yet matched to a physical item). An order cannot ship
+  /// until this is set. See docs/orders/order-unit-assignment-api.md.
+  unitAssignedAt   DateTime?
+  /// The user who scanned it. No foreign key — like other actor ids, the record
+  /// must outlive the staff account.
+  unitAssignedById String?   @db.Uuid
   placedAt        DateTime
   updatedAt       DateTime
   archivedAt      DateTime?
@@ -56,6 +67,8 @@ model Order {
   // ── Own-module back-relations ─────────────────────────────────────────────
   orderAddresss         OrderAddress[]
   inventoryReservations InventoryReservation[]
+  statusHistory         OrderStatusHistory[]
+  shipments             OrderShipment[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   paymentTransactions PaymentTransaction[]
@@ -82,6 +95,9 @@ model Order {
 /// or deletes the address book entry. Unique per (order, usage).
 model OrderAddress {
   id              String       @id @db.Uuid
+  /// Human-readable record id (`oda…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId         String       @db.Uuid
   order           Order        @relation(fields: [orderId], references: [id])
   usage           AddressUsage
@@ -109,6 +125,9 @@ model OrderAddress {
 /// SKU is now the order's. This is what stops two buyers claiming one unit.
 model InventoryReservation {
   id        String            @id @db.Uuid
+  /// Human-readable record id (`ivr…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   orderId   String            @db.Uuid
   order     Order             @relation(fields: [orderId], references: [id])
   skuId     String            @db.Uuid
@@ -144,6 +163,89 @@ enum AddressUsage {
 
 /// State of a stock hold: HELD (pending payment), COMMITTED (payment settled),
 /// RELEASED (expired or cancelled — the SKU is available again).
+/// Every status an order has been in — append-only, written in the same
+/// transaction as the status change itself, so the timeline can never miss a
+/// step or disagree with the order. Never updated, never deleted.
+/// docs/orders/order-history-and-shipments.md
+model OrderStatusHistory {
+  id         String            @id @db.Uuid
+  publicCode String?           @unique @db.VarChar(32)
+  orderId    String            @db.Uuid
+  order      Order             @relation(fields: [orderId], references: [id])
+  /// Null on the first row (the order being placed).
+  fromStatus OrderStatus?
+  toStatus   OrderStatus
+  /// What caused it — an operator, the payment webhook, an NFC tap, a job…
+  source     OrderStatusSource
+  /// Who. Null when the system did it (webhook, sweep).
+  actorId    String?           @db.Uuid
+  reason     String?
+  /// Small structured context: shipmentId, refundRequestId, claimId…
+  metadata   Json?
+  occurredAt DateTime
+
+  @@index([orderId, occurredAt])
+}
+
+/// A parcel sent for an order: whatever carrier the warehouse used, and the
+/// tracking number it gave. No carrier integration — the carrier is free
+/// text and the buyer follows `trackingUrl` (or the number) on the carrier's
+/// own site. A correction voids the row and adds a new one; nothing is
+/// overwritten, so "which number did the buyer see on Tuesday" stays
+/// answerable. At most one ACTIVE shipment per order.
+model OrderShipment {
+  id             String                @id @db.Uuid
+  publicCode     String?               @unique @db.VarChar(32)
+  orderId        String                @db.Uuid
+  order          Order                 @relation(fields: [orderId], references: [id])
+  carrierName    String
+  trackingNumber String
+  trackingUrl    String?
+  /// Internal note for the warehouse; never shown to the buyer.
+  note           String?
+  status         ShipmentStatus
+  createdById    String                @db.Uuid
+  createdAt      DateTime
+  deliveredAt    DateTime?
+  deliveredVia   DeliveryConfirmation?
+  voidedAt       DateTime?
+  voidedById     String?               @db.Uuid
+  voidReason     String?
+  updatedAt      DateTime
+
+  @@index([orderId, status])
+  @@index([trackingNumber])
+}
+
+/// What moved an order to a status. See OrderStatusHistory.
+enum OrderStatusSource {
+  CHECKOUT
+  PAYMENT
+  ADMIN
+  PACKING
+  SHIPMENT
+  NFC_CLAIM
+  REFUND
+  CHECKOUT_SWEEP
+  /// The buyer cancelled their own unpaid order.
+  BUYER
+  /// Rows written by the migration for orders that predate history.
+  BACKFILL
+}
+
+enum ShipmentStatus {
+  ACTIVE
+  VOIDED
+}
+
+/// How delivery was established — there is no carrier feed.
+enum DeliveryConfirmation {
+  /// An operator confirmed it (e.g. from the carrier's tracking page).
+  ADMIN
+  /// The buyer tapped the item's NFC tag — proof they have it.
+  NFC_CLAIM
+}
+
 enum ReservationStatus {
   HELD
   COMMITTED

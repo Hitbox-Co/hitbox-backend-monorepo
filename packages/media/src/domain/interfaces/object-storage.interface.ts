@@ -35,6 +35,21 @@ export interface IObjectStorage {
         expiresInSeconds: number;
     }): Promise<PresignedUpload>;
 
+    /**
+     * Whether an object is actually in the bucket, and its stored size.
+     * Null when there is no object at the key.
+     *
+     * A `MediaAsset` row is written when the upload URL is *issued*, before
+     * any bytes move, so the row alone proves nothing was uploaded. Anything
+     * that must not accept a promise of a file — return evidence — asks here.
+     *
+     * Needs `s3:ListBucket` on the bucket: without it S3 answers a HEAD for a
+     * missing key with 403 rather than 404, and the two become
+     * indistinguishable. The adapter throws on 403 for that reason rather than
+     * reporting "not uploaded" for a permissions fault.
+     */
+    headObject(key: string): Promise<{ sizeBytes: number; contentType: string | null } | null>;
+
     /** A short-lived GET URL. Never cached — regenerated per request. */
     presignDownload(input: { key: string; expiresInSeconds: number }): Promise<PresignedUpload>;
 

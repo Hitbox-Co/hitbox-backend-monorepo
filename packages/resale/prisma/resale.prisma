@@ -15,6 +15,9 @@
 /// module; nothing about ownership is decided here.
 model ResaleListing {
   id        String       @id @db.Uuid
+  /// Human-readable record id (`rsl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   sellerId  String       @db.Uuid
   seller    User         @relation(fields: [sellerId], references: [id])
   skuId     String       @db.Uuid

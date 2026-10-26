@@ -2,6 +2,8 @@ import { OrderStatus } from '@hitbox/database';
 import { z } from 'zod';
 import { ORDERS_DEFAULT_LIMIT, ORDERS_MAX_LIMIT } from '../constants/orders.constant';
 import { ADMIN_SETTABLE_STATUSES } from '../domain/order-status';
+import type { OrderMoneySummary } from '../domain/order-money';
+import type { ShipmentView, StatusHistoryView } from './order-shipment.dto';
 
 export const listOrdersQuerySchema = z.object({
     status: z.nativeEnum(OrderStatus).optional(),
@@ -71,6 +73,12 @@ export interface OrderListItem {
     placedAt: string;
     shippedAt: string | null;
     deliveredAt: string | null;
+    /**
+     * When a packer scanned and confirmed the physical unit. Null = `skuId` is
+     * still provisional (the unit held at checkout) — see
+     * docs/orders/order-unit-assignment-api.md. The order cannot ship until set.
+     */
+    unitAssignedAt: string | null;
 
     /** Only with `buyer-profile:read`. */
     buyerId?: string;
@@ -127,24 +135,71 @@ export interface OrderDetail extends OrderListItem {
      */
     skuUnits: OrderSkuUnit[];
     addresses: OrderAddressView[];
-    /** Which statuses this order may move to right now. Drives the UI. */
+    /**
+     * Which statuses this order may move to through `PATCH …/status` right
+     * now. Drives the UI. SHIPPED is never listed — an order ships by
+     * recording its shipment (`canRecordShipment`).
+     */
     allowedTransitions: OrderStatus[];
+    /** PROCESSING, unit scanned, no shipment yet → show "Ship (add tracking)". */
+    canRecordShipment: boolean;
+    /** SHIPPED with a shipment → show "Correct tracking". */
+    canCorrectShipment: boolean;
+    /** The live shipment (carrier + tracking number), or null. */
+    shipment: ShipmentView | null;
+    /** Every shipment, newest first, including VOIDED corrections. */
+    shipments: ShipmentView[];
+    /** Every status the order has been in, oldest first — the order timeline. */
+    history: StatusHistoryView[];
 
-    /** Only with `payment-royalty:read`. */
+    /** When payment settled. Null until PAID. */
+    paidAt: string | null;
+    /** Who scanned the unit at packing (docs/orders/order-unit-assignment-api.md). */
+    unitAssignedById: string | null;
+
+    /**
+     * Only with `payment-royalty:read` — see
+     * docs/orders/order-payments-and-refunds-api.md.
+     */
+    money?: OrderMoneySummary;
+    /** Only with `payment-royalty:read`. Newest first. */
     payments?: {
         id: string;
         status: string;
         gateway: string;
+        /** The provider's charge id, e.g. Stripe `pi_…`. */
+        gatewayRef: string | null;
         amount: string;
         currency: string;
+        needsReview: boolean;
+        reviewedAt: string | null;
+        reviewNote: string | null;
+        failureReason: string | null;
         createdAt: string;
+        updatedAt: string;
     }[];
+    /** Only with `payment-royalty:read`. Newest first. */
     refunds?: {
         id: string;
         status: string;
+        reasonCode: string;
+        reason: string | null;
         amount: string | null;
         currency: string | null;
-        reason: string | null;
+        physicalReturnRequired: boolean;
+        physicalReturnConfirmedAt: string | null;
+        nfcTagCondition: string | null;
+        approvedAt: string | null;
+        rejectionReason: string | null;
+        /** The provider's refund id, e.g. Stripe `re_…`. */
+        gatewayRefundId: string | null;
+        /** Stripe's view of the money: PENDING / SUCCEEDED / FAILED / CANCELED, or null. FAILED on a PROCESSED refund = buyer not paid. */
+        gatewayStatus: string | null;
+        gatewayFailureReason: string | null;
+        gatewayStatusAt: string | null;
+        processedAt: string | null;
+        claimRevokedAt: string | null;
         createdAt: string;
+        updatedAt: string;
     }[];
 }

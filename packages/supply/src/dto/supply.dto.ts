@@ -3,6 +3,7 @@ import {
     SupplyBatchStatus,
     SupplyItemType,
     TagLifecycleState,
+    VendorMemberStatus,
     VendorType,
 } from '@hitbox/database';
 import { z } from 'zod';
@@ -150,7 +151,53 @@ export const listBatchesQuerySchema = z.object({
 });
 export type ListBatchesQuery = z.infer<typeof listBatchesQuerySchema>;
 
-export const createBatchSchema = z.object({
+/**
+ * A per-variant quantity — "Red / S: 100". Used for a vendor's allotment and
+ * for a consignment's lines. One entry per variant.
+ */
+export const variantQuantitySchema = z.object({
+    variantId: z.string().uuid(),
+    quantity: z.coerce.number().int().min(1).max(1_000_000),
+});
+export type VariantQuantity = z.infer<typeof variantQuantitySchema>;
+
+export const variantQuantitiesSchema = z
+    .array(variantQuantitySchema)
+    .min(1)
+    .max(200)
+    .refine((rows) => new Set(rows.map((row) => row.variantId)).size === rows.length, {
+        message: 'Each variant may appear only once.',
+    });
+
+/**
+ * `quantity` and `lines` are two ways of saying how many units: a drop with
+ * variants is booked as lines (the total is their sum), a drop without as a
+ * plain quantity. Either is enough; when both are sent they must agree.
+ */
+const quantityOrLines = (
+    value: { quantity?: number | undefined; lines?: VariantQuantity[] | undefined },
+    ctx: z.RefinementCtx,
+): void => {
+    if (value.quantity === undefined && !value.lines) {
+        ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ['quantity'],
+            message: 'Send quantity, or lines for a drop with variants.',
+        });
+    }
+    if (value.lines && value.quantity !== undefined) {
+        const total = value.lines.reduce((sum, line) => sum + line.quantity, 0);
+        if (total !== value.quantity) {
+            ctx.addIssue({
+                code: z.ZodIssueCode.custom,
+                path: ['quantity'],
+                message: `quantity (${value.quantity}) must equal the sum of lines (${total}).`,
+            });
+        }
+    }
+};
+
+const createBatchBaseSchema = z.object({
     vendorId: z.string().uuid(),
     /**
      * The drop this consignment was ordered for. Optional because platform
@@ -160,8 +207,16 @@ export const createBatchSchema = z.object({
      */
     dropId: z.string().uuid().optional(),
     itemType: upperEnum(SupplyItemType),
-    /** Units the vendor says are in the carton. Reconciled against rows later. */
-    quantity: z.coerce.number().int().min(1).max(1_000_000),
+    /**
+     * Units the vendor says are in the carton. Reconciled against rows later.
+     * Optional when `lines` is sent — it is then their sum.
+     */
+    quantity: z.coerce.number().int().min(1).max(1_000_000).optional(),
+    /**
+     * The per-variant breakdown — required by the vendor portal for a drop
+     * whose vendor allotment is by variant. Needs `dropId`.
+     */
+    lines: variantQuantitiesSchema.optional(),
     /** The vendor's own batch label — what is printed on the carton. */
     batchRef: optionalText(100),
     receivedAt: isoDate.default(() => new Date()),
@@ -171,7 +226,26 @@ export const createBatchSchema = z.object({
     sourceFileRef: optionalText(500),
     notes: optionalText(2000),
 });
+export const createBatchSchema = createBatchBaseSchema
+    .superRefine(quantityOrLines)
+    .refine((value) => !value.lines || value.dropId, {
+        message: 'Variant lines need a dropId.',
+        path: ['lines'],
+    });
 export type CreateBatchDto = z.infer<typeof createBatchSchema>;
+
+/** One variant line of a consignment, with its own row counters. */
+export interface SupplyBatchLineResponse {
+    variantId: string;
+    variantCode: string;
+    label: string;
+    quantity: number;
+    rowsReceived: number;
+    rowsAccepted: number;
+    rowsRejected: number;
+    /** quantity − rowsReceived, never negative. */
+    shortfall: number;
+}
 
 /**
  * The intake decision.
@@ -216,6 +290,23 @@ export interface SupplyBatchResponse {
     notes: string | null;
     createdAt: string;
     updatedAt: string;
+    /** Per-variant breakdown. Empty for a drop without variants. */
+    lines: SupplyBatchLineResponse[];
+    /**
+     * Allotment coverage for accepting this consignment. Present on single
+     * consignment reads and on vendor bookings; null when the vendor has no
+     * assignment for the drop.
+     */
+    allotment?: AllotmentCheck | null;
+    /**
+     * Set on the ACCEPTED decision: the units minted into the drop from this
+     * consignment's chips, per variant. Null when nothing was minted (no drop,
+     * or a deployment without the minting port).
+     */
+    stock?: {
+        minted: number;
+        units: { variantId: string | null; count: number; firstSerial: number; lastSerial: number }[];
+    } | null;
     /**
      * Declared quantity minus rows actually registered. Positive means the
      * carton is short against its own paperwork, which is the number the
@@ -251,6 +342,12 @@ export const manifestRowSchema = z.object({
         .pipe(z.string().regex(/^[0-9A-F]+$/, 'A tag UID must be hexadecimal.')),
     qcStatus: upperEnum(QcStatus).optional(),
     qcNotes: optionalText(500),
+    /**
+     * The variant of the goods this chip is embedded in. Required when the
+     * consignment has variant lines (and must be one of them); refused when it
+     * has none.
+     */
+    variantId: z.string().uuid().optional(),
 });
 export type ManifestRow = z.infer<typeof manifestRowSchema>;
 
@@ -278,6 +375,14 @@ export interface RegisterTagsResult {
         rowsRejected: number;
         status: SupplyBatchStatus;
     };
+    /** Per-variant counters after this manifest. Empty when the batch has no lines. */
+    lines: {
+        variantId: string;
+        quantity: number;
+        rowsReceived: number;
+        rowsAccepted: number;
+        rowsRejected: number;
+    }[];
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -317,6 +422,8 @@ export interface NfcTagResponse {
     nfcTagCode: string;
     supplyBatchId: string;
     batch: { id: string; batchRef: string | null; vendorId: string; vendorName: string } | null;
+    /** The variant of the goods the chip is embedded in, when the manifest said. */
+    variantId: string | null;
     skuId: string | null;
     sku: { id: string; skuCode: string; serialNumber: number } | null;
     qcStatus: QcStatus;
@@ -440,3 +547,193 @@ export interface SupplyMetrics {
 }
 
 export { QcStatus, SupplyBatchStatus, SupplyItemType, TagLifecycleState, VendorType };
+
+// ────────────────────────────────────────────────────────────────────────────
+// Vendor portal — administration (HitBox staff)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Invite someone to sign in for a vendor. `email` defaults to the vendor's
+ * `contactEmail`, so "invite this vendor" is a body-less POST for the common
+ * case of one contact per supplier.
+ */
+export const inviteVendorMemberSchema = z.object({
+    email: optionalWhenBlank(z.string().trim().email().max(320)),
+});
+export type InviteVendorMemberDto = z.infer<typeof inviteVendorMemberSchema>;
+
+export const listVendorMembersQuerySchema = z.object({
+    status: upperEnum(VendorMemberStatus).optional(),
+});
+export type ListVendorMembersQuery = z.infer<typeof listVendorMembersQuerySchema>;
+
+export const revokeVendorMemberSchema = z.object({
+    reason: z.string().trim().min(1).max(500),
+});
+export type RevokeVendorMemberDto = z.infer<typeof revokeVendorMemberSchema>;
+
+/**
+ * What a vendor is to supply for one drop.
+ *
+ *   - drop WITH variants    → `variants` (required): "Red/S 100, Red/M 100, Red/L 100"
+ *   - drop WITHOUT variants → `quantity` (optional cap; omit for no cap)
+ */
+const allotmentFields = {
+    variants: variantQuantitiesSchema.optional(),
+    quantity: z.coerce.number().int().min(1).max(1_000_000).nullish(),
+};
+const notBoth = (value: { variants?: unknown; quantity?: number | null | undefined }) =>
+    !(value.variants && value.quantity != null);
+const notBothMessage = {
+    message: 'Send variants for a drop with variants, or quantity for one without — not both.',
+    path: ['quantity'],
+};
+
+export const assignVendorDropSchema = z
+    .object({ dropId: z.string().uuid(), ...allotmentFields })
+    .refine(notBoth, notBothMessage);
+export type AssignVendorDropDto = z.infer<typeof assignVendorDropSchema>;
+
+/**
+ * Raises (or lowers) specific parts of an allotment. Variants sent are set —
+ * added when new — and every other variant keeps its allotment. This is the
+ * route an admin uses to cover an over-allotment consignment before accepting
+ * it; the 409 from the accept carries the exact body as `suggestedPatch`.
+ */
+export const patchVendorAllotmentSchema = z
+    .object(allotmentFields)
+    .refine(notBoth, notBothMessage)
+    .refine((value) => value.variants !== undefined || value.quantity !== undefined, {
+        message: 'Send variants or quantity.',
+    });
+export type PatchVendorAllotmentDto = z.infer<typeof patchVendorAllotmentSchema>;
+
+/** Replaces the allotment of an existing assignment. Same shape, no dropId. */
+export const updateVendorAllotmentSchema = z.object(allotmentFields).refine(notBoth, notBothMessage);
+export type UpdateVendorAllotmentDto = z.infer<typeof updateVendorAllotmentSchema>;
+
+/** Supply progress against an allotment. `remaining` is null when there is no cap. */
+export interface AllotmentProgress {
+    allotted: number | null;
+    /** Units in this vendor's non-rejected consignments for the drop. */
+    booked: number;
+    /** Chips registered against those consignments. */
+    registered: number;
+    /** Of those, not failed QC. */
+    accepted: number;
+    /** Units in consignments HitBox has ACCEPTED — what the allotment must cover. */
+    approved: number;
+    /** allotted − booked, never negative. Null when there is no cap. */
+    remaining: number | null;
+    /** booked − allotted, never negative: units booked beyond the allotment. */
+    overBooked: number;
+}
+
+/**
+ * Whether accepting a consignment stays within the vendor's allotment. Shown
+ * on consignment reads so the admin knows before deciding; the accept itself
+ * is refused with this as `details` while `covered` is false.
+ */
+export interface AllotmentCheck {
+    covered: boolean;
+    byVariant: boolean;
+    variants: {
+        variantId: string;
+        variantCode: string;
+        label: string;
+        allotted: number;
+        /** Units in the vendor's other ACCEPTED consignments for this variant. */
+        acceptedElsewhere: number;
+        thisBatch: number;
+        required: number;
+        shortBy: number;
+    }[];
+    /** Drop-level figures, when the check is not per variant. */
+    total: {
+        allotted: number | null;
+        acceptedElsewhere: number;
+        thisBatch: number;
+        required: number;
+        shortBy: number;
+    } | null;
+    /** The PATCH …/allotment body that would cover this consignment, when one would. */
+    suggestedPatch: { variants?: VariantQuantity[]; quantity?: number } | null;
+}
+
+export interface VariantAllotmentResponse extends AllotmentProgress {
+    variantId: string;
+    /** Null for a variant booked without an allotment (listed at allotted 0). */
+    variantCode: string | null;
+    label: string | null;
+    /** Canonical options, e.g. `color=RED|size=S`. */
+    options: string | null;
+}
+
+export interface VendorMemberResponse {
+    id: string;
+    vendorId: string;
+    email: string;
+    status: VendorMemberStatus;
+    userId: string | null;
+    invitationId: string | null;
+    invitedById: string;
+    invitedAt: string;
+    acceptedAt: string | null;
+    revokedAt: string | null;
+    revokeReason: string | null;
+}
+
+export interface InviteVendorMemberResult {
+    /** ROLE_ASSIGNED when the address already had an account; INVITATION_SENT otherwise. */
+    outcome: 'ROLE_ASSIGNED' | 'INVITATION_SENT';
+    member: VendorMemberResponse;
+    invitationExpiresAt: string;
+}
+
+export interface VendorDropAssignmentResponse {
+    id: string;
+    vendorId: string;
+    dropId: string;
+    drop: { id: string; groupCode: string; name: string; status: string };
+    assignedById: string;
+    assignedAt: string;
+    /** True when the allotment is by variant (see `variants`). */
+    byVariant: boolean;
+    /** Drop-level totals (sum of variants for a by-variant allotment). */
+    progress: AllotmentProgress;
+    /** Per-variant allotment and progress. Empty for a drop without variants. */
+    variants: VariantAllotmentResponse[];
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Vendor portal — self-service (the vendor)
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * A consignment booked by the vendor. Identical to the admin body minus
+ * `vendorId` — always the caller's own vendor — and with `dropId` required:
+ * a vendor only ever supplies a drop it was assigned to.
+ */
+export const vendorCreateBatchSchema = createBatchBaseSchema
+    .omit({ vendorId: true, dropId: true })
+    .extend({ dropId: z.string().uuid() })
+    .superRefine(quantityOrLines);
+export type VendorCreateBatchDto = z.infer<typeof vendorCreateBatchSchema>;
+
+export const vendorListBatchesQuerySchema = listBatchesQuerySchema.omit({ vendorId: true });
+export type VendorListBatchesQuery = z.infer<typeof vendorListBatchesQuerySchema>;
+
+export interface VendorProfileResponse {
+    member: VendorMemberResponse;
+    vendor: {
+        id: string;
+        name: string;
+        legalName: string | null;
+        country: string | null;
+        vendorType: VendorType;
+        contactName: string | null;
+        contactEmail: string | null;
+        contactPhone: string | null;
+        isActive: boolean;
+    };
+}

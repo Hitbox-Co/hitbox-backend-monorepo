@@ -69,6 +69,17 @@ export type {
     CreateRefundResult,
     IPaymentGateway,
 } from './domain/interfaces/payment-gateway.interface';
+export type {
+    IReturnEvidenceMedia,
+    ReturnEvidenceAsset,
+    ReturnEvidenceFile,
+    ReturnEvidenceUpload,
+} from './domain/interfaces/return-evidence.interface';
+export { GatewayError } from './domain/gateway-error';
+export type { GatewayErrorKind } from './domain/gateway-error';
+// The Stripe adapter. Built at the composition root, which owns the key lookup.
+export { createStripeGateway, toMinorUnits } from './adapters/stripe-gateway';
+export type { StripeGatewayDeps } from './adapters/stripe-gateway';
 export { NOOP_PAYMENTS_AUDIT } from './domain/interfaces/audit-recorder.port';
 export type {
     IPaymentsAuditRecorder,
@@ -124,6 +135,7 @@ export {
     rejectRefundSchema,
     requestRefundSchema,
     resolveDisputeSchema,
+    returnEvidenceUploadSchema,
     reviewPaymentSchema,
 } from './dto/payments.dto';
 export type {
@@ -131,6 +143,8 @@ export type {
     DisputeView,
     GatewayConfigView,
     PaymentTransactionView,
+    RefundEvidenceView,
     RefundView,
+    ReturnEvidenceUploadView,
     WebhookEventView,
 } from './dto/payments.dto';

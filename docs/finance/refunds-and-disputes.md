@@ -2,6 +2,10 @@
 
 Two ways money goes back out, with almost nothing in common.
 
+> Building the admin screens? The endpoint-by-endpoint guide — request and
+> response shapes, `allowedActions`, the order's `money` summary — is
+> [orders/order-payments-and-refunds-api.md](../orders/order-payments-and-refunds-api.md).
+
 ## The refund workflow (D4-35)
 
 The source document specifies six steps:
@@ -53,6 +57,49 @@ a decision in the trail rather than as a normal approval.
 
 A digital-only order sets `physicalReturnRequired: false` at request time and
 skips the hold entirely.
+
+### Returns close 10 days after delivery
+
+`RETURN_WINDOW_DAYS` (default 10) after `Order.deliveredAt`, the window
+closes for good. Enforced in `RefundService` on both the photo upload and the
+request:
+
+- **no return, for anyone** — there is deliberately no staff override, so the
+  window means what the buyer was told;
+- **no refund at all from the buyer** on that order — otherwise a
+  `physicalReturnRequired: false` request would be a return without the item;
+- staff may still raise a refund with nothing sent back, which is a goodwill
+  decision rather than a return.
+
+The orders module shows the same deadline (`money.returnWindowEndsAt`,
+`actions.returnWindowEndsAt`); bootstrap hands both modules the one env value,
+so the screen and the rule can't drift. An order never confirmed as delivered
+has no window running — delivery confirmation (admin or NFC tap) is what
+starts it.
+
+### A buyer's return is placed with photos and a description
+
+When a buyer asks to send an item back, the request must carry 1–8 photos of
+it (`RefundEvidence` → `MediaAsset`, private `return-evidence/` prefix) and a
+`reason` of at least 20 characters. This is the buyer's account of the item's
+condition *before* it ships, and the rest of the workflow is built on
+comparing against it: the warehouse checks the parcel against the photos at
+confirm-return, and the approver has both in front of them.
+
+Two design choices worth knowing:
+
+- **Uploads are verified, not trusted.** A `MediaAsset` row exists from the
+  moment the upload URL is issued, so the row proves nothing. At request time
+  the service HEADs each object in S3 and refuses any that isn't there at the
+  declared size (`NOT_UPLOADED`).
+- **Refund and photos are one transaction**, and `RefundEvidence.mediaAssetId`
+  is unique. A return never exists without the photos it was placed with, and
+  one photo can never back two returns.
+
+Staff raising a return for a buyer (`order:refund:global`) aren't forced to
+attach photos — the buyer may have called it in, and the warehouse inspection
+then carries the evidence. API contract:
+[orders/order-payments-and-refunds-api.md §6.0](../orders/order-payments-and-refunds-api.md#60-placing-a-return--photos-and-description).
 
 ### The tag's condition is recorded at the return, not at approval
 

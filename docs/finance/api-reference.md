@@ -36,7 +36,9 @@ column with different meanings.
 | Endpoint | Buyer | Artist | Brand Admin | Finance Admin | Order Manager | System Admin |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
 | `POST /checkout` | ✅ | — | — | — | — | — |
-| `POST /refunds` | ✅ own order | — | — | — | — | ✅ any |
+| `POST /refunds` | ✅ own order | — | — | — | ✅ any | ✅ any |
+| `POST /refunds/evidence/upload-url` | ✅ own order | — | — | — | ✅ any | ✅ any |
+| `GET /refunds/:refundId` | ✅ own | — | — | ✅ all | ✅ own | ✅ all |
 | `GET /admin/finance/balances` | — | ✅ own | ✅ org | ✅ all | — | ✅ all |
 | `GET /admin/finance/royalty-entries` | — | ✅ own | ✅ org | ✅ all | — | ✅ all |
 | `GET /admin/finance/payouts` | — | ✅ own | ✅ org | ✅ all | — | ✅ all |
@@ -104,13 +106,35 @@ owns the order. Raising one on *someone else's* order needs
 `order:refund:global`, which is the support/admin path onto the same endpoint.
 
 ```jsonc
-{ "orderId": "uuid", "reasonCode": "DEFECTIVE_TAG", "reason": "NFC tag not responding",
-  "amount": "100.00",             // optional, defaults to the order total
-  "physicalReturnRequired": true } // false for digital-only
+{ "orderId": "uuid", "reasonCode": "DEFECTIVE_TAG",
+  "reason": "NFC tag not responding when tapped",  // ≥ 20 chars on a buyer's return
+  "amount": "100.00",                 // optional, defaults to the order total
+  "physicalReturnRequired": true,     // false for digital-only / nothing to send back
+  "evidenceAssetIds": ["uuid", "uuid"] } // 1–8 photos, required on a buyer's return
 ```
 
-Returns the refund with `allowedTransitions`, so a UI enables exactly the
-buttons that will work.
+**10-day return window.** Counted from the order's `deliveredAt`
+(`RETURN_WINDOW_DAYS`, default 10). After it closes, no return can be placed
+by anyone (no override), and the buyer can't request any refund on the order;
+staff can still refund with `physicalReturnRequired: false`. Refused with
+`PAYMENTS_RETURN_WINDOW_CLOSED`, `details: { deliveredAt, returnWindowEndsAt,
+returnWindowDays }`. Not running until the order is delivered.
+
+**A buyer's return needs evidence.** With `physicalReturnRequired: true` and
+the caller being the order's buyer, the request must carry at least one photo
+(`PAYMENTS_RETURN_EVIDENCE_REQUIRED`) and a `reason` of at least 20 characters
+after trimming (`PAYMENTS_RETURN_DESCRIPTION_TOO_SHORT`). Photos are uploaded
+first through `POST /refunds/evidence/upload-url` (same ownership rule, one
+call per photo, presigned S3 PUT), and each one is verified at request time —
+uploaded by the caller, for this order, actually in the bucket, not attached
+elsewhere — with every failure listed in `details.problems`
+(`PAYMENTS_RETURN_EVIDENCE_INVALID`). Staff raising a return on a buyer's
+behalf may attach photos but aren't required to.
+
+Returns the refund with `allowedTransitions`, `evidenceCount` and `evidence[]`
+(signed 5-minute photo URLs). `GET /refunds/:refundId` reads it back, OWN
+scope for a buyer. Full contract:
+[orders/order-payments-and-refunds-api.md §6.0–6.1](../orders/order-payments-and-refunds-api.md#60-placing-a-return--photos-and-description).
 
 ### What a buyer cannot do
 

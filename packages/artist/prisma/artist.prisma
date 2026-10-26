@@ -11,6 +11,9 @@
 /// before either link exists.
 model Artist {
   id                   String        @id @db.Uuid
+  /// Human-readable record id (`art…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name                 String
   slug                 String        @unique
   bio                  String?
@@ -71,6 +74,9 @@ model Artist {
 /// complete. `position` orders collections on the artist's page.
 model ArtistCollection {
   id             String        @id @db.Uuid
+  /// Human-readable record id (`acl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   name           String
   slug           String        @unique
   description    String?
@@ -100,6 +106,9 @@ model ArtistCollection {
 /// (e.g. PRIMARY plus MERCHANDISE) but never duplicate one.
 model ArtistBrandLink {
   id             String              @id @db.Uuid
+  /// Human-readable record id (`abl…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   artistId       String              @db.Uuid
   artist         Artist              @relation(fields: [artistId], references: [id])
   organizationId String              @db.Uuid

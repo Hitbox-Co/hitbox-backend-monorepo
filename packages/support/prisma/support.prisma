@@ -13,6 +13,9 @@
 /// REVOKED/DISPUTED in the skus module.
 model SupportCase {
   id             String            @id @db.Uuid
+  /// Human-readable record id (`spc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   reporterId     String            @db.Uuid
   reporter       User              @relation("User_reporter", fields: [reporterId], references: [id])
   skuId          String?           @db.Uuid

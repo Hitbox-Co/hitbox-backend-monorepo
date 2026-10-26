@@ -59,7 +59,7 @@ function build() {
             findByGatewayRef: jest.fn(async () => TRANSACTION as never),
         } as never,
         paymentService: { settle, fail } as never,
-        refunds: { confirmSettlementFromGateway: jest.fn(async () => undefined) } as never,
+        refunds: { applyGatewayRefundUpdate: jest.fn(async () => undefined) } as never,
         disputes: {
             openFromGateway: jest.fn(async () => undefined),
             closeFromGateway: jest.fn(async () => undefined),

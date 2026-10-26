@@ -27,7 +27,15 @@ import { RoyaltyRuleService } from './service/royalty-rule.service';
 export interface FinancePermissionGuard {
     requirePermission(
         capability: string,
-        options?: { context?: (req: Request) => unknown; globalOnly?: boolean },
+        options?: {
+            /** May be async: resolving the owner can need a database read. */
+            context?: (
+                req: Request,
+            ) =>
+                | { organizationId?: string | null; ownerId?: string | null }
+                | Promise<{ organizationId?: string | null; ownerId?: string | null }>;
+            globalOnly?: boolean;
+        },
     ): RequestHandler;
 }
 
@@ -163,7 +171,19 @@ export function createFinanceModule(deps: FinanceModuleDeps): FinanceModule {
             // (own / organization / global) is what narrows the rows, and it is
             // resolved from the grant inside the service. An artist calling
             // GET /royalty-entries gets their own accrual and nothing else.
-            const read = requirePermission(FINANCE_READ_CAPABILITY);
+            //
+            // The owner context is **required**, not decorative. The engine
+            // rejects an `own`-scoped grant outright when `context.ownerId` is
+            // absent ("own-scoped grant requires an owner context"), because it
+            // cannot tell whose record is being asked for. These routes never
+            // name a record in the path — they return the caller's own slice —
+            // so the owner *is* the caller, and saying so is what lets an
+            // artist holding `payment-royalty:read:own` through at all.
+            // Without it the whole FinanceScope.OWN branch below is
+            // unreachable: every artist gets a 403 on their own earnings.
+            const read = requirePermission(FINANCE_READ_CAPABILITY, {
+                context: async (req) => ({ ownerId: (await deps.resolveAccess(req)).userId }),
+            });
             // Writes are global-only in the catalog; `globalOnly` makes the
             // guard say so rather than relying on the service alone.
             const manage = requirePermission(FINANCE_MANAGE_CAPABILITY, { globalOnly: true });

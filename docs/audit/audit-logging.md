@@ -42,8 +42,9 @@ A caller says `record('order.refund', …)` and cannot forget it's sensitive, or
 | Tables | `packages/audit/prisma/audit.prisma` — 3 tables, 7 indexes |
 | Tests | `packages/audit/tests/` — 98 across 5 suites |
 
-**Not wired yet.** Nothing outside this package imports `@hitbox/audit`, so no business action writes
-a trail today. The events are registered; the call sites are still to come. See 10.
+**Wired.** Writers today, each through its own consumer-defined port: `artist` (collections),
+`finance`, `orders`, `payments`, `products`, `releases`, `skus`, `supply`, `tax`. Not yet:
+`access-control` (`role.*`) — see 10. The read API is mounted at **`/api/v1/admin/audit`** (6).
 
 ---
 
@@ -58,10 +59,32 @@ question a review asks, and every event answers it on its own row.
 The code catalog is the seed source and the fast path — not a second gate. A row inserted straight
 into the table still works: the recorder falls back to reading the table for keys it doesn't know.
 
-**28 events: 20 CRITICAL, 4 WARNING, 4 INFO.**
+**66 events: 31 CRITICAL, 17 WARNING, 18 INFO** (as of the artist-administration
+events; `AUDIT_EVENT_CATALOG` is the authority — the command in 3 prints the current set).
 
-- **WARNING** — `permission.catalog.sync`, `organization.update`, `release.approve`, `release.reject`
-- **INFO** — `audit.read`, `product.create`, `product.update`, `content.unlock`
+- **WARNING** — `permission.catalog.sync`, `organization.update`, `artist.collection.archive`,
+  `artist.profile.compliance.attest`, `artist.profile.compliance.revoke`,
+  `artist.profile.deactivate`, `artist.profile.archive`,
+  `order.status.change`, `order.shipment.record`, `royalty.payout.schedule`, `release.approve`,
+  `release.reject`, `release.reopen`, `supply.vendor.create`, `supply.vendor.update`,
+  `supply.batch.create`, `supply.batch.decide`
+- **INFO** — `audit.read`, `artist.collection.create`, `artist.collection.update`,
+  `artist.collection.restore`, `artist.collection.reorder`, `artist.collection.drops.add`,
+  `artist.collection.drops.remove`, `artist.profile.update`, `artist.profile.activate`,
+  `artist.profile.restore`, `artist.profile.publish`, `artist.profile.unlist`,
+  `royalty.accrue`, `product.create`,
+  `product.update`, `release.submit`, `release.amend`, `content.unlock`
+
+**Artist collections** (`artist.collection.*`, persona group `artist`) record every change an
+artist makes to their collections — actor type `ARTIST`, resource `ArtistCollection` (`Artist`
+for a reorder), before/after snapshots. Written through the artist module's own audit port.
+See [artist-collection/README.md 6](../artist-collection/README.md#6-audit-trail).
+
+**Artist records** (`artist.profile.*`, persona group `hitbox_admin`) record every change HitBox
+staff make to an artist — edits, compliance attestation, activate/deactivate, archive/restore,
+publish/unlist — actor type `HITBOX_ADMIN` with the role that passed as the snapshot, resource
+`Artist`, before/after snapshots and the staff member's `reason`. See
+[artist/artist-admin-api.md 10](../artist/artist-admin-api.md#10-audit-trail-and-events).
 
 ---
 
@@ -175,12 +198,20 @@ actually handed over — which is what a review asks.
 
 ## 6. Reading the trail
 
+Mounted at **`/api/v1/admin/audit`** (`apps/backend/src/routes.ts`), behind `requireAuth`. Only
+HITBOX_SYSTEM_ADMIN holds an `audit-log` grant (`audit-log:read:global`) in the seeded catalog.
+
+**Scope.** A platform-wide grant reads everything. An organization-scoped reader
+(`audit-log:read:organization`) is confined to their organization's events, and one with no
+organization assignment is refused `403` — it used to fall through to platform-wide scope, which
+was harmless only while the route was unmounted.
+
 | Route | Capability |
 |---|---|
 | `GET /admin/audit/events` | `audit-log:read` |
 | `GET /admin/audit/events/correlation/:id` | `audit-log:read` |
 | `GET /admin/audit/event-types` | `audit-log:read` |
-| `GET /admin/audit/export` | `audit-log:export` + step-up |
+| `GET /admin/audit/export` | `audit-log:export` + step-up — **not mounted** (no step-up gate exists yet; 10) |
 | `GET /admin/audit/retention` (+ `/prune-plan`) | `audit-log:read` |
 | `PATCH /admin/audit/retention/:severity` | `audit-log:manage` |
 
@@ -313,9 +344,9 @@ unaudited platform looks exactly like one where nothing happened.
 
 ### Still open
 
-1. **No call sites.** The biggest gap. `role.*` and the DENIED results in
-   `require-permission.middleware.ts` are the first targets; `access-control` is the only other
-   module built far enough to take them.
+1. **`access-control` writes nothing.** `role.*` and the DENIED results in
+   `require-permission.middleware.ts` are the remaining targets — the business modules listed in 1
+   already record their changes.
 2. **The three audit capabilities are granted to no role.** `audit-log:read:organization`,
    `:export:global`, `:manage:global` are in the permission catalog but on no `RoleDefinition` — who
    reads a tenant's trail, who exports, who shortens a window are policy calls. Add them to

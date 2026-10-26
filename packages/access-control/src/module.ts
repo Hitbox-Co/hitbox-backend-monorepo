@@ -10,6 +10,7 @@ import { AuthzController } from './controller/authz.controller';
 import type { IGrantsInvalidator } from './domain/interfaces/grants-invalidator.interface';
 import { NOOP_GRANTS_INVALIDATOR } from './domain/interfaces/grants-invalidator.interface';
 import type { IIdentityInvitations } from './domain/interfaces/identity-invitations.interface';
+import type { ISoloOrganizations } from './domain/interfaces/solo-organizations.interface';
 import { UNAVAILABLE_IDENTITY_INVITATIONS } from './domain/interfaces/identity-invitations.interface';
 import type { IPrincipalGrantsLookup } from './domain/interfaces/principal-grants.interface';
 import { createRequirePermission } from './middleware/require-permission.middleware';
@@ -51,6 +52,14 @@ export interface AccessControlModuleDeps {
      * nowhere.
      */
     identityInvitations?: IIdentityInvitations;
+    /**
+     * Files a self-releasing artist under an organization of their own.
+     * Supplied by bootstrap. Omitted, an artist invitation that names no
+     * organization is refused — which is strictly better than accepting it and
+     * provisioning an artist whose own drops they cannot see. See
+     * `ISoloOrganizations`.
+     */
+    soloOrganizations?: ISoloOrganizations;
     /** How long a staff invitation stays claimable. Defaults to 72 hours. */
     invitationTtlHours?: number;
 }
@@ -141,6 +150,7 @@ export function createAccessControlModule(
         assignments: assignmentService,
         identity: deps.identityInvitations ?? UNAVAILABLE_IDENTITY_INVITATIONS,
         users: userDirectory,
+        ...(deps.soloOrganizations ? { soloOrganizations: deps.soloOrganizations } : {}),
         eventBus: deps.eventBus,
         logger,
         ttlHours: deps.invitationTtlHours ?? 72,

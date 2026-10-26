@@ -23,6 +23,8 @@ import { RoleScopeType } from '@prisma/client';
 import { prisma } from '../src/index';
 
 const ADMIN_ROLE = 'HITBOX_SYSTEM_ADMIN';
+/** The address `seed-demo.ts` gives the bootstrap administrator. */
+const SEEDED_ADMIN_EMAIL = 'admin@hitbox.demo';
 
 async function main(): Promise<void> {
     const [clerkId, emailArg] = process.argv.slice(2);
@@ -37,13 +39,26 @@ async function main(): Promise<void> {
         return;
     }
 
-    // Prefer the row the demo seed created; fall back to matching on email so
-    // this also works against a database seeded some other way.
-    const existing = await prisma.user.findFirst({
-        where: emailArg
-            ? { OR: [{ clerkId }, { email: emailArg }] }
-            : { OR: [{ clerkId }, { email: 'admin@hitbox.demo' }] },
-    });
+    // Which row to act on, resolved in order of how specific the match is.
+    //
+    // The order matters and the previous version got it wrong: it searched on
+    // `emailArg`, the address being *assigned*, so pointing the admin at a new
+    // address could never find anything and the documented
+    // `db:link-admin -- <clerkId> <newEmail>` always failed with "no admin user
+    // row found". An argument cannot be both the needle and the new value.
+    //
+    //   1. An account already holding this Clerk id — re-running is a no-op
+    //      rather than a second row, which is what makes this safe to retry.
+    //   2. An existing account at `emailArg` — "give that person the admin
+    //      role", and their Clerk id is corrected to match.
+    //   3. Otherwise the seeded admin, whose address is then changed to
+    //      `emailArg`. Renaming in place rather than creating a row is
+    //      deliberate: that id is referenced as `grantedById` on invitations
+    //      and `approverId` on release approvals, and a new row orphans them.
+    const existing =
+        (await prisma.user.findFirst({ where: { clerkId } })) ??
+        (emailArg ? await prisma.user.findFirst({ where: { email: emailArg } }) : null) ??
+        (await prisma.user.findFirst({ where: { email: SEEDED_ADMIN_EMAIL } }));
 
     if (!existing) {
         console.error(
@@ -53,6 +68,8 @@ async function main(): Promise<void> {
         process.exitCode = 1;
         return;
     }
+
+    const previous = { email: existing.email, clerkId: existing.clerkId };
 
     const user = await prisma.user.update({
         where: { id: existing.id },
@@ -101,8 +118,14 @@ async function main(): Promise<void> {
 
     console.log('✔ admin linked');
     console.log(`  userId    ${user.id}`);
-    console.log(`  clerkId   ${user.clerkId}`);
-    console.log(`  email     ${user.email}`);
+    console.log(
+        `  clerkId   ${user.clerkId}` +
+        (previous.clerkId !== user.clerkId ? `   (was ${previous.clerkId})` : ''),
+    );
+    console.log(
+        `  email     ${user.email}` +
+        (previous.email !== user.email ? `   (was ${previous.email})` : ''),
+    );
     console.log(`  role      ${ADMIN_ROLE} (GLOBAL)${live ? ' — already held' : ' — granted'}`);
     console.log('\nSign in through Clerk as that account, then GET /api/v1/authz/me.');
 }

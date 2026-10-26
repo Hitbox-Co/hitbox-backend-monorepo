@@ -18,6 +18,9 @@ import {
 } from '../domain/sku-update';
 import type { SkuUpdatePlan, SkuUpdateTarget } from '../domain/sku-update';
 import type { ISkuAudit } from '../domain/interfaces/sku-audit.interface';
+import type { ISkuReleaseGate } from '../domain/interfaces/release-gate.interface';
+import type { ISkuVariantPolicy } from '../domain/interfaces/variant-policy.interface';
+import type { ISkuMintLedger } from '../domain/interfaces/mint-ledger.interface';
 import type {
     BatchUpdateItem,
     BatchUpdateResult,
@@ -59,6 +62,19 @@ interface SkuServiceDeps {
     eventBus: IEventBus;
     audit: ISkuAudit;
     logger: Logger;
+    /**
+     * Answers "has this drop cleared release?" before an edition is minted.
+     * Provided by @hitbox/releases, which owns `ReleaseApproval`.
+     *
+     * Optional so a test harness can build the service without it — but when
+     * it is absent minting proceeds, because the gate is an added constraint
+     * rather than the authority on who may mint. A deployment without it is
+     * one where the approval workflow is not wired at all.
+     */
+    releaseGate?: ISkuReleaseGate | undefined;
+    variantPolicy?: ISkuVariantPolicy | undefined;
+    /** Writes each new unit's MINT ledger record in the minting transaction. */
+    mintLedger?: ISkuMintLedger | undefined;
 }
 
 /**
@@ -105,6 +121,15 @@ export class SkuService {
     ): Promise<MintResult> {
         const product = await this.requireProduct(access, productId);
 
+        // ── The drop's owner has to have approved it first ──────────────────
+        //
+        // A serialized unit is a claim about a physical object. Creating one
+        // for a drop the artist may yet reject produces inventory referring to
+        // something nobody will ship, which someone then reconciles away by
+        // hand. A drop with no artist and no organization has no owner to ask
+        // and is mintable immediately — see the port's own note.
+        await this.assertReleaseCleared(productId);
+
         // Binding a physical tag is a different capability from minting the
         // unit it goes on. A Drop Manager can mint any edition on the platform
         // and still cannot write a tag UID — which is the point of keeping
@@ -122,6 +147,22 @@ export class SkuService {
                 'variantId does not belong to this product',
                 SKUS_ERROR_CODES.VARIANT_MISMATCH,
             );
+        }
+
+        // The drop type's variant rules: a T-shirt unit needs a size, a
+        // keychain unit takes no variant, and a capped variant stops at its
+        // cap. Asked of products, which owns the rules. A pre-check like the
+        // tag check below — the drop-wide cap inside the mint stays the
+        // authority on totalSupply.
+        if (this.deps.variantPolicy) {
+            const verdict = await this.deps.variantPolicy.checkMint({
+                productId,
+                variantId: dto.variantId ?? null,
+                count: dto.count,
+            });
+            if (!verdict.ok) {
+                throw AppError.badRequest(verdict.message, verdict.code, verdict.details);
+            }
         }
 
         // Pre-checked only for a usable error message — the unique index on
@@ -143,6 +184,7 @@ export class SkuService {
             try {
                 const outcome = await this.deps.skus.runInTransaction((tx) =>
                     this.mintWithin(tx, {
+                        actorId: access.userId,
                         productId,
                         groupCode: product.groupCode,
                         totalSupply: product.totalSupply,
@@ -208,6 +250,11 @@ export class SkuService {
             vendorId?: string | null | undefined;
             provisioningBatchId?: string | null | undefined;
             isActive?: boolean | undefined;
+            /** Chips to embed, one per unit — see MintSpec.nfcTagIds. */
+            nfcTagIds?: string[] | undefined;
+            supplyBatchId?: string | null | undefined;
+            /** Who minted — recorded on the MINT ledger rows. */
+            actorId?: string | null | undefined;
         },
     ): Promise<MintOutcome> {
         const existing = await this.deps.skus.countForProduct(tx, spec.productId);
@@ -223,7 +270,30 @@ export class SkuService {
             );
         }
 
-        return this.deps.skus.mintWithin(tx, {
+        // The variant's own cap, enforced here for the same reason as the
+        // drop's: a pre-check outside the transaction is a guess. Concurrent
+        // mints of one drop collide on the serial index and the loser retries,
+        // so this re-reads a settled count.
+        if (spec.variantId) {
+            const cap = await this.deps.skus.variantCapWithin(tx, spec.variantId);
+            if (cap && cap.totalSupply !== null && cap.existing + spec.count > cap.totalSupply) {
+                throw AppError.conflict(
+                    `Variant ${cap.variantCode} is capped at ${cap.totalSupply} units and ` +
+                    `${cap.existing} exist; ${spec.count} more would exceed it. ` +
+                    `${Math.max(0, cap.totalSupply - cap.existing)} remaining.`,
+                    SKUS_ERROR_CODES.VARIANT_SUPPLY_EXCEEDED,
+                    {
+                        variantId: spec.variantId,
+                        variantCode: cap.variantCode,
+                        variantTotalSupply: cap.totalSupply,
+                        minted: cap.existing,
+                        requested: spec.count,
+                    },
+                );
+            }
+        }
+
+        const { outcome, units } = await this.deps.skus.mintWithin(tx, {
             productId: spec.productId,
             groupCode: spec.groupCode,
             count: spec.count,
@@ -232,7 +302,22 @@ export class SkuService {
             vendorId: spec.vendorId ?? null,
             provisioningBatchId: spec.provisioningBatchId ?? null,
             isActive: spec.isActive,
+            nfcTagIds: spec.nfcTagIds,
+            supplyBatchId: spec.supplyBatchId ?? null,
         });
+
+        // Every unit's provenance chain starts at birth: one MINT record per
+        // unit, written with the SAME `tx` that inserted the units. If the
+        // ledger write fails, the units roll back with it — there is never a
+        // unit without its MINT record. This runs for both mint paths: the
+        // mint endpoint and the inline `skus` block on drop creation.
+        if (this.deps.mintLedger && units.length > 0) {
+            await this.deps.mintLedger.recordMintWithin(tx, {
+                units,
+                actorId: spec.actorId ?? null,
+            });
+        }
+        return outcome;
     }
 
     // ── Tag binding ─────────────────────────────────────────────────────────
@@ -772,6 +857,63 @@ export class SkuService {
      * organization; this repeats the containment check against the row that
      * was actually loaded, which is the half the middleware cannot do.
      */
+    /**
+     * Refuses to mint an edition for a drop whose owner has not approved it.
+     *
+     * Silent when no gate is wired in: this is an added constraint on a
+     * deployment that runs the approval workflow, not the authority on who may
+     * mint — that is the capability check on the route.
+     */
+    /**
+     * Everything `mint()` checks before minting, for a caller that mints
+     * through `mintWithin` — the supply intake. Release approval, then the
+     * drop type's variant rules (required/forbidden variant, inactive
+     * variant, variant cap) per group. Read-only; the caps are enforced again
+     * inside the mint transaction.
+     */
+    async assertMintAllowed(input: {
+        productId: string;
+        groups: { variantId: string | null; count: number }[];
+    }): Promise<void> {
+        await this.assertReleaseCleared(input.productId);
+        if (!this.deps.variantPolicy) return;
+        for (const group of input.groups) {
+            const verdict = await this.deps.variantPolicy.checkMint({
+                productId: input.productId,
+                variantId: group.variantId,
+                count: group.count,
+            });
+            if (!verdict.ok) {
+                throw AppError.conflict(verdict.message, verdict.code, {
+                    ...(typeof verdict.details === 'object' && verdict.details !== null
+                        ? verdict.details
+                        : {}),
+                    variantId: group.variantId,
+                    requested: group.count,
+                });
+            }
+        }
+    }
+
+    private async assertReleaseCleared(productId: string): Promise<void> {
+        if (!this.deps.releaseGate) return;
+
+        const verdict = await this.deps.releaseGate.describeLatest(productId);
+        if (verdict.cleared) return;
+
+        throw AppError.conflict(
+            verdict.reason ??
+            'This drop has not been approved for release, so its units cannot be minted yet.',
+            SKUS_ERROR_CODES.NOT_APPROVED,
+            {
+                approvalId: verdict.approvalId,
+                version: verdict.version,
+                status: verdict.status,
+                authority: verdict.authority,
+            },
+        );
+    }
+
     private async requireProduct(
         access: SkuAccess,
         productId: string,

@@ -13,6 +13,13 @@ export interface AssetRef {
     archivedAt: Date | null;
     productId: string | null;
     organizationId: string | null;
+    /** Set for an artist-owned asset (avatar / cover). */
+    artistId: string | null;
+    virusScanStatus: VirusScanStatus;
+    /** Return evidence must have been uploaded by the person attaching it. */
+    uploadedById: string;
+    fileName: string;
+    sizeBytes: number | null;
 }
 
 /** The only place in this module that touches Prisma. */
@@ -42,6 +49,11 @@ export class MediaRepository {
                 archivedAt: true,
                 productId: true,
                 organizationId: true,
+                artistId: true,
+                virusScanStatus: true,
+                uploadedById: true,
+                fileName: true,
+                sizeBytes: true,
             },
         });
     }

@@ -8,6 +8,8 @@ import {
     PAYMENTS_AUDIT_EVENTS,
     PAYMENTS_ERROR_CODES,
     PAYMENT_EVENTS,
+    RETURN_DESCRIPTION_MIN_LENGTH,
+    RETURN_EVIDENCE_MIN_PHOTOS,
 } from '../constants/payments.constant';
 import type { IPaymentsAuditRecorder } from '../domain/interfaces/audit-recorder.port';
 import type { IClaimRevocation } from '../domain/interfaces/claim-revocation.interface';
@@ -16,12 +18,16 @@ import type {
     IRoyaltyReversal,
 } from '../domain/interfaces/finance-postings.interface';
 import type { IOrderLedger } from '../domain/interfaces/order-ledger.interface';
-import type { IPaymentGateway } from '../domain/interfaces/payment-gateway.interface';
+import type { CreateRefundResult, IPaymentGateway } from '../domain/interfaces/payment-gateway.interface';
+import type { IReturnEvidenceMedia } from '../domain/interfaces/return-evidence.interface';
+import { gatewayFailure } from '../domain/gateway-error';
+import { toMinorUnits } from '../domain/minor-units';
 import type { PaymentAccess } from '../domain/payment-access';
 import { PaymentScope, requireRefund } from '../domain/payment-access';
 import {
     REFUND_TRANSITIONS,
     canTransition,
+    refundActions,
     resaleBlockUntil,
 } from '../domain/refund-workflow';
 import type {
@@ -29,13 +35,28 @@ import type {
     ConfirmReturnDto,
     ListRefundsQuery,
     ProcessRefundDto,
+    RefundEvidenceView,
     RefundView,
     RejectRefundDto,
     RequestRefundDto,
+    ReturnEvidenceUploadDto,
+    ReturnEvidenceUploadView,
 } from '../dto/payments.dto';
 import type { GatewayConfigRepository } from '../repository/gateway-config.repository';
 import type { PaymentRepository } from '../repository/payment.repository';
-import type { RefundRepository } from '../repository/refund.repository';
+import type { RefundRepository, RefundRow } from '../repository/refund.repository';
+
+/** The order facts a refund is checked against. */
+type OrderSummary = NonNullable<Awaited<ReturnType<IOrderLedger['findOrderSummary']>>>;
+
+/** Why one attached photo was refused. Reported per asset, all at once. */
+export type EvidenceProblem =
+    | 'NOT_FOUND'
+    | 'WRONG_ORDER'
+    | 'NOT_UPLOADED'
+    | 'ARCHIVED'
+    | 'REJECTED_BY_SCAN'
+    | 'ALREADY_ATTACHED';
 
 export interface RefundServiceDeps {
     refunds: RefundRepository;
@@ -46,9 +67,36 @@ export interface RefundServiceDeps {
     royalties: IRoyaltyReversal;
     claims: IClaimRevocation;
     gateway?: IPaymentGateway | undefined;
+    /**
+     * Photo evidence on returns. Absent on a deployment with no media bucket:
+     * reads still work (photos show without URLs), but a buyer cannot place a
+     * physical return, because the evidence it requires cannot be taken.
+     */
+    evidence?: IReturnEvidenceMedia | undefined;
+    /** Days after delivery a return may be placed. RETURN_WINDOW_DAYS. */
+    returnWindowDays: number;
+    /** Injected for tests. */
+    now?: () => Date;
     eventBus: IEventBus;
     audit: IPaymentsAuditRecorder;
     logger: Logger;
+}
+
+/** A provider refund object, as the webhook hands it over. */
+export interface GatewayRefundUpdate {
+    /** The provider event type — `refund.created`, `refund.updated`, `refund.failed`. */
+    eventType: string;
+    gatewayRefundId: string;
+    status: 'PENDING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED';
+    failureReason: string | null;
+    /** `metadata.refundRequestId` — present on refunds this platform issued. */
+    refundRequestId: string | null;
+    /** The charge it refunds: PaymentIntent and/or Charge ids. */
+    paymentRefs: string[];
+    /** In minor units, as the provider reports it. */
+    amountMinor: number | null;
+    occurredAt: Date;
+    correlationId: string;
 }
 
 /**
@@ -56,7 +104,9 @@ export interface RefundServiceDeps {
  *
  * The design document's day-15-to-21 sequence, as five methods:
  *
- *     request        buyer or support raises it
+ *     createEvidenceUpload   (a return only) one upload URL per photo
+ *     request        buyer or support raises it — a buyer's return must
+ *                    carry photos and a real description
  *     confirmReturn  the warehouse has the item, and the tag's condition
  *     approve        a HitBox admin decides, with the item in hand
  *     process        the money goes back, the claim is revoked, the tag is
@@ -81,40 +131,79 @@ export interface RefundServiceDeps {
 export class RefundService {
     constructor(private readonly deps: RefundServiceDeps) { }
 
+    // ── 0. Return photos ────────────────────────────────────────────────────
+
+    /**
+     * An upload URL for one photo of the item being returned.
+     *
+     * Step one of placing a return: the client calls this once per photo,
+     * PUTs each file straight to storage, then sends the asset ids with
+     * `POST /refunds`. The same eligibility rules as the request itself run
+     * here, so a buyer is told "this order can't be refunded" before they
+     * spend time photographing it rather than after.
+     */
+    async createEvidenceUpload(
+        dto: ReturnEvidenceUploadDto,
+        callerId: string,
+        access: PaymentAccess,
+    ): Promise<ReturnEvidenceUploadView> {
+        const media = this.requireEvidenceMedia();
+        // Photos exist only for a return, so the return window applies.
+        await this.requireRaisable(dto.orderId, callerId, access, { physicalReturn: true });
+        const upload = await media.createUpload({
+            orderId: dto.orderId,
+            uploadedById: callerId,
+            fileName: dto.fileName,
+            mimeType: dto.mimeType,
+            sizeBytes: dto.sizeBytes,
+        });
+        return {
+            assetId: upload.assetId,
+            uploadUrl: upload.uploadUrl,
+            expiresIn: upload.expiresIn,
+            requiredHeaders: upload.requiredHeaders,
+        };
+    }
+
     // ── 1. Request ──────────────────────────────────────────────────────────
 
+    /**
+     * A refund is asked for. When the buyer is placing a **return** — a
+     * physical item going back — they must also say what is wrong
+     * (RETURN_DESCRIPTION_MIN_LENGTH characters) and show it (at least
+     * RETURN_EVIDENCE_MIN_PHOTOS photo). That is what the warehouse inspects
+     * the parcel against and what an approver decides on; a return with
+     * neither is unreviewable.
+     *
+     * Staff raising a return on a buyer's behalf may attach photos but are not
+     * made to — the buyer may have reported it by phone, and the warehouse
+     * inspection is the evidence there.
+     */
     async request(
         dto: RequestRefundDto,
         requestedById: string,
         access: PaymentAccess,
     ): Promise<RefundView> {
-        const order = await this.deps.orders.findOrderSummary(dto.orderId);
-        if (!order) {
-            throw AppError.notFound('Order not found.', PAYMENTS_ERROR_CODES.NOT_FOUND);
-        }
+        const order = await this.requireRaisable(dto.orderId, requestedById, access, {
+            physicalReturn: dto.physicalReturnRequired,
+        });
 
-        // A buyer may raise a refund on their own order; anyone else needs the
-        // refund grant. Support raising one on a buyer's behalf is the second
-        // case, not a special third one.
-        if (order.buyerId !== requestedById) {
-            requireRefund(access, 'raise a refund on another buyer’s order');
-        }
-
-        if (!['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(order.status)) {
-            throw AppError.badRequest(
-                `An order that is ${order.status} cannot be refunded.`,
-                PAYMENTS_ERROR_CODES.NOT_REFUNDABLE,
-                { status: order.status },
-            );
-        }
-
-        const open = await this.deps.refunds.findOpenForOrder(dto.orderId);
-        if (open) {
-            throw AppError.conflict(
-                'A refund is already in progress for this order.',
-                PAYMENTS_ERROR_CODES.INVALID_TRANSITION,
-                { refundRequestId: open.id, status: open.status },
-            );
+        const isBuyerReturn = dto.physicalReturnRequired && order.buyerId === requestedById;
+        if (isBuyerReturn) {
+            if (dto.reason.trim().length < RETURN_DESCRIPTION_MIN_LENGTH) {
+                throw AppError.badRequest(
+                    `Describe what is wrong with the item in at least ${RETURN_DESCRIPTION_MIN_LENGTH} characters.`,
+                    PAYMENTS_ERROR_CODES.RETURN_DESCRIPTION_TOO_SHORT,
+                    { minLength: RETURN_DESCRIPTION_MIN_LENGTH, length: dto.reason.trim().length },
+                );
+            }
+            if (dto.evidenceAssetIds.length < RETURN_EVIDENCE_MIN_PHOTOS) {
+                throw AppError.badRequest(
+                    'Add at least one photo of the item you are returning.',
+                    PAYMENTS_ERROR_CODES.RETURN_EVIDENCE_REQUIRED,
+                    { minPhotos: RETURN_EVIDENCE_MIN_PHOTOS },
+                );
+            }
         }
 
         const orderAmount = new Prisma.Decimal(order.amount);
@@ -132,23 +221,41 @@ export class RefundService {
             );
         }
 
+        await this.assertEvidenceUsable(dto.evidenceAssetIds, order, requestedById);
+
         const now = new Date();
-        const refund = await this.deps.refunds.create({
-            id: randomUUID(),
-            orderId: dto.orderId,
-            requestedById,
-            reason: dto.reason,
-            reasonCode: dto.reasonCode,
-            // A physical item goes straight to AWAITING_RETURN: there is no
-            // state in which someone has decided to approve it yet, and
-            // starting at REQUESTED would make the return look optional.
-            status: dto.physicalReturnRequired ? 'AWAITING_RETURN' : 'REQUESTED',
-            amount: requested,
-            currency: order.currency as never,
-            physicalReturnRequired: dto.physicalReturnRequired,
-            createdAt: now,
-            updatedAt: now,
-        });
+        let refund: RefundRow;
+        try {
+            refund = await this.deps.refunds.create(
+                {
+                    id: randomUUID(),
+                    orderId: dto.orderId,
+                    requestedById,
+                    reason: dto.reason,
+                    reasonCode: dto.reasonCode,
+                    // A physical item goes straight to AWAITING_RETURN: there is no
+                    // state in which someone has decided to approve it yet, and
+                    // starting at REQUESTED would make the return look optional.
+                    status: dto.physicalReturnRequired ? 'AWAITING_RETURN' : 'REQUESTED',
+                    amount: requested,
+                    currency: order.currency as never,
+                    physicalReturnRequired: dto.physicalReturnRequired,
+                    createdAt: now,
+                    updatedAt: now,
+                },
+                { mediaAssetIds: dto.evidenceAssetIds, attachedById: requestedById },
+            );
+        } catch (error) {
+            // Lost a race for a photo to another return between the check above
+            // and the insert — the unique index caught it.
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+                throw AppError.conflict(
+                    'One of these photos was just attached to another return.',
+                    PAYMENTS_ERROR_CODES.RETURN_EVIDENCE_INVALID,
+                );
+            }
+            throw error;
+        }
 
         await this.deps.eventBus.publish(PAYMENT_EVENTS.REFUND_REQUESTED, {
             refundRequestId: refund.id,
@@ -156,13 +263,179 @@ export class RefundService {
             amount: requested.toFixed(2),
             currency: order.currency,
             reasonCode: dto.reasonCode,
+            evidenceCount: dto.evidenceAssetIds.length,
         });
         this.deps.logger.info(
-            { refundRequestId: refund.id, orderId: dto.orderId, reasonCode: dto.reasonCode },
+            {
+                refundRequestId: refund.id,
+                orderId: dto.orderId,
+                reasonCode: dto.reasonCode,
+                evidenceCount: dto.evidenceAssetIds.length,
+            },
             'refund requested',
         );
 
-        return this.toView(refund);
+        return this.toView(refund, access, await this.loadEvidence(refund.id));
+    }
+
+    /**
+     * The order behind a new refund, once it is established that this caller
+     * may raise one on it and that it is in a state to be refunded. Shared by
+     * the request and by the photo upload that precedes it.
+     */
+    private async requireRaisable(
+        orderId: string,
+        callerId: string,
+        access: PaymentAccess,
+        options: { physicalReturn: boolean },
+    ): Promise<OrderSummary> {
+        const order = await this.deps.orders.findOrderSummary(orderId);
+        if (!order) {
+            throw AppError.notFound('Order not found.', PAYMENTS_ERROR_CODES.NOT_FOUND);
+        }
+
+        // A buyer may raise a refund on their own order; anyone else needs the
+        // refund grant. Support raising one on a buyer's behalf is the second
+        // case, not a special third one.
+        if (order.buyerId !== callerId) {
+            requireRefund(access, 'raise a refund on another buyer’s order');
+        }
+
+        if (!['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'].includes(order.status)) {
+            throw AppError.badRequest(
+                `An order that is ${order.status} cannot be refunded.`,
+                PAYMENTS_ERROR_CODES.NOT_REFUNDABLE,
+                { status: order.status },
+            );
+        }
+
+        const open = await this.deps.refunds.findOpenForOrder(orderId);
+        if (open) {
+            throw AppError.conflict(
+                'A refund is already in progress for this order.',
+                PAYMENTS_ERROR_CODES.INVALID_TRANSITION,
+                { refundRequestId: open.id, status: open.status },
+            );
+        }
+
+        this.assertReturnWindow(order, callerId, options.physicalReturn);
+        return order;
+    }
+
+    /**
+     * RETURN_WINDOW_DAYS after delivery, then closed for good.
+     *
+     * Closed means two things:
+     *   - **no return**, for anyone — buyer or staff, there is no override;
+     *   - **no refund at all from the buyer** on that delivered order. Without
+     *     this a buyer past the window could ask for a refund with
+     *     `physicalReturnRequired: false` and keep the item.
+     *
+     * Staff may still raise a refund with nothing sent back (a goodwill
+     * gesture, settling a complaint) — that is a decision, not a return.
+     *
+     * The window starts at `deliveredAt`. An order not yet delivered (or never
+     * confirmed as delivered) has no window running yet.
+     */
+    private assertReturnWindow(order: OrderSummary, callerId: string, physicalReturn: boolean): void {
+        if (!order.deliveredAt) return;
+        const closesAt = new Date(order.deliveredAt.getTime() + this.deps.returnWindowDays * 86_400_000);
+        const now = this.deps.now?.() ?? new Date();
+        if (now < closesAt) return;
+        if (!physicalReturn && order.buyerId !== callerId) return;
+
+        throw AppError.badRequest(
+            `The ${this.deps.returnWindowDays}-day return window for this order closed on ${closesAt.toISOString().slice(0, 10)}.`,
+            PAYMENTS_ERROR_CODES.RETURN_WINDOW_CLOSED,
+            {
+                deliveredAt: order.deliveredAt.toISOString(),
+                returnWindowEndsAt: closesAt.toISOString(),
+                returnWindowDays: this.deps.returnWindowDays,
+            },
+        );
+    }
+
+    /**
+     * Every attached photo must be one the caller uploaded, for this order,
+     * whose bytes really are in storage, and that backs no other return.
+     *
+     * All problems are reported together, per asset, so a client can mark the
+     * exact thumbnails to retry instead of discovering them one at a time.
+     * Someone else's asset reports as NOT_FOUND — "that exists but is not
+     * yours" would let ids be probed.
+     */
+    private async assertEvidenceUsable(
+        assetIds: string[],
+        order: OrderSummary,
+        callerId: string,
+    ): Promise<void> {
+        if (assetIds.length === 0) return;
+        const media = this.requireEvidenceMedia();
+
+        const [assets, attached] = await Promise.all([
+            media.inspect(assetIds),
+            this.deps.refunds.findAttachedAssetIds(assetIds),
+        ]);
+        const byId = new Map(assets.map((asset) => [asset.id, asset]));
+        const taken = new Set(attached);
+
+        const problems: { assetId: string; problem: EvidenceProblem }[] = [];
+        for (const assetId of assetIds) {
+            const asset = byId.get(assetId);
+            const problem: EvidenceProblem | null =
+                !asset || asset.uploadedById !== callerId ? 'NOT_FOUND'
+                    : asset.orderId !== order.orderId ? 'WRONG_ORDER'
+                        : asset.archived ? 'ARCHIVED'
+                            : asset.infected ? 'REJECTED_BY_SCAN'
+                                : !asset.uploaded ? 'NOT_UPLOADED'
+                                    : taken.has(assetId) ? 'ALREADY_ATTACHED'
+                                        : null;
+            if (problem) problems.push({ assetId, problem });
+        }
+
+        if (problems.length > 0) {
+            throw AppError.badRequest(
+                'Some photos cannot be attached to this return.',
+                PAYMENTS_ERROR_CODES.RETURN_EVIDENCE_INVALID,
+                { problems },
+            );
+        }
+    }
+
+    private requireEvidenceMedia(): IReturnEvidenceMedia {
+        if (!this.deps.evidence) {
+            // A 400 with its own code, like GATEWAY_UNAVAILABLE: the error
+            // handler renders every 5xx AppError as an opaque 500, and the
+            // client needs to be able to say *why* the return cannot be placed.
+            throw AppError.badRequest(
+                'Photo uploads are not available on this deployment, so a return cannot be placed here.',
+                PAYMENTS_ERROR_CODES.EVIDENCE_STORAGE_UNAVAILABLE,
+            );
+        }
+        return this.deps.evidence;
+    }
+
+    /** A refund's photos with signed URLs, for a detail response. */
+    private async loadEvidence(refundRequestId: string): Promise<RefundEvidenceView[]> {
+        const rows = await this.deps.refunds.findEvidence(refundRequestId);
+        if (rows.length === 0) return [];
+        const files = this.deps.evidence
+            ? await this.deps.evidence.viewFiles(rows.map((row) => row.mediaAssetId))
+            : [];
+        const byId = new Map(files.map((file) => [file.assetId, file]));
+        return rows.map((row) => {
+            const file = byId.get(row.mediaAssetId);
+            return {
+                assetId: row.mediaAssetId,
+                position: row.position,
+                fileName: file?.fileName ?? null,
+                mimeType: file?.mimeType ?? null,
+                sizeBytes: file?.sizeBytes ?? null,
+                url: file?.url ?? null,
+                expiresIn: file?.expiresIn ?? null,
+                attachedAt: row.createdAt.toISOString(),
+            };
+        });
     }
 
     // ── 2. Physical return ──────────────────────────────────────────────────
@@ -363,6 +636,7 @@ export class RefundService {
         id: string,
         dto: ProcessRefundDto,
         access: PaymentAccess,
+        options: { issuedVia?: 'OPERATOR' | 'PROVIDER_DASHBOARD' } = {},
     ): Promise<RefundView> {
         requireRefund(access, 'execute refunds');
         const refund = await this.requireInScope(id, access);
@@ -382,6 +656,7 @@ export class RefundService {
 
         // 1. Move the money.
         let gatewayRefundId = dto.gatewayRefundId ?? null;
+        let issued: CreateRefundResult | null = null;
         if (!gatewayRefundId) {
             const settled = await this.deps.payments.findSettledForOrder(refund.orderId);
             if (!this.deps.gateway) {
@@ -406,17 +681,29 @@ export class RefundService {
                     PAYMENTS_ERROR_CODES.NO_GATEWAY,
                 );
             }
-            const result = await this.deps.gateway.createRefund({
-                paymentGatewayRef: settled.gatewayRef,
-                amount: refund.amount.toFixed(2),
-                currency: refund.currency,
-                // Keyed on the refund request, so a retried execute cannot
-                // send the money twice.
-                idempotencyKey: `refund:${refund.id}`,
-                credentialsRef: config.credentialsRef,
-                reason: refund.reason,
-            });
+            // A provider failure throws before anything here is written, so
+            // the refund stays APPROVED and the button can simply be pressed
+            // again.
+            const result = await this.deps.gateway
+                .createRefund({
+                    paymentGatewayRef: settled.gatewayRef,
+                    amount: refund.amount.toFixed(2),
+                    currency: refund.currency,
+                    // Keyed on the refund request, so a retried execute cannot
+                    // send the money twice.
+                    idempotencyKey: `refund:${refund.id}`,
+                    credentialsRef: config.credentialsRef,
+                    reason: refund.reason,
+                    reasonCode: refund.reasonCode,
+                    metadata: { refundRequestId: refund.id, orderId: refund.orderId },
+                })
+                .catch((error: unknown) => gatewayFailure(error, 'issue this refund'));
             gatewayRefundId = result.gatewayRefundId;
+            issued = result;
+            this.deps.logger.info(
+                { refundRequestId: id, gatewayRefundId, settled: result.settled },
+                'refund issued through the payment provider',
+            );
         }
 
         // 2. Lock the request. Guarded: two operators pressing execute produce
@@ -442,8 +729,25 @@ export class RefundService {
             );
         }
 
+        // The provider's first word on the money. Only over nothing: the
+        // `refund.created` webhook can beat this line, and it knows better.
+        if (issued) {
+            await this.deps.refunds.setGatewayStatus({
+                id,
+                status: issued.settled ? 'SUCCEEDED' : 'PENDING',
+                failureReason: null,
+                at: processedAt,
+                onlyIfUnset: true,
+            });
+        }
+
         // 3. The order.
-        await this.deps.orders.markRefunded({ orderId: refund.orderId, refundedAt: processedAt });
+        await this.deps.orders.markRefunded({
+            orderId: refund.orderId,
+            refundedAt: processedAt,
+            refundRequestId: refund.id,
+            actorId: access.userId,
+        });
 
         // 4. The platform's books.
         await this.deps.finance.postRefund({
@@ -513,6 +817,7 @@ export class RefundService {
                 nfcTagCondition: nfcCondition,
                 resaleBlockedUntil: blockedUntil?.toISOString() ?? null,
                 claimRevokedAt: claimRevokedAt?.toISOString() ?? null,
+                issuedVia: issued ? 'GATEWAY_ADAPTER' : (options.issuedVia ?? 'OPERATOR'),
             },
             correlationId,
         });
@@ -528,37 +833,191 @@ export class RefundService {
         return this.getById(id, access);
     }
 
+    // ── 5. What the provider says afterwards ────────────────────────────────
+
     /**
-     * The provider confirmed a refund that was initiated elsewhere (its own
-     * dashboard, or asynchronously). Fills in the settlement timestamp without
-     * re-running the workflow.
+     * A `refund.*` webhook: the provider's view of a refund's money.
+     *
+     * Three cases:
+     *
+     *   **A refund this platform knows** (by the `refundRequestId` the adapter
+     *   put in metadata, or by `gatewayRefundId`) — record the provider status.
+     *   FAILED / CANCELED after PROCESSED is the dangerous one: the order says
+     *   REFUNDED and the buyer has no money. Nothing is rolled back
+     *   automatically — the claim was revoked and the royalty reversed on
+     *   purpose, and undoing those by webhook is worse than a person deciding —
+     *   so it is flagged (`gatewayStatus` FAILED), audited, logged at error and
+     *   published as `payments.refund.failed` for an operator.
+     *
+     *   **A refund issued in the provider's dashboard** for an order whose
+     *   refund is APPROVED and not yet paid, for the same amount — that is an
+     *   operator who paid it out there instead of pressing Process. It is
+     *   processed now, exactly as Process would, as the approver.
+     *
+     *   **Anything else** (no approved refund, different amount) — money left
+     *   outside the workflow. Audited and published as
+     *   `payments.refund.unmatched` once, on `refund.created`; never acted on.
      */
-    async confirmSettlementFromGateway(input: {
-        gatewayRefundId: string;
-        processedAt: Date;
-        correlationId: string;
-    }): Promise<void> {
-        const { items } = await this.deps.refunds.list({
-            page: 1,
-            limit: 1,
-            scopeFilter: { gatewayRefundId: input.gatewayRefundId },
-            skip: 0,
-            take: 1,
-        });
-        const refund = items[0];
+    async applyGatewayRefundUpdate(update: GatewayRefundUpdate): Promise<void> {
+        let refund = update.refundRequestId
+            ? await this.deps.refunds.findById(update.refundRequestId)
+            : null;
+        // Metadata is only a hint: it must agree with a recorded provider id.
+        if (refund?.gatewayRefundId && refund.gatewayRefundId !== update.gatewayRefundId) refund = null;
+        refund ??= await this.deps.refunds.findByGatewayRefundId(update.gatewayRefundId);
+
         if (!refund) {
+            await this.matchProviderIssuedRefund(update);
+            return;
+        }
+
+        const changed = await this.deps.refunds.setGatewayStatus({
+            id: refund.id,
+            status: update.status,
+            failureReason: update.failureReason,
+            at: update.occurredAt,
+        });
+        if (changed === 0) return; // already knew — a retried or out-of-order delivery
+
+        if (update.status === 'FAILED' || update.status === 'CANCELED') {
+            await this.flagFailedRefund(refund, update);
+        } else {
             this.deps.logger.info(
-                { gatewayRefundId: input.gatewayRefundId },
-                'refund webhook referenced a refund this platform did not initiate',
+                { refundRequestId: refund.id, gatewayRefundId: update.gatewayRefundId, gatewayStatus: update.status },
+                'provider refund status updated',
+            );
+        }
+    }
+
+    private async flagFailedRefund(refund: RefundRequest, update: GatewayRefundUpdate): Promise<void> {
+        this.deps.logger.error(
+            {
+                refundRequestId: refund.id,
+                orderId: refund.orderId,
+                gatewayRefundId: update.gatewayRefundId,
+                gatewayStatus: update.status,
+                failureReason: update.failureReason,
+                workflowStatus: refund.status,
+            },
+            'provider refund FAILED — the buyer was not paid back; manual action required',
+        );
+        await this.deps.audit.record({
+            eventType: PAYMENTS_AUDIT_EVENTS.REFUND_PROCESS,
+            actor: { type: 'SYSTEM', id: null },
+            result: 'FAILURE',
+            resource: { type: 'RefundRequest', id: refund.id },
+            beforeState: { gatewayStatus: refund.gatewayStatus },
+            afterState: {
+                gatewayStatus: update.status,
+                gatewayRefundId: update.gatewayRefundId,
+                failureReason: update.failureReason,
+                workflowStatus: refund.status,
+            },
+            correlationId: update.correlationId,
+        });
+        await this.deps.eventBus.publish(PAYMENT_EVENTS.REFUND_FAILED, {
+            refundRequestId: refund.id,
+            orderId: refund.orderId,
+            amount: refund.amount.toFixed(2),
+            currency: refund.currency,
+            gatewayRefundId: update.gatewayRefundId,
+            gatewayStatus: update.status,
+            failureReason: update.failureReason,
+        });
+    }
+
+    private async matchProviderIssuedRefund(update: GatewayRefundUpdate): Promise<void> {
+        if (update.status === 'FAILED' || update.status === 'CANCELED') {
+            this.deps.logger.warn(
+                { gatewayRefundId: update.gatewayRefundId, gatewayStatus: update.status },
+                'provider reported a failed refund this platform has no record of',
             );
             return;
         }
-        if (refund.processedAt) return;
 
-        await this.deps.refunds.transition({
-            id: refund.id,
-            from: refund.status,
-            data: { processedAt: input.processedAt },
+        let payment = null;
+        for (const ref of update.paymentRefs) {
+            payment = await this.deps.payments.findByGatewayRef(ref);
+            if (payment) break;
+        }
+        if (!payment) {
+            this.deps.logger.info(
+                { gatewayRefundId: update.gatewayRefundId, paymentRefs: update.paymentRefs },
+                'refund webhook for a charge this platform does not know',
+            );
+            return;
+        }
+
+        const candidate = await this.deps.refunds.findApprovedUnissuedForOrder(payment.orderId);
+        const amountMatches =
+            candidate !== null &&
+            (update.amountMinor === null ||
+                update.amountMinor === toMinorUnits(candidate.amount.toFixed(2), candidate.currency));
+
+        if (candidate?.approvedById && amountMatches) {
+            const access: PaymentAccess = {
+                userId: candidate.approvedById,
+                scope: PaymentScope.GLOBAL,
+                organizationIds: null,
+                canManage: false,
+                canConfigure: false,
+                canRefund: true,
+            };
+            try {
+                await this.process(
+                    candidate.id,
+                    { gatewayRefundId: update.gatewayRefundId, processedAt: update.occurredAt },
+                    access,
+                    { issuedVia: 'PROVIDER_DASHBOARD' },
+                );
+            } catch (error) {
+                // An operator pressed Process with the same id at the same
+                // moment; theirs won, and the status below still applies.
+                if (!(error instanceof AppError && error.statusCode === 409)) throw error;
+            }
+            await this.deps.refunds.setGatewayStatus({
+                id: candidate.id,
+                status: update.status,
+                failureReason: null,
+                at: update.occurredAt,
+            });
+            this.deps.logger.info(
+                { refundRequestId: candidate.id, gatewayRefundId: update.gatewayRefundId },
+                'refund issued in the provider dashboard — processed against the approved request',
+            );
+            return;
+        }
+
+        if (update.eventType !== 'refund.created') return; // alert once, not on every update
+        const reason = candidate ? 'AMOUNT_MISMATCH' : 'NO_APPROVED_REFUND';
+        this.deps.logger.warn(
+            {
+                orderId: payment.orderId,
+                gatewayRefundId: update.gatewayRefundId,
+                amountMinor: update.amountMinor,
+                approvedRefundId: candidate?.id ?? null,
+                reason,
+            },
+            'refund issued at the provider with no matching approved refund — review',
+        );
+        await this.deps.audit.record({
+            eventType: PAYMENTS_AUDIT_EVENTS.ORDER_REFUND,
+            actor: { type: 'SYSTEM', id: null },
+            result: 'FAILURE',
+            resource: { type: 'Order', id: payment.orderId },
+            afterState: {
+                gatewayRefundId: update.gatewayRefundId,
+                amountMinor: update.amountMinor,
+                reason,
+                approvedRefundId: candidate?.id ?? null,
+            },
+            correlationId: update.correlationId,
+        });
+        await this.deps.eventBus.publish(PAYMENT_EVENTS.REFUND_UNMATCHED, {
+            orderId: payment.orderId,
+            gatewayRefundId: update.gatewayRefundId,
+            amountMinor: update.amountMinor,
+            reason,
         });
     }
 
@@ -578,12 +1037,14 @@ export class RefundService {
             page: query.page,
             limit: query.limit,
             total,
-            items: items.map((row) => this.toView(row)),
+            items: items.map((row) => this.toView(row, access, null)),
         };
     }
 
+    /** Detail: the refund plus its photos with signed URLs. */
     async getById(id: string, access: PaymentAccess): Promise<RefundView> {
-        return this.toView(await this.requireInScope(id, access));
+        const row = await this.requireInScope(id, access);
+        return this.toView(row, access, await this.loadEvidence(row.id));
     }
 
     // ── helpers ─────────────────────────────────────────────────────────────
@@ -598,7 +1059,7 @@ export class RefundService {
         return { order: { buyerId: access.userId } };
     }
 
-    private async requireInScope(id: string, access: PaymentAccess): Promise<RefundRequest> {
+    private async requireInScope(id: string, access: PaymentAccess): Promise<RefundRow> {
         const { items } = await this.deps.refunds.list({
             page: 1,
             limit: 1,
@@ -613,7 +1074,11 @@ export class RefundService {
         return refund;
     }
 
-    private toView(row: RefundRequest): RefundView {
+    private toView(
+        row: RefundRow,
+        access: PaymentAccess,
+        evidence: RefundEvidenceView[] | null,
+    ): RefundView {
         return {
             id: row.id,
             orderId: row.orderId,
@@ -630,11 +1095,17 @@ export class RefundService {
             approvedAt: row.approvedAt?.toISOString() ?? null,
             rejectionReason: row.rejectionReason,
             gatewayRefundId: row.gatewayRefundId,
+            gatewayStatus: row.gatewayStatus,
+            gatewayFailureReason: row.gatewayFailureReason,
+            gatewayStatusAt: row.gatewayStatusAt?.toISOString() ?? null,
             processedAt: row.processedAt?.toISOString() ?? null,
             claimRevokedAt: row.claimRevokedAt?.toISOString() ?? null,
             resaleBlockedUntil: row.resaleBlockedUntil?.toISOString() ?? null,
             createdAt: row.createdAt.toISOString(),
+            evidenceCount: evidence?.length ?? row._count?.evidence ?? 0,
+            evidence,
             allowedTransitions: REFUND_TRANSITIONS[row.status],
+            allowedActions: refundActions(row, access.canRefund),
         };
     }
 }

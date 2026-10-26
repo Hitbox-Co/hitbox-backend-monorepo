@@ -61,3 +61,42 @@ export function resaleBlockUntil(
 export function isDefectiveReturn(condition: NfcTagCondition | null): boolean {
     return condition !== null && condition !== 'INTACT';
 }
+
+/**
+ * The buttons a refund screen should offer — derived from the same conditions
+ * RefundService enforces, so the UI never offers an action that would fail.
+ *
+ *  - CONFIRM_RETURN         the item still has to come back and hasn't
+ *  - APPROVE                approvable, and nothing is outstanding
+ *  - APPROVE_WITH_OVERRIDE  approvable, but the return isn't confirmed — needs
+ *                           `overridePhysicalReturn: true` and a reason
+ *  - REJECT                 any open refund
+ *  - PROCESS                approved, ready to pay out
+ *
+ * Empty for a caller without `order:refund:global`: they may look, not act.
+ * docs/orders/order-payments-and-refunds-api.md.
+ */
+export type RefundAction = 'CONFIRM_RETURN' | 'APPROVE' | 'APPROVE_WITH_OVERRIDE' | 'REJECT' | 'PROCESS';
+
+export function refundActions(
+    refund: {
+        status: RefundStatus;
+        physicalReturnRequired: boolean;
+        physicalReturnConfirmedAt: Date | null;
+    },
+    canRefund: boolean,
+): RefundAction[] {
+    if (!canRefund) return [];
+    const actions: RefundAction[] = [];
+    const returnOutstanding = refund.physicalReturnRequired && refund.physicalReturnConfirmedAt === null;
+
+    if ((refund.status === 'REQUESTED' || refund.status === 'AWAITING_RETURN') && returnOutstanding) {
+        actions.push('CONFIRM_RETURN');
+    }
+    if (canTransition(refund.status, 'APPROVED')) {
+        actions.push(returnOutstanding ? 'APPROVE_WITH_OVERRIDE' : 'APPROVE');
+    }
+    if (refund.status === 'APPROVED') actions.push('PROCESS');
+    if (canTransition(refund.status, 'REJECTED')) actions.push('REJECT');
+    return actions;
+}

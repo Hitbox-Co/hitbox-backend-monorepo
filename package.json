@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "private": true,
-  "packageManager": "pnpm@11.13.0",
+  "packageManager": "pnpm@12.15.0",
   "scripts": {
     "postinstall": "pnpm --filter @hitbox/database db:generate && pnpm --filter @hitbox/leads db:generate",
     "dev": "turbo dev",
@@ -22,7 +22,12 @@
     "db:seed:audit": "pnpm --filter @hitbox/database db:seed:audit",
     "db:backfill:v31": "pnpm --filter @hitbox/database db:backfill:v31",
     "db:seed:demo": "pnpm --filter @hitbox/database db:seed:demo",
-    "db:link-admin": "pnpm --filter @hitbox/database db:link-admin"
+    "db:seed:drop-types": "pnpm --filter @hitbox/database db:seed:drop-types",
+    "db:seed:test-tee": "pnpm --filter @hitbox/database db:seed:test-tee",
+    "db:seed:test-refunds": "pnpm --filter @hitbox/database db:seed:test-refunds",
+    "db:stripe:test-charges": "pnpm --filter @hitbox/database db:stripe:test-charges",
+    "db:link-admin": "pnpm --filter @hitbox/database db:link-admin",
+    "jobs:checkout-sweep": "pnpm --filter ./apps/backend jobs:checkout-sweep"
   },
   "keywords": [],
   "author": "",

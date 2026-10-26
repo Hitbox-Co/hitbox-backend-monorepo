@@ -6,10 +6,13 @@ import {
     extensionOf,
     isOwnerAllowed,
     isPublicKey,
+    orderOfEvidenceKey,
     ownerColumn,
 } from '../src/domain/storage-key';
 import { S3ObjectStorage } from '../src/infrastructure/s3-object-storage';
 import { MediaService } from '../src/service/media.service';
+import { ReturnEvidenceService } from '../src/service/return-evidence.service';
+import { createUploadUrlSchema } from '../src/dto/media.dto';
 import type { MediaScopeCheck, ScanPipelineMode } from '../src/service/media.service';
 import { AppError } from '@hitbox/shared';
 
@@ -26,6 +29,7 @@ const logger = {
 const storage = {
     presignUpload: jest.fn().mockResolvedValue({ url: 'https://s3/put', expiresIn: 300 }),
     presignDownload: jest.fn().mockResolvedValue({ url: 'https://s3/get', expiresIn: 60 }),
+    headObject: jest.fn().mockResolvedValue({ sizeBytes: 1000, contentType: 'image/jpeg' }),
     publicUrl: jest.fn((key: string) => `https://cdn.test/${key}`),
 };
 
@@ -184,6 +188,8 @@ describe('public vs private prefixes', () => {
         expect(isPublicKey('legal-documents/organizations/o-1/a-1.pdf')).toBe(false);
         expect(isPublicKey('supply-spreadsheets/vendors/v-1/a-1.csv')).toBe(false);
         expect(isPublicKey('other/users/u-1/a-1.bin')).toBe(false);
+        // Customer photos: their home, their face, their address label.
+        expect(isPublicKey('return-evidence/orders/o-1/a-1.jpg')).toBe(false);
     });
 
     it('is not fooled by a public prefix appearing mid-key', () => {
@@ -487,5 +493,102 @@ describe('scan callback', () => {
         expect(repository.setScanResult).toHaveBeenCalledWith(
             expect.objectContaining({ virusScanStatus: VirusScanStatus.CLEAN }),
         );
+    });
+});
+
+// ────────────────────────────────────────────────────────────────────────────
+
+describe('return evidence', () => {
+    const ORDER = '55555555-5555-4555-8555-555555555555';
+    const KEY = `return-evidence/orders/${ORDER}/${ASSET}.jpg`;
+
+    function evidenceRow(over: Record<string, unknown> = {}) {
+        return {
+            id: ASSET, storageRef: KEY, assetType: AssetType.RETURN_EVIDENCE, mimeType: 'image/jpeg',
+            archivedAt: null, productId: null, organizationId: null, artistId: null,
+            virusScanStatus: VirusScanStatus.SKIPPED, uploadedById: 'buyer-1',
+            fileName: 'tag.jpg', sizeBytes: 1000, ...over,
+        };
+    }
+
+    function makeEvidence(rows: unknown[]) {
+        const { service: media, repository } = makeService();
+        const repo = { ...repository, findManyByIds: jest.fn().mockResolvedValue(rows) };
+        return {
+            evidence: new ReturnEvidenceService({ media, repository: repo as never, storage }),
+            repository,
+        };
+    }
+
+    it('files photos under return-evidence/orders/{orderId}/ and reads the order back', () => {
+        const key = buildStorageKey({
+            assetType: AssetType.RETURN_EVIDENCE, ownerType: 'order',
+            ownerId: ORDER, assetId: ASSET, fileName: 'IMG_0042.HEIC',
+        });
+        expect(key).toBe(`return-evidence/orders/${ORDER}/${ASSET}.heic`);
+        expect(orderOfEvidenceKey(key)).toBe(ORDER);
+        expect(orderOfEvidenceKey(`drop-images/products/${PRODUCT}/${ASSET}.jpg`)).toBeNull();
+    });
+
+    it('accepts only an order as owner, and only return evidence for an order', () => {
+        expect(isOwnerAllowed(AssetType.RETURN_EVIDENCE, 'order')).toBe(true);
+        expect(isOwnerAllowed(AssetType.RETURN_EVIDENCE, 'user')).toBe(false);
+        expect(isOwnerAllowed(AssetType.OTHER, 'order')).toBe(false);
+        expect(ownerColumn('order')).toBeNull();
+    });
+
+    it('is refused on the staff upload route — buyers upload through POST /refunds/evidence/upload-url', () => {
+        const parsed = createUploadUrlSchema.safeParse(uploadDto({
+            assetType: AssetType.RETURN_EVIDENCE, ownerType: 'order', ownerId: ORDER,
+        }));
+        expect(parsed.success).toBe(false);
+    });
+
+    it('issues an upload with no organization, invisible to org-scoped media readers', async () => {
+        const { evidence, repository } = makeEvidence([]);
+        const upload = await evidence.createUpload({
+            orderId: ORDER, uploadedById: 'buyer-1', fileName: 'tag.heic', mimeType: 'image/heic', sizeBytes: 1000,
+        });
+        expect(repository.create).toHaveBeenCalledWith(expect.objectContaining({
+            assetType: AssetType.RETURN_EVIDENCE, ownerColumn: null, organizationId: null,
+        }));
+        expect(upload.requiredHeaders).toEqual({ 'Content-Type': 'image/heic' });
+        expect(storage.presignUpload).toHaveBeenCalledWith(expect.objectContaining({ declaredBytes: 1000 }));
+    });
+
+    it('refuses a non-image before issuing a URL', async () => {
+        const { evidence } = makeEvidence([]);
+        await expect(evidence.createUpload({
+            orderId: ORDER, uploadedById: 'buyer-1', fileName: 'x.pdf', mimeType: 'application/pdf', sizeBytes: 1000,
+        })).rejects.toMatchObject({ code: 'UNSUPPORTED_MIME_TYPE' });
+    });
+
+    it('reports a photo as uploaded only when the bytes are in the bucket at the declared size', async () => {
+        const { evidence } = makeEvidence([evidenceRow()]);
+        expect((await evidence.inspect([ASSET]))[0]).toMatchObject({ orderId: ORDER, uploaded: true });
+
+        storage.headObject.mockResolvedValueOnce(null);
+        expect((await evidence.inspect([ASSET]))[0]?.uploaded).toBe(false);
+
+        storage.headObject.mockResolvedValueOnce({ sizeBytes: 999, contentType: 'image/jpeg' });
+        expect((await evidence.inspect([ASSET]))[0]?.uploaded).toBe(false);
+    });
+
+    it('does not report other kinds of asset at all', async () => {
+        const { evidence } = makeEvidence([asset()]);
+        expect(await evidence.inspect([ASSET])).toEqual([]);
+    });
+
+    it('signs a 5-minute GET for a servable photo and keeps an unservable one with a null URL', async () => {
+        const second = 'a-5555';
+        const { evidence } = makeEvidence([
+            evidenceRow(),
+            evidenceRow({ id: second, archivedAt: new Date() }),
+        ]);
+        const files = await evidence.viewFiles([ASSET, second]);
+        expect(files.map((f) => f.assetId)).toEqual([ASSET, second]);
+        expect(files[0]).toMatchObject({ url: 'https://s3/get' });
+        expect(storage.presignDownload).toHaveBeenCalledWith({ key: KEY, expiresInSeconds: 300 });
+        expect(files[1]).toMatchObject({ url: null, expiresIn: null });
     });
 });

@@ -14,6 +14,9 @@
 /// outlives the account that last changed it.
 model PlatformConfig {
   id            String   @id @db.Uuid
+  /// Human-readable record id (`pcf…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   key           String   @unique
   value         Json
   isFeatureFlag Boolean
@@ -33,6 +36,9 @@ model PlatformConfig {
 /// the index below is the "what is overdue" query the console opens on.
 model ExceptionCase {
   id            String          @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`exc…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String? @unique @db.VarChar(32)
   exceptionCode String          @unique @db.VarChar(10) // EX
   caseType      String
   referenceType String

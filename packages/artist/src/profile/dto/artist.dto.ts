@@ -4,16 +4,34 @@ import {
     ARTISTS_MAX_LIMIT,
 } from '../constants/artist-profile.constant';
 
+/**
+ * A true/false query flag.
+ *
+ * Not `z.coerce.boolean()`: that is `Boolean(value)`, and `Boolean("false")`
+ * is `true` — so `?isActive=false` used to list the *active* artists. Only
+ * the literal words are accepted; anything else is a 400.
+ */
+const queryFlag = z.union([
+    z.boolean(),
+    z.enum(['true', 'false', '1', '0']).transform((value) => value === 'true' || value === '1'),
+]);
+
+/** Directory orderings. `name` is A–Z; the rest default to largest / newest first. */
+export const ARTIST_SORTS = ['name', 'newest', 'oldest', 'drops', 'collections', 'followers'] as const;
+export type ArtistSort = (typeof ARTIST_SORTS)[number];
+
 export const listArtistsQuerySchema = z.object({
     /** Matches name or slug, case-insensitively. */
     search: z.string().trim().min(1).max(100).optional(),
     /** Narrow to one brand's roster — how the drop form filters after a brand is picked. */
     organizationId: z.string().uuid().optional(),
-    isActive: z.coerce.boolean().optional(),
+    isActive: queryFlag.optional(),
     /** Public-profile flag. Unrelated to `isActive`: an artist can be live and unlisted. */
-    isPublic: z.coerce.boolean().optional(),
+    isPublic: queryFlag.optional(),
     /** Omit to list live artists only. */
-    includeArchived: z.coerce.boolean().default(false),
+    includeArchived: queryFlag.default(false),
+    /** Default `name` (A–Z) — the picker's order. */
+    sort: z.enum(ARTIST_SORTS).default('name'),
     page: z.coerce.number().int().min(1).default(1),
     limit: z.coerce
         .number()
@@ -43,5 +61,5 @@ export interface ArtistResponse {
     archivedAt: string | null;
     organizationId: string | null;
     organizationName: string | null;
-    counts: { products: number; collections: number };
+    counts: { products: number; collections: number; followers: number };
 }
