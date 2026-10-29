@@ -235,6 +235,12 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
                 deps.guard.requirePermission(ORDER_READ_CAPABILITY),
                 fulfilment.get,
             );
+            // What the packer may scan for this order — only units a scan accepts.
+            router.get(
+                '/:orderId/unit/candidates',
+                deps.guard.requirePermission(ORDER_READ_CAPABILITY),
+                fulfilment.candidates,
+            );
             router.post(
                 '/:orderId/unit',
                 deps.guard.requirePermission(ORDER_WRITE_CAPABILITY),

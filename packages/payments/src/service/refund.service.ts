@@ -622,12 +622,17 @@ export class RefundService {
      *
      *   1. gateway refund (or the operator's reference) — the irreversible bit
      *   2. mark the request PROCESSED — guarded, so this cannot run twice
-     *   3. order → REFUNDED
-     *   4. book the refund in the platform ledger
-     *   5. revoke the claim + quarantine the tag
+     *   3. revoke the claim + quarantine the tag
+     *   4. order → REFUNDED, and a returned unit back into stock
+     *   5. book the refund in the platform ledger
      *   6. reverse the royalty
      *
-     * Steps 5 and 6 failing are logged loudly and left for an operator: the
+     * The tag is dealt with BEFORE the unit is released (3 before 4): a unit
+     * that came back damaged is quarantined first, so it is never on sale for
+     * the moment in between. If that quarantine fails, the unit is not
+     * released at all — an operator decides.
+     *
+     * Steps 3 and 6 failing are logged loudly and left for an operator: the
      * money has already moved, and silently retrying a claim revocation
      * against a unit somebody has since transferred would do more damage than
      * an alert.
@@ -741,25 +746,9 @@ export class RefundService {
             });
         }
 
-        // 3. The order.
-        await this.deps.orders.markRefunded({
-            orderId: refund.orderId,
-            refundedAt: processedAt,
-            refundRequestId: refund.id,
-            actorId: access.userId,
-        });
-
-        // 4. The platform's books.
-        await this.deps.finance.postRefund({
-            orderId: refund.orderId,
-            refundRequestId: refund.id,
-            amount: refund.amount.toFixed(2),
-            currency: refund.currency,
-            description: `Refund: ${refund.reason}`,
-        });
-
-        // 5. Ownership and the tag.
+        // 3. Ownership and the tag — before the unit is released (4).
         let claimRevokedAt: Date | null = null;
+        let tagSettled = true;
         if (order.skuId) {
             try {
                 const revocation = await this.deps.claims.revokeClaim({
@@ -778,12 +767,34 @@ export class RefundService {
                     });
                 }
             } catch (error) {
+                tagSettled = false;
                 this.deps.logger.error(
                     { err: error, refundRequestId: id, skuId: order.skuId },
                     'refund executed but the claim could not be revoked — manual intervention required',
                 );
             }
         }
+
+        // 4. The order, and the unit back into stock once it is physically
+        //    back. Held back when the tag step failed: a unit whose claim or
+        //    quarantine did not land must not go on sale by default.
+        const unitReturned = refund.physicalReturnConfirmedAt !== null && tagSettled;
+        await this.deps.orders.markRefunded({
+            orderId: refund.orderId,
+            refundedAt: processedAt,
+            refundRequestId: refund.id,
+            actorId: access.userId,
+            unitReturned,
+        });
+
+        // 5. The platform's books.
+        await this.deps.finance.postRefund({
+            orderId: refund.orderId,
+            refundRequestId: refund.id,
+            amount: refund.amount.toFixed(2),
+            currency: refund.currency,
+            description: `Refund: ${refund.reason}`,
+        });
 
         // 6. The artist's royalty.
         try {

@@ -24,6 +24,7 @@
 3. [Endpoints](#3-endpoints)
 4. [`GET /admin/orders/fulfilment-queue` — orders waiting to be packed](#4-get-adminordersfulfilment-queue--orders-waiting-to-be-packed)
 5. [`GET /admin/orders/:orderId/unit` — an order's packing state](#5-get-adminordersorderidunit--an-orders-packing-state)
+   - [5a. `GET /admin/orders/:orderId/unit/candidates` — the units you may scan](#5a-get-adminordersorderidunitcandidates--the-units-you-may-scan)
 6. [`POST /admin/orders/:orderId/unit` — scan an item for this order](#6-post-adminordersorderidunit--scan-an-item-for-this-order)
 7. [`POST /admin/orders/assign-by-scan` — scan first, server picks the order](#7-post-adminordersassign-by-scan--scan-first-server-picks-the-order)
 8. [What changed in existing endpoints](#8-what-changed-in-existing-endpoints)
@@ -89,6 +90,7 @@ POST /api/v1/admin/orders/assign-by-scan
 |---|---|---|---|
 | `GET` | `/admin/orders/fulfilment-queue` | `order:read` | Paid orders waiting for a scanned unit, oldest first |
 | `GET` | `/admin/orders/:orderId/unit` | `order:read` | One order's packing state |
+| `GET` | `/admin/orders/:orderId/unit/candidates` | `order:read` | **The units a scan will accept** for this order: what to show in a unit picker |
 | `POST` | `/admin/orders/:orderId/unit` | `order:manage` | Scan a unit **for this order** |
 | `POST` | `/admin/orders/assign-by-scan` | `order:manage` | Scan a unit; the server picks the oldest waiting order for it |
 
@@ -158,6 +160,52 @@ their orders.
 | `unit` | `ASSIGNED`: the unit in the parcel. `PROVISIONAL`: only the placeholder — **don't go looking for it**, pick any matching item |
 | `unitAssignedAt` / `unitAssignedById` | When and by whom it was scanned |
 | `readyToShip` | `true` when assigned and `PROCESSING` |
+
+---
+
+### 5a. `GET /admin/orders/:orderId/unit/candidates` — the units you may scan
+
+The list to pick from. It contains **exactly** the units a scan for this
+order would accept:
+
+- same drop, and same variant when the order has one;
+- active, not archived, unclaimed, not blocked, tag bound and in state `BOUND`;
+- **free**: on no order and held by no live reservation;
+- plus the unit already held for this order (its placeholder, or the unit
+  confirmed earlier), flagged `heldForThisOrder: true`.
+
+| Query | Values |
+|---|---|
+| `search` | A serial (`214`) or a fragment of the printed code |
+| `page`, `limit` | Default `1`, `20`; `limit` ≤ 100 |
+
+```json
+{
+  "page": 1,
+  "limit": 20,
+  "total": 33,
+  "items": [
+    { "skuId": "63107cbe-…", "skuCode": "410000030001-000008", "serialNumber": 8,
+      "tagId": "04A1…", "variantId": "b18d…", "heldForThisOrder": true },
+    { "skuId": "…", "skuCode": "410000030001-000009", "serialNumber": 9,
+      "tagId": "04B2…", "variantId": "b18d…", "heldForThisOrder": false }
+  ]
+}
+```
+
+Sorted by serial. The order must be `PAID` or `PROCESSING` and hold stock
+(`400 ORDERS_NOT_ASSIGNABLE`, the same as a scan).
+
+> **Don't build the picker from the unit list** (`GET /admin/products/:id/skus`
+> or `/admin/skus`) filtered to "unclaimed + tagged". A unit that was **sold**
+> and is waiting for its buyer to claim it (order SHIPPED or DELIVERED) is
+> also unclaimed with a bound tag, so that list offers it, and the scan then
+> refuses it with `409 ORDERS_UNIT_UNAVAILABLE`. This endpoint applies the
+> same rules as the scan, so it can't offer a unit the scan will refuse.
+>
+> A **refunded** unit appears here once it's back in stock: returned with an
+> intact tag, or never shipped. See
+> [order-payments-and-refunds-api.md 7](order-payments-and-refunds-api.md#the-unit-after-a-refund).
 
 ---
 
@@ -251,13 +299,37 @@ A scan is refused unless the unit:
 | is not blocked | `400 ORDERS_UNIT_UNAVAILABLE` |
 | **has an NFC tag bound** (else the buyer could never claim it) | `400 ORDERS_UNIT_UNAVAILABLE` |
 | has its tag in state `BOUND` (not `LOST`, `REVOKED`, `DISPUTED`, already `ACTIVE`) | `400 ORDERS_UNIT_UNAVAILABLE` |
-| is **free**: on no other order and held by no other live reservation | `409 ORDERS_UNIT_UNAVAILABLE` |
+| is **free**: on no other order and held by no other live reservation | `409 ORDERS_UNIT_UNAVAILABLE`. The message and `details` name the order that has it (below) |
 
 And the order must be `PAID` or `PROCESSING` and hold stock
 (`400 ORDERS_NOT_ASSIGNABLE` otherwise).
 
 "Free" uses exactly the same rule as checkout, so a unit a packer can take is
 precisely a unit checkout could have sold — the two can never disagree.
+
+When a unit isn't free, the refusal says who has it:
+
+```json
+{
+  "error": {
+    "code": "ORDERS_UNIT_UNAVAILABLE",
+    "message": "410000030001-000007 is already sold: it is the unit of order odr067dtmr5rsvdjs9n7r2 (SHIPPED).",
+    "details": {
+      "skuCode": "410000030001-000007",
+      "reason": "SOLD",
+      "orderId": "…",
+      "orderPublicCode": "odr067dtmr5rsvdjs9n7r2",
+      "orderStatus": "SHIPPED"
+    }
+  }
+}
+```
+
+`reason` is `SOLD` (the unit is on another order, whatever that order's
+status, refunded ones included) or `HELD` (another order's live checkout
+hold). This is read before the swap, to explain the refusal. The swap
+transaction checks again under the lock (10), so if two packers race, that
+check decides, and the loser gets the generic message without `details`.
 
 ---
 
@@ -291,7 +363,8 @@ unit — the placeholder before, the scanned unit after.
 | Shirt is damaged | Set it aside, scan another (`replace: true` if it was already scanned). Flag the damaged unit via the SKU inventory API ([sku-inventory-management.md](../admin/sku-inventory-management.md)) |
 | Scanner says wrong item | It's a different variant — check the size/colour label |
 | Shirt has no tag yet | `ORDERS_UNIT_UNAVAILABLE`: bind its tag first ([sku-api.md 3a](../admin/sku-api.md)) or use another shirt |
-| Order cancelled after packing | Cancel as usual; the unit's fate (restock / quarantine) follows the cancellation/refund workflow |
+| "Already sold or held" on a shirt from the shelf | That physical unit belongs to another order (`details.orderPublicCode`). It's usually a returned or mis-shelved item. Put it aside for that order's handling and pick from the candidates list (5a) |
+| Order cancelled after packing | A paid order is cancelled by refunding it. Refunded before shipping, the unit goes straight back into stock. Returned after shipping, it goes back once the return is received (quarantined if the tag came back damaged). See [order-payments-and-refunds-api.md 7](order-payments-and-refunds-api.md#the-unit-after-a-refund) |
 | "Pick your number" drops (buyer chose serial #001) | Not covered here — those need the specific unit; scan it by `serialNumber` and verify it's the requested one |
 
 ---
@@ -325,7 +398,7 @@ exist.
 | `404` | `ORDERS_NOT_FOUND` | Order missing or outside your organizations |
 | `404` | `ORDERS_UNIT_NOT_FOUND` | Nothing matches the scan |
 | `404` | `ORDERS_NO_WAITING_ORDER` | Scan-first: no order waiting for that variant |
-| `409` | `ORDERS_UNIT_UNAVAILABLE` | Unit already sold or held for another order |
+| `409` | `ORDERS_UNIT_UNAVAILABLE` | Unit already sold or held for another order: `details.reason`, `orderPublicCode`, `orderStatus` |
 | `409` | `ORDERS_UNIT_ALREADY_ASSIGNED` | Order already has a different unit; send `replace: true` |
 | `409` | `ORDERS_ASSIGN_CONFLICT` | Another packer changed the order/unit at the same moment — scan again |
 | `422` | `VALIDATION_ERROR` | Not exactly one of `tagId` / `skuCode` / `serialNumber`, or a malformed field |
@@ -351,7 +424,7 @@ No backfill: existing orders read as "not yet scanned".
 ```
 packages/orders/src/
   dto/order-fulfilment.dto.ts                ← request schemas + packing-state shape
-  repository/order-fulfilment.repository.ts  ← the queue, unit lookup, and the transactional swap
+  repository/order-fulfilment.repository.ts  ← the queue, unit lookup, candidates, who-holds-it, and the transactional swap
   service/order-fulfilment.service.ts        ← the rules: right item, shippable, replace, scan-first
   controller/order-fulfilment.controller.ts
   module.ts                                  ← routes under /admin/orders
@@ -366,7 +439,9 @@ packages/orders/tests/order-fulfilment.test.ts
 
 - [ ] Show the queue (`/fulfilment-queue`), optionally filtered to the variant at the packer's bin.
 - [ ] On an order: show `variantLabel` large ("PICK: S / Red"); don't show the placeholder serial as something to find.
+- [ ] If the screen lets the packer pick a unit, fill the picker from `GET /:orderId/unit/candidates` (5a), never from the general unit list.
 - [ ] Accept NFC tap (`tagId`) and barcode (`skuCode`); send whichever was scanned.
+- [ ] On `409 ORDERS_UNIT_UNAVAILABLE`, show `error.message` as-is. It already ends with a full stop and names the order, so don't append text after it ("…one.. Set it aside").
 - [ ] On `ORDERS_WRONG_ITEM`, show expected vs scanned clearly.
 - [ ] After success, print the packing slip with the **assigned** `skuCode` / serial.
 - [ ] Offer "replace item" (sends `replace: true`) only on an already-assigned order.

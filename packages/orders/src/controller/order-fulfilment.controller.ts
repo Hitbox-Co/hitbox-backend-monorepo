@@ -4,6 +4,7 @@ import {
     assignByScanSchema,
     assignUnitSchema,
     fulfilmentQueueQuerySchema,
+    unitCandidatesQuerySchema,
 } from '../dto/order-fulfilment.dto';
 import type { OrderCallerResolver } from './order.controller';
 import type { OrderFulfilmentService } from '../service/order-fulfilment.service';
@@ -26,6 +27,13 @@ export class OrderFulfilmentController {
     get: RequestHandler = asyncHandler(async (req, res) => {
         const caller = await this.resolveCaller(req);
         res.json({ data: await this.service.get(req.params.orderId as string, caller) });
+    });
+
+    /** GET /admin/orders/:orderId/unit/candidates */
+    candidates: RequestHandler = asyncHandler(async (req, res) => {
+        const query = unitCandidatesQuerySchema.parse(req.query);
+        const caller = await this.resolveCaller(req);
+        res.json(await this.service.candidates(req.params.orderId as string, query, caller));
     });
 
     /** POST /admin/orders/:orderId/unit */

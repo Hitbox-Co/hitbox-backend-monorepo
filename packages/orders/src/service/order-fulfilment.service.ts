@@ -12,6 +12,8 @@ import type {
     FulfilmentQueueQuery,
     FulfilmentUnit,
     OrderFulfilment,
+    UnitCandidate,
+    UnitCandidatesQuery,
 } from '../dto/order-fulfilment.dto';
 import type {
     FulfilmentOrderRow,
@@ -89,6 +91,47 @@ export class OrderFulfilmentService {
         return toFulfilment(await this.requireInScope(orderId, caller));
     }
 
+    /**
+     * The units the packer may scan for this order — exactly the ones a scan
+     * would accept: same drop and variant, live, unclaimed, not blocked, tag
+     * BOUND, and on no other order or live hold. The unit already held for
+     * this order is included and flagged.
+     *
+     * The list to pick from. Filtering the general unit list on "unclaimed +
+     * tagged" is not enough: a unit sold and waiting to be claimed (SHIPPED,
+     * DELIVERED) is still unclaimed and tagged, and the scan refuses it.
+     */
+    async candidates(
+        orderId: string,
+        query: UnitCandidatesQuery,
+        caller: FulfilmentCaller,
+    ): Promise<{ page: number; limit: number; total: number; items: UnitCandidate[] }> {
+        const order = await this.requireInScope(orderId, caller);
+        const hold = this.requireAssignable(order);
+        const { total, items } = await this.deps.fulfilment.candidates({
+            productId: order.productId,
+            variantId: order.variantId,
+            heldSkuId: hold.skuId,
+            search: query.search,
+            skip: (query.page - 1) * query.limit,
+            take: query.limit,
+            now: new Date(),
+        });
+        return {
+            page: query.page,
+            limit: query.limit,
+            total,
+            items: items.map((sku) => ({
+                skuId: sku.id,
+                skuCode: sku.skuCode,
+                serialNumber: sku.serialNumber,
+                tagId: sku.tagId,
+                variantId: sku.variantId,
+                heldForThisOrder: sku.id === hold.skuId,
+            })),
+        };
+    }
+
     /** Order first: the packer opened this order, then scanned an item for it. */
     async assign(orderId: string, dto: AssignUnitDto, caller: FulfilmentCaller): Promise<OrderFulfilment> {
         const order = await this.requireInScope(orderId, caller);
@@ -137,20 +180,7 @@ export class OrderFulfilmentService {
         replace: boolean,
         caller: FulfilmentCaller,
     ): Promise<OrderFulfilment> {
-        if (!(UNIT_ASSIGNABLE_STATUSES as readonly string[]).includes(order.status)) {
-            throw AppError.badRequest(
-                `A unit can be assigned only to a PAID or PROCESSING order; this one is ${order.status}.`,
-                ORDERS_ERROR_CODES.NOT_ASSIGNABLE,
-                { status: order.status },
-            );
-        }
-        const hold = order.inventoryReservations[0];
-        if (!hold) {
-            throw AppError.badRequest(
-                'This order holds no stock, so there is nothing to assign a unit to.',
-                ORDERS_ERROR_CODES.NOT_ASSIGNABLE,
-            );
-        }
+        const hold = this.requireAssignable(order);
         if (!unit) throw this.unitNotFound();
 
         // Scanning the unit that is already confirmed: a double scan, not an error.
@@ -189,7 +219,30 @@ export class OrderFulfilmentService {
             );
         }
 
+        // Free? Asked here so the refusal can say who has the unit; the swap
+        // transaction checks again under the lock and stays the authority.
         const now = new Date();
+        if (unit.id !== hold.skuId) {
+            const holder = await this.deps.fulfilment.unitHolder(unit.id, now);
+            if (holder) {
+                const on = holder.orderPublicCode ?? holder.orderId ?? 'another order';
+                const status = holder.orderStatus ? ` (${holder.orderStatus})` : '';
+                throw AppError.conflict(
+                    holder.reason === 'SOLD'
+                        ? `${unit.skuCode} is already sold: it is the unit of order ${on}${status}.`
+                        : `${unit.skuCode} is held for order ${on}${status}.`,
+                    ORDERS_ERROR_CODES.UNIT_UNAVAILABLE,
+                    {
+                        skuCode: unit.skuCode,
+                        reason: holder.reason,
+                        orderId: holder.orderId,
+                        orderPublicCode: holder.orderPublicCode,
+                        orderStatus: holder.orderStatus,
+                    },
+                );
+            }
+        }
+
         const { statusChanged } = await this.deps.fulfilment.assign({
             orderId: order.id,
             reservationId: hold.id,
@@ -224,6 +277,25 @@ export class OrderFulfilmentService {
         );
 
         return toFulfilment((await this.deps.fulfilment.findOrder(order.id))!);
+    }
+
+    /** The order can take a unit: PAID or PROCESSING, and holding stock. Returns the hold. */
+    private requireAssignable(order: FulfilmentOrderRow): FulfilmentOrderRow['inventoryReservations'][number] {
+        if (!(UNIT_ASSIGNABLE_STATUSES as readonly string[]).includes(order.status)) {
+            throw AppError.badRequest(
+                `A unit can be assigned only to a PAID or PROCESSING order; this one is ${order.status}.`,
+                ORDERS_ERROR_CODES.NOT_ASSIGNABLE,
+                { status: order.status },
+            );
+        }
+        const hold = order.inventoryReservations[0];
+        if (!hold) {
+            throw AppError.badRequest(
+                'This order holds no stock, so there is nothing to assign a unit to.',
+                ORDERS_ERROR_CODES.NOT_ASSIGNABLE,
+            );
+        }
+        return hold;
     }
 
     /** Missing and out-of-scope look the same (404), so ids can't be probed. */

@@ -63,6 +63,24 @@ export const fulfilmentQueueQuerySchema = z.object({
 });
 export type FulfilmentQueueQuery = z.infer<typeof fulfilmentQueueQuerySchema>;
 
+/** GET /admin/orders/:orderId/unit/candidates */
+export const unitCandidatesQuerySchema = z.object({
+    /** A serial number (`214`) or a fragment of the printed code. */
+    search: z.string().trim().min(1).max(64).optional(),
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(ORDERS_MAX_LIMIT).default(ORDERS_DEFAULT_LIMIT),
+});
+export type UnitCandidatesQuery = z.infer<typeof unitCandidatesQuerySchema>;
+
+/** A unit the packer may scan for this order. */
+export interface UnitCandidate extends FulfilmentUnit {
+    /**
+     * Already held for THIS order — its checkout placeholder, or the unit
+     * confirmed earlier. Scanning it just confirms it.
+     */
+    heldForThisOrder: boolean;
+}
+
 /** One physical unit, as the packing screen shows it. */
 export interface FulfilmentUnit {
     skuId: string;
