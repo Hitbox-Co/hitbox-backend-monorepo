@@ -77,6 +77,7 @@ const EXPECTED: Record<string, string[]> = {
         'buyer-profile:manage:global',
         'collectible-instance:manage:global',
         'content-unlock:manage:global',
+        'drop:configure:global',
         'drop:manage:global',
         'drop-type:manage:global',
         'employee-role-mgmt:assign:global',
@@ -259,6 +260,11 @@ describe('role distinctions the requirements matrix insists on', () => {
         expect(finance.permissions).toContain('payment-royalty:read:global');
         expect(finance.permissions).not.toContain('payment-royalty:configure:global');
         expect(finance.permissions).not.toContain('payment-royalty:manage:global');
+    });
+
+    it('lets only the System Admin set reward points on a drop', () => {
+        const holders = ROLE_CATALOG.filter((role) => role.permissions.includes('drop:configure:global')).map((r) => r.name);
+        expect(holders).toEqual(['HITBOX_SYSTEM_ADMIN']);
     });
 
     it('never grants precise location to any role', () => {

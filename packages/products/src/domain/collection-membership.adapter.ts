@@ -14,6 +14,7 @@ export interface CollectionMembershipDrop {
     active: boolean;
     artistId: string | null;
     totalSupply: number;
+    rewardPoints: number;
     publishedAt: Date | null;
     collection: { id: string; name: string } | null;
 }
@@ -28,6 +29,7 @@ function toDrop(row: MembershipDropRow): CollectionMembershipDrop {
         active: row.status === DropStatus.ACTIVE && row.isActive && row.archivedAt === null,
         artistId: row.artistId,
         totalSupply: row.totalSupply,
+        rewardPoints: row.rewardPoints,
         publishedAt: row.publishedAt,
         collection: row.collection ? { id: row.collection.id, name: row.collection.name } : null,
     };

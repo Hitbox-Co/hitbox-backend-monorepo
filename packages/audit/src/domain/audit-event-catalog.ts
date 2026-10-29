@@ -539,6 +539,17 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         defaultSeverity: CRITICAL,
         sourceStories: ['docs/admin/drop-approval-lifecycle.md §10'],
     },
+    {
+        eventType: 'product.reward-points.set',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'A HitBox System Admin set the reward points on a drop. Before/after carry ' +
+            'the old and new value; metadata.reason the why, when given.',
+        // WARNING: points are value handed to buyers, and only one role may set
+        // them — a change is worth seeing in a review, not just in the row.
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/admin/drop-reward-points.md'],
+    },
 
     // ── Supply intake ───────────────────────────────────────────────────────
     // Chain of custody. Taking delivery of 5,000 chips is the moment the

@@ -122,6 +122,7 @@ else's id is `404`.
         "name": "Kaze Genesis — Single Card",
         "groupCode": "1001-0001",
         "totalSupply": 500,
+        "rewardPoints": 150,
         "publishedAt": "2026-09-10T12:00:00.000Z",
         "releaseStart": "2026-09-10T12:00:00.000Z",
         "releaseEnd": null
@@ -240,6 +241,10 @@ with no storage configured, step 1 returns `400 ARTIST_IMAGES_UNAVAILABLE`.
 
 ## 10–12. Drops in a collection
 
+> **Reward points.** Every drop shows `rewardPoints`, here and in 3. They're
+> set by HitBox System Admin; the artist sees them but can't change them
+> ([admin/drop-reward-points.md](../admin/drop-reward-points.md)).
+
 An artist files **their own** drops into **their own** collections. Three
 rules hold everywhere:
 
@@ -278,6 +283,7 @@ The collection must be live (not deleted) for all three.
       "name": "Kaze Genesis — Single Card",
       "groupCode": "1001-0001",
       "totalSupply": 500,
+      "rewardPoints": 150,
       "publishedAt": "2026-09-10T12:00:00.000Z",
       "currentCollection": null
     },

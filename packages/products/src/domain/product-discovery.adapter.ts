@@ -64,6 +64,7 @@ export class ProductDiscoveryAdapter implements IProductDiscovery {
             id: row.id,
             name: row.name,
             imageUrl: ref ? (this.mediaUrls?.publicUrl(ref) ?? null) : null,
+            rewardPoints: row.rewardPoints,
         };
     }
 }

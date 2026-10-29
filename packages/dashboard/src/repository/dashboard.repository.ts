@@ -439,7 +439,7 @@ export class DashboardRepository {
                     id: true, publicCode: true, groupCode: true, name: true, status: true, totalSupply: true,
                     complianceStatus: true, isAgeSpecific: true, minimumAge: true,
                     organizationId: true, artistId: true, collectionId: true,
-                    isActive: true, publishedAt: true, createdAt: true,
+                    isActive: true, rewardPoints: true, publishedAt: true, createdAt: true,
                 },
             }),
         ]);

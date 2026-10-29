@@ -17,6 +17,7 @@ export interface MembershipDrop {
     active: boolean;
     artistId: string | null;
     totalSupply: number;
+    rewardPoints: number;
     publishedAt: Date | null;
     /** The collection it is in now, if any. */
     collection: { id: string; name: string } | null;

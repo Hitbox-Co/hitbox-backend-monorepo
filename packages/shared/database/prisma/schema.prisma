@@ -4,7 +4,7 @@
 // listed below. Edit the module-owned partial instead, then re-run db:merge.
 // ============================================================================
 
-// ───── source: packages/shared/database/prisma/base.prisma ─────────────────────────
+// ───── source: packages\shared\database\prisma\base.prisma ─────────────────────────
 
 // ============================================================================
 // SOURCE PARTIAL — merged first into the generated schema.prisma
@@ -22,7 +22,7 @@ datasource db {
     directUrl = env("DIRECT_URL")
 }
 
-// ───── source: packages/shared/database/prisma/enums.prisma ────────────────────────
+// ───── source: packages\shared\database\prisma\enums.prisma ────────────────────────
 
 // ============================================================================
 // SOURCE PARTIAL — shared enums. Owned by shared/database.
@@ -72,7 +72,7 @@ enum PaymentGateway {
     STRIPE
 }
 
-// ───── source: packages/access-control/prisma/access-control.prisma ────────────────
+// ───── source: packages\access-control\prisma\access-control.prisma ────────────────
 
 // ============================================================================
 // ACCESS-CONTROL MODULE SCHEMA  (packages/access-control/prisma/access-control.prisma)
@@ -400,7 +400,7 @@ enum RoleScopeType {
   GLOBAL
 }
 
-// ───── source: packages/artist/prisma/artist.prisma ────────────────────────────────
+// ───── source: packages\artist\prisma\artist.prisma ────────────────────────────────
 
 // ============================================================================
 // ARTIST MODULE SCHEMA  (packages/artist/prisma/artist.prisma)
@@ -533,7 +533,7 @@ enum ArtistBrandLinkType {
   DISTRIBUTION
 }
 
-// ───── source: packages/audit/prisma/audit.prisma ──────────────────────────────────
+// ───── source: packages\audit\prisma\audit.prisma ──────────────────────────────────
 
 // ============================================================================
 // AUDIT MODULE SCHEMA  (packages/audit/prisma/audit.prisma)
@@ -667,7 +667,7 @@ enum AuditSeverity {
   CRITICAL
 }
 
-// ───── source: packages/auth/prisma/auth.prisma ────────────────────────────────────
+// ───── source: packages\auth\prisma\auth.prisma ────────────────────────────────────
 
 // ============================================================================
 // AUTH MODULE SCHEMA  (packages/auth/prisma/auth.prisma)
@@ -691,7 +691,7 @@ model AuthWebhookEvent {
   receivedAt  DateTime
 }
 
-// ───── source: packages/claims/prisma/claims.prisma ────────────────────────────────
+// ───── source: packages\claims\prisma\claims.prisma ────────────────────────────────
 
 // ============================================================================
 // CLAIMS MODULE SCHEMA  (packages/claims/prisma/claims.prisma)
@@ -849,7 +849,7 @@ enum AcquisitionMethod {
   ADMIN
 }
 
-// ───── source: packages/collections/prisma/collections.prisma ──────────────────────
+// ───── source: packages\collections\prisma\collections.prisma ──────────────────────
 
 // ============================================================================
 // COLLECTIONS MODULE SCHEMA  (packages/collections/prisma/collections.prisma)
@@ -882,7 +882,7 @@ model BuyerCollection {
   @@unique([userId, skuId])
 }
 
-// ───── source: packages/content/prisma/content.prisma ──────────────────────────────
+// ───── source: packages\content\prisma\content.prisma ──────────────────────────────
 
 // ============================================================================
 // CONTENT MODULE SCHEMA  (packages/content/prisma/content.prisma)
@@ -974,7 +974,7 @@ enum ContentAccessType {
   REWARD_GRANT
 }
 
-// ───── source: packages/evolution/prisma/evolution.prisma ──────────────────────────
+// ───── source: packages\evolution\prisma\evolution.prisma ──────────────────────────
 
 // ============================================================================
 // EVOLUTION MODULE SCHEMA  (packages/evolution/prisma/evolution.prisma)
@@ -1040,7 +1040,7 @@ enum EvolutionThresholdType {
   EVENT_SPECIFIC
 }
 
-// ───── source: packages/finance/prisma/finance.prisma ──────────────────────────────
+// ───── source: packages\finance\prisma\finance.prisma ──────────────────────────────
 
 // ============================================================================
 // FINANCE MODULE SCHEMA  (packages/finance/prisma/finance.prisma)
@@ -1475,7 +1475,7 @@ enum FinanceCategory {
   ADJUSTMENT
 }
 
-// ───── source: packages/markets/prisma/markets.prisma ──────────────────────────────
+// ───── source: packages\markets\prisma\markets.prisma ──────────────────────────────
 
 // ============================================================================
 // MARKETS MODULE SCHEMA  (packages/markets/prisma/markets.prisma)
@@ -1525,7 +1525,7 @@ model MarketCountry {
   createdAt   DateTime
 }
 
-// ───── source: packages/media/prisma/media.prisma ──────────────────────────────────
+// ───── source: packages\media\prisma\media.prisma ──────────────────────────────────
 
 // ============================================================================
 // MEDIA MODULE SCHEMA  (packages/media/prisma/media.prisma)
@@ -1602,7 +1602,7 @@ enum VirusScanStatus {
   SKIPPED
 }
 
-// ───── source: packages/notifications/prisma/notifications.prisma ──────────────────
+// ───── source: packages\notifications\prisma\notifications.prisma ──────────────────
 
 // ============================================================================
 // NOTIFICATIONS MODULE SCHEMA  (packages/notifications/prisma/notifications.prisma)
@@ -1682,7 +1682,7 @@ enum NotificationStatus {
   READ
 }
 
-// ───── source: packages/orders/prisma/orders.prisma ────────────────────────────────
+// ───── source: packages\orders\prisma\orders.prisma ────────────────────────────────
 
 // ============================================================================
 // ORDERS MODULE SCHEMA  (packages/orders/prisma/orders.prisma)
@@ -1938,7 +1938,7 @@ enum ReservationStatus {
   RELEASED
 }
 
-// ───── source: packages/organizations/prisma/organizations.prisma ──────────────────
+// ───── source: packages\organizations\prisma\organizations.prisma ──────────────────
 
 // ============================================================================
 // ORGANIZATIONS MODULE SCHEMA  (packages/organizations/prisma/organizations.prisma)
@@ -1997,7 +1997,7 @@ enum OrganizationType {
   ARTIST_INDIVIDUAL
 }
 
-// ───── source: packages/payments/prisma/payments.prisma ────────────────────────────
+// ───── source: packages\payments\prisma\payments.prisma ────────────────────────────
 
 // ============================================================================
 // PAYMENTS MODULE SCHEMA  (packages/payments/prisma/payments.prisma)
@@ -2310,7 +2310,7 @@ enum DisputeReason {
   OTHER
 }
 
-// ───── source: packages/platform/prisma/platform.prisma ────────────────────────────
+// ───── source: packages\platform\prisma\platform.prisma ────────────────────────────
 
 // ============================================================================
 // PLATFORM MODULE SCHEMA  (packages/platform/prisma/platform.prisma)
@@ -2376,7 +2376,7 @@ enum ExceptionStatus {
   RESOLVED
 }
 
-// ───── source: packages/products/prisma/products.prisma ────────────────────────────
+// ───── source: packages\products\prisma\products.prisma ────────────────────────────
 
 // ============================================================================
 // PRODUCTS MODULE SCHEMA  (packages/products/prisma/products.prisma)
@@ -2435,6 +2435,11 @@ model Drop {
   /// Max units one buyer may purchase; null = unlimited.
   purchaseLimit     Int?
   totalSupply       Int
+  /// Reward points a buyer earns with this drop. Set by HitBox System Admin
+  /// only (`drop:configure:global`, PUT /admin/products/:id/reward-points) —
+  /// not part of the drop form, so neither a Drop Manager nor the artist can
+  /// change it. Shown read-only everywhere a drop is shown. Never negative.
+  rewardPoints      Int               @default(0)
   releaseStart      DateTime?
   releaseEnd        DateTime?
   status            DropStatus
@@ -2725,7 +2730,7 @@ enum DropPriceStatus {
   DISABLED
 }
 
-// ───── source: packages/releases/prisma/releases.prisma ────────────────────────────
+// ───── source: packages\releases\prisma\releases.prisma ────────────────────────────
 
 // ============================================================================
 // RELEASES MODULE SCHEMA  (packages/releases/prisma/releases.prisma)
@@ -2831,7 +2836,7 @@ enum ApprovalStatus {
   REJECTED
 }
 
-// ───── source: packages/resale/prisma/resale.prisma ────────────────────────────────
+// ───── source: packages\resale\prisma\resale.prisma ────────────────────────────────
 
 // ============================================================================
 // RESALE MODULE SCHEMA  (packages/resale/prisma/resale.prisma)
@@ -2872,7 +2877,7 @@ enum ResaleStatus {
   BLOCKED
 }
 
-// ───── source: packages/search/prisma/search.prisma ────────────────────────────────
+// ───── source: packages\search\prisma\search.prisma ────────────────────────────────
 
 // ============================================================================
 // SEARCH MODULE SCHEMA  (packages/search/prisma/search.prisma)
@@ -2918,7 +2923,7 @@ enum IndexJobStatus {
   FAILED
 }
 
-// ───── source: packages/skus/prisma/skus.prisma ────────────────────────────────────
+// ───── source: packages\skus\prisma\skus.prisma ────────────────────────────────────
 
 // ============================================================================
 // SKUS MODULE SCHEMA  (packages/skus/prisma/skus.prisma)
@@ -3081,7 +3086,7 @@ enum VerificationResult {
   REJECTED
 }
 
-// ───── source: packages/social/prisma/social.prisma ────────────────────────────────
+// ───── source: packages\social\prisma\social.prisma ────────────────────────────────
 
 // ============================================================================
 // SOCIAL MODULE SCHEMA  (packages/social/prisma/social.prisma)
@@ -3136,7 +3141,7 @@ model WishlistItem {
   @@unique([userId, productId, variantId])
 }
 
-// ───── source: packages/supply/prisma/supply.prisma ────────────────────────────────
+// ───── source: packages\supply\prisma\supply.prisma ────────────────────────────────
 
 // ============================================================================
 // SUPPLY MODULE SCHEMA  (packages/supply/prisma/supply.prisma)
@@ -3474,7 +3479,7 @@ enum SupplyBatchStatus {
   REJECTED
 }
 
-// ───── source: packages/support/prisma/support.prisma ──────────────────────────────
+// ───── source: packages\support\prisma\support.prisma ──────────────────────────────
 
 // ============================================================================
 // SUPPORT MODULE SCHEMA  (packages/support/prisma/support.prisma)
@@ -3532,7 +3537,7 @@ enum SupportCaseStatus {
   REJECTED
 }
 
-// ───── source: packages/tax/prisma/tax.prisma ──────────────────────────────────────
+// ───── source: packages\tax\prisma\tax.prisma ──────────────────────────────────────
 
 // ============================================================================
 // TAX & INVOICING MODULE SCHEMA  (packages/tax/prisma/tax.prisma)
@@ -4062,7 +4067,7 @@ enum TaxAdjustmentStatus {
   REJECTED
 }
 
-// ───── source: packages/users/prisma/users.prisma ──────────────────────────────────
+// ───── source: packages\users\prisma\users.prisma ──────────────────────────────────
 
 // ============================================================================
 // USERS MODULE SCHEMA  (packages/users/prisma/users.prisma)

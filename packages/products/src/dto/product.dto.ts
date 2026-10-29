@@ -6,6 +6,7 @@ import {
     PRODUCT_CODE_UNIQUE_LENGTH,
     PRODUCT_IMAGE_MAX,
     PRODUCT_PRICE_MAX,
+    REWARD_POINTS_MAX,
     SKU_INLINE_MINT_MAX,
 } from '../constants/products.constant';
 
@@ -517,6 +518,23 @@ export const publishProductSchema = z.object({
     note: z.string().trim().max(500).optional(),
 });
 export type PublishProductDto = z.infer<typeof publishProductSchema>;
+
+/**
+ * PUT /admin/products/:id/reward-points — System Admin only.
+ *
+ * Its own route, not a PATCH field: the drop form is open to Drop Managers
+ * (and artists see their drops through it), and points are not theirs to set.
+ * `updateProductSchema` is strict, so a PATCH carrying `rewardPoints` is
+ * refused with a 422 naming the field.
+ */
+export const setRewardPointsSchema = z
+    .object({
+        rewardPoints: int({ min: 0, max: REWARD_POINTS_MAX }),
+        /** Why — recorded on the audit entry. */
+        reason: z.string().trim().min(1).max(500).optional(),
+    })
+    .strict();
+export type SetRewardPointsDto = z.infer<typeof setRewardPointsSchema>;
 
 /**
  * The review a publication cleared, echoed back so a console can show *which*

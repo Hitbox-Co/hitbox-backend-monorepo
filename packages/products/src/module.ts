@@ -6,6 +6,7 @@ import type { IEventBus } from '@hitbox/shared';
 import type { IProductDiscovery } from '@hitbox/discover';
 import type { IListingCatalog } from '@hitbox/marketplace';
 import {
+    DROP_POINTS_CAPABILITY,
     DROP_TYPE_MANAGE_CAPABILITY,
     PRODUCT_READ_CAPABILITY,
     PRODUCT_WRITE_CAPABILITY,
@@ -285,6 +286,15 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
                 '/:id/publish',
                 guard.requirePermission(PRODUCT_WRITE_CAPABILITY, { globalOnly: true }),
                 controller.publish,
+            );
+
+            // Reward points: System Admin only. `drop:configure` is not
+            // implied by `drop:manage`, so a Drop Manager — and an artist —
+            // who can edit the drop still cannot set its points.
+            router.put(
+                '/:id/reward-points',
+                guard.requirePermission(DROP_POINTS_CAPABILITY, { globalOnly: true }),
+                controller.setRewardPoints,
             );
 
             // Market pricing. Reading takes the same capability as the detail

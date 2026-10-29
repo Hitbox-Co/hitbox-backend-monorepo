@@ -239,13 +239,13 @@ Read-side feed for the mobile **Discover** screen. Public (no auth). Items are d
 {
   "id": "cmro…",
   "name": "Pierce The Veil — Signature Series",
-  "imageUrl": "https://…"         // first product image, null if none
+  "imageUrl": "https://…",        // first product image, null if none
+  "rewardPoints": 150             // set by HitBox System Admin; 0 when none
 }
 ```
 
-> **`rewardPoints` was removed.** `Product.rewardPoints` no longer exists in
-> the schema and nothing replaced it, so the card was trimmed rather than
-> padded with a constant `0`.
+> **`rewardPoints` is back** as `Drop.rewardPoints`. Only HitBox System
+> Admin sets it; see [admin/drop-reward-points.md](admin/drop-reward-points.md).
 
 Sections used to map onto `Product.marketplaceStatus`, a curation column the
 restructure removed. With nothing editorial left in the schema, each section is
@@ -311,14 +311,14 @@ Read-side feed for the mobile **Marketplace** screen. Browse routes are public. 
   "imageUrl": "https://…",          // first product image, null if none
   "artistName": "Blink-182",        // via the product's artist/collection, null if none
   "priceInDollars": "89.99",        // decimal string, or null when no price is set
-  "currency": "USD"                 // market the price is quoted in, null with no price
+  "currency": "USD",                // market the price is quoted in, null with no price
+  "rewardPoints": 150               // set by HitBox System Admin; 0 when none
 }
 ```
 
-> **`rewardPoints` and `badge` were removed.** `Product.rewardPoints` and
-> `Product.marketplaceStatus` no longer exist in the schema and nothing
-> replaced them, so the card advertises only fields the database can answer
-> for. `priceInDollars` now comes from `ProductPrice` — the base price
+> **`badge` was removed.** `Product.marketplaceStatus` no longer exists in
+> the schema and nothing replaced it. `rewardPoints` is back as
+> `Drop.rewardPoints` (System Admin only, [admin/drop-reward-points.md](admin/drop-reward-points.md)). `priceInDollars` now comes from `ProductPrice` — the base price
 > (no variant) in the **default market** — and is `null` when none is set,
 > which is why `currency` travels with it.
 
@@ -422,15 +422,16 @@ Items enter a collection through the **claims flow** (NFC claim → collection e
     "id": "cmro…",                  // → GET /products/:id for full details
     "name": "Pierce The Veil — Signature Series Poster",
     "imageUrl": "https://…",        // first product image, null if none
-    "rarity": "LEGENDARY"           // free-form string, nullable
+    "rarity": "LEGENDARY",          // free-form string, nullable
+    "rewardPoints": 150             // set by HitBox System Admin; 0 when none
   }
 }
 ```
 
 Changed with the schema: `totalClaimedNo` → `sku.serialNumber` (the real
 edition position, not a counter that could drift), `addedAt` → `acquiredAt`,
-`claimedStatus` moved from the product to the SKU, and `genre` / `rewardPoints`
-are gone with no replacement column.
+`claimedStatus` moved from the product to the SKU, and `genre` is gone with no
+replacement column. `rewardPoints` is back, from the drop ([admin/drop-reward-points.md](admin/drop-reward-points.md)).
 
 ### `GET /api/v1/collections/me/stats` 🔒
 
@@ -608,7 +609,9 @@ Create a product. The 12-digit `groupCode` is **generated server-side**: 8 rando
 
 → `201` with the created product.
 
-**Removed from the body:** `genre`, `rewardPoints`, `priceInDollars`,
+**Not in the body:** `rewardPoints`, which only a System Admin can set, through
+`PUT /admin/products/:id/reward-points` ([admin/drop-reward-points.md](admin/drop-reward-points.md)). The response carries it.
+**Removed from the body:** `genre`, `priceInDollars`,
 `marketplaceStatus`, `tagId` and `images` — none has a backing column any more.
 Prices are rows in `ProductPrice` (per market/variant), images are created
 through the media upload flow and joined via `ProductImage`, and tags belong to

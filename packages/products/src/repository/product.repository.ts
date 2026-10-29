@@ -60,6 +60,7 @@ export type ProductWithRelations = Prisma.DropGetPayload<{ include: typeof listI
 const discoverSelect = {
     id: true,
     name: true,
+    rewardPoints: true,
     dropImages: { ...imageArgs, take: 1 },
 } satisfies Prisma.DropSelect;
 
@@ -68,6 +69,7 @@ export type ProductDiscoverRow = Prisma.DropGetPayload<{ select: typeof discover
 const marketplaceSelect = {
     id: true,
     name: true,
+    rewardPoints: true,
     dropImages: { ...imageArgs, take: 1 },
     dropPrices: basePriceArgs,
     collection: { select: { artist: { select: { name: true } } } },
@@ -211,6 +213,7 @@ const membershipSelect = {
     artistId: true,
     collectionId: true,
     totalSupply: true,
+    rewardPoints: true,
     publishedAt: true,
     collection: { select: { id: true, name: true } },
 } satisfies Prisma.DropSelect;

@@ -29,6 +29,7 @@ const itemInclude = {
                     id: true,
                     name: true,
                     rarity: true,
+                    rewardPoints: true,
                     collectionId: true,
                     dropImages: {
                         where: { archivedAt: null },

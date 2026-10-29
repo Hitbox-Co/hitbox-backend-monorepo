@@ -161,6 +161,7 @@ Content-Type: application/json
 | `collectionId` / `artistId` / `organizationId` | uuid | no | `null` detaches on PATCH. **A `collectionId` must be a live collection of the drop's own `artistId`** — see below |
 | `totalSupply` | int ≥ 0 | no (`0`) | `0` = size not declared yet |
 | `purchaseLimit` | int ≥ 1 | no | omit for unlimited |
+| `rewardPoints` | — | **not accepted** | System Admin sets points through `PUT /admin/products/:id/reward-points` ([drop-reward-points.md](drop-reward-points.md)). Sending it on `PATCH` gives `422`. The response always carries `rewardPoints`. |
 | `releaseStart` / `releaseEnd` | ISO date | no | |
 | `status` | `DropStatus` | no (`DRAFT`) | case-insensitive |
 | `isAgeSpecific` | boolean | no (`false`) | |
