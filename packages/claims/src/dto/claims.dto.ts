@@ -178,3 +178,115 @@ export interface LedgerEntryView {
     /** PeerToPeer Trading — Yes/No: is this owner eligible to trade P2P? */
     peerToPeerTrading: boolean;
 }
+
+// ── Tap-URL flow (u|b / e / c) ─────────────────────────────────────────────
+
+/**
+ * The values a tag's URL carries, format-checked only. Nothing here decrypts
+ * anything — the server does that after looking up the keys.
+ *
+ * Exactly one of:
+ *   u  the chip UID, 14 hex, written as plain text (per-tag keys). A lookup
+ *      hint only: the UID inside `e` must match it.
+ *   b  the batch: `NfcKeySet.publicCode` (`nks` + 19 Crockford base32
+ *      characters) or the short `NfcKeySet.keySetCode` (3-20 of A-Z a-z 0-9 . _ -)
+ * plus
+ *   e  32 hex (encrypted PICC data)
+ *   c  16 hex (SDM MAC)
+ */
+const tapFields = {
+    u: z
+        .string()
+        .trim()
+        .regex(/^[0-9a-fA-F]{14}$/, 'Invalid value.')
+        .transform((value) => value.toUpperCase())
+        .optional(),
+    b: z
+        .string()
+        .trim()
+        .regex(/^(nks[0-9a-hjkmnp-tv-z]{19}|[A-Za-z0-9._-]{3,20})$/, 'Invalid batch code.')
+        .optional(),
+    e: z.string().trim().regex(/^[0-9a-fA-F]{32}$/, 'Invalid value.'),
+    c: z.string().trim().regex(/^[0-9a-fA-F]{16}$/, 'Invalid value.'),
+};
+
+const exactlyOneOfUB = (value: { u?: unknown; b?: unknown }) =>
+    (value.u !== undefined) !== (value.b !== undefined);
+const UB_MESSAGE = { message: 'Send either u or b, not both and not neither.' };
+
+/** GET /verify?u=&e=&c=  (or the batch-key form ?b=&e=&c=) */
+export const verifyTapQuerySchema = z.object(tapFields).refine(exactlyOneOfUB, UB_MESSAGE);
+export type VerifyTapQuery = z.infer<typeof verifyTapQuerySchema>;
+
+/**
+ * POST /claim. The claimer is always the signed-in user — never a field here.
+ * `.strict()`: an unknown field in a claim body is a client bug or a probe.
+ */
+export const claimTapBodySchema = z
+    .object({
+        ...tapFields,
+        visibility: z.enum(['PUBLIC', 'PRIVATE']).default('PRIVATE'),
+    })
+    .strict()
+    .refine(exactlyOneOfUB, UB_MESSAGE);
+export type ClaimTapBody = z.infer<typeof claimTapBodySchema>;
+
+/** The product a tap resolved to — what the app shows without a second call. */
+export interface TapProductView {
+    id: string;
+    groupCode: string;
+    name: string;
+    status: DropStatus;
+    rarity: string | null;
+    imageUrl: string | null;
+    /** Base price in the default market; null when none is configured. */
+    priceInDollars: string | null;
+    currency: string | null;
+}
+
+/**
+ * A tap that did not authenticate. Deliberately says nothing about WHY: the
+ * real reason is in `NfcVerification.reasonCode`, for people, not for callers.
+ */
+export interface TapNotVerified {
+    verified: false;
+    message: string;
+}
+
+/** GET /verify?b=&e=&c= — authenticity + current state. Never claims. */
+export interface TapVerifyResult {
+    verified: true;
+    claimed: boolean;
+    claimedStatus: ClaimedStatus;
+    sku: { id: string; skuCode: string; serialNumber: number };
+    product: TapProductView;
+    /** Null when unclaimed, or when the owner keeps this item private. */
+    owner: OwnerView | null;
+    claimedAt: string | null;
+    verifiedAt: string;
+}
+
+/**
+ * POST /claim. `outcome`:
+ *   CLAIMED                    this tap claimed it
+ *   ALREADY_CLAIMED            it belonged to someone before this tap
+ *   CLAIMED_BY_OTHER_JUST_NOW  lost a simultaneous race by milliseconds
+ *   UNAVAILABLE                authentic, but frozen or in transfer right now
+ *
+ * `owner` is null when someone else owns it and keeps it private.
+ */
+export interface TapClaimResult {
+    verified: true;
+    outcome: 'CLAIMED' | 'ALREADY_CLAIMED' | 'CLAIMED_BY_OTHER_JUST_NOW' | 'UNAVAILABLE';
+    claimedByYou: boolean;
+    message: string;
+    owner: OwnerView | null;
+    sku: { id: string; skuCode: string; serialNumber: number; claimedStatus: ClaimedStatus };
+    product: TapProductView;
+    claimedAt: string | null;
+    claim: { id: string; claimCode: string; claimedNo: number } | null;
+}
+
+export interface TapClaimNotVerified extends TapNotVerified {
+    outcome: 'NOT_VERIFIED';
+}

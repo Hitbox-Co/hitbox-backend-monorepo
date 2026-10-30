@@ -16,7 +16,7 @@ export interface SupplyAuditInput {
     actorType?: SupplyActorType | undefined;
     organizationId: string | null;
     /** The row the event is about: a vendor, a batch or a tag. */
-    resourceType: 'Vendor' | 'VendorMember' | 'VendorDropAssignment' | 'SupplyBatch' | 'NfcTag';
+    resourceType: 'Vendor' | 'VendorMember' | 'VendorDropAssignment' | 'SupplyBatch' | 'NfcTag' | 'NfcKeySet' | 'NfcTagKey';
     resourceId: string | null;
     result: 'SUCCESS' | 'DENIED';
     correlationId: string;

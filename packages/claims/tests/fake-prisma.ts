@@ -49,6 +49,7 @@ interface Store {
     blockchainLedger: Row[];
     skuHistory: Row[];
     buyerCollection: Row[];
+    nfcTag: Row[];
 }
 
 const TABLES: (keyof Store)[] = [
@@ -60,6 +61,7 @@ const TABLES: (keyof Store)[] = [
     'blockchainLedger',
     'skuHistory',
     'buyerCollection',
+    'nfcTag',
 ];
 
 /** Yields to the event loop, so concurrent transactions actually interleave. */
@@ -143,6 +145,7 @@ export class FakePrisma {
         blockchainLedger: [],
         skuHistory: [],
         buyerCollection: [],
+        nfcTag: [],
     };
 
     /** Set while a transaction is open, so nested $transaction calls flatten. */
@@ -226,6 +229,7 @@ export class FakePrisma {
                 groupCode: drop.groupCode,
                 name: drop.name,
                 status: drop.status,
+                rarity: drop.rarity ?? null,
                 collectionId: drop.collectionId ?? null,
                 collection: drop.collection ?? null,
                 dropImages: [],
@@ -376,7 +380,29 @@ export class FakePrisma {
 
     // ── buyerCollection ───────────────────────────────────────────────────
 
+    // ── nfcTag ────────────────────────────────────────────────────────────
+
+    readonly nfcTag = {
+        updateMany: async ({ where, data }: { where: Row; data: Row }) => {
+            await tick();
+            const hits = this.store.nfcTag.filter((t) => matches(t, where));
+            hits.forEach((row) => applyData(row, data));
+            return { count: hits.length };
+        },
+    };
+
+    // ── buyerCollection ───────────────────────────────────────────────────
+
     readonly buyerCollection = {
+        findUnique: async ({ where }: { where: Row; select?: Row }) => {
+            await tick();
+            const key = where.userId_skuId as { userId: string; skuId: string };
+            return (
+                this.store.buyerCollection.find(
+                    (b) => b.userId === key.userId && b.skuId === key.skuId,
+                ) ?? null
+            );
+        },
         upsert: async ({ where, create, update }: { where: Row; create: Row; update: Row }) => {
             await tick();
             const key = where.userId_skuId as { userId: string; skuId: string };

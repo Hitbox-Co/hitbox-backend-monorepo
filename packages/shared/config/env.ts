@@ -72,6 +72,27 @@ const envSchema = z.object({
      */
     NFC_TAG_KEY_REFERENCE: z.string().min(1).optional(),
 
+    // ── NFC batch keys (Key 00/01/02) ───────────────────────────────────────
+    /**
+     * Names the KMS key that wraps new batch key sets (an ARN / key id). Stored
+     * on each `NfcKeySet` as `kmsKeyRef`, so the wrapping key can be rotated
+     * without losing the ability to unwrap old sets. A pointer, never a key.
+     */
+    NFC_KMS_KEY_REF: z.string().min(1).optional(),
+    /**
+     * DEVELOPMENT ONLY. Wrapping key for the local stand-in for a KMS. The
+     * local wrapper refuses to start when NODE_ENV=production, so setting this
+     * there achieves nothing.
+     */
+    NFC_LOCAL_WRAP_KEY: z.string().min(32).optional(),
+
+    /**
+     * "false" retires the old tag-id routes (POST /claims/:tagId, /confirm and
+     * GET /verify/:tagId) — they then answer 410. Anything else keeps them.
+     * Deprecated in favour of POST /claim and GET /verify?b=&e=&c=.
+     */
+    CLAIMS_LEGACY_TAG_ROUTES: z.string().optional(),
+
     // ── Media storage (optional) ────────────────────────────────────────────
     // Absent on a deploy that does not serve uploads; the media routes are
     // then not mounted at all rather than mounted and failing at runtime.

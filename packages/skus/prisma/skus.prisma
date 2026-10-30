@@ -131,12 +131,18 @@ model NfcVerification {
   skuId            String?            @db.Uuid
   sku              Sku?               @relation(fields: [skuId], references: [id])
   counter          Int?
-  result           VerificationResult
+  /// The key set used to check this tap. Plain column, no FK, so the log still
+  /// says which keys were used after a re-key or retirement.
+  keySetId         String?            @db.Uuid
+  /// The per-tag key row used to check this tap. Plain column, no FK.
+  nfcTagKeyId      String?            @db.Uuid
+  result          VerificationResult
   reasonCode       String?            // internal only
   requestId        String
   createdAt        DateTime           @default(now())
 
   @@index([skuId, createdAt])
+  @@index([nfcTagId, createdAt])
 }
 
 /// Whether the item has been claimed by an owner. IN_TRANSFER blocks

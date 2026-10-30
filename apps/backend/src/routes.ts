@@ -9,6 +9,8 @@ export interface ApiRouters {
     collections: Router;
     // NFC two-step claim (validate + confirm) + verify + ledger (claims module).
     claims: Router;
+    /** POST /claim — claim with a tap URL's b/e/c. */
+    claim: Router;
     verify: Router;
     ledger: Router;
     /** The caller's own effective permissions — GET /authz/me. */
@@ -123,6 +125,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/marketplace', routers.marketplace);
     api.use('/collections', routers.collections);
     api.use('/claims', routers.claims);
+    api.use('/claim', routers.claim);
     api.use('/verify', routers.verify);
     api.use('/ledger', routers.ledger);
     api.use('/authz', routers.authz);

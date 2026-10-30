@@ -22,7 +22,7 @@ import { createMarketsModule } from '@hitbox/markets';
 import { createOrganizationsModule } from '@hitbox/organizations';
 import { createOrdersModule } from '@hitbox/orders';
 import { createReleasesModule } from '@hitbox/releases';
-import { createSkusModule } from '@hitbox/skus';
+import { createSkusModule, NfcVerifyService } from '@hitbox/skus';
 import { createSupplyModule, VENDOR_ROLE_NAME } from '@hitbox/supply';
 import {
     buildBuyerTaxAccess,
@@ -33,6 +33,7 @@ import {
 } from '@hitbox/tax';
 import { createLeadsModule } from '@hitbox/leads';
 import { createStripeSecrets } from './adapters/stripe-secrets';
+import { createLocalKeyWrapper } from './adapters/kms-key-wrapper';
 import { createTagCipher } from './adapters/tag-cipher';
 import { buildRoutes } from './routes';
 
@@ -515,6 +516,13 @@ export function bootstrap(): Bootstrapped {
     // claims resolves taps with the same hash.
     const tagCipher = createTagCipher(env);
 
+    // Batch-key wrapper. Only the local stand-in exists so far, and it refuses
+    // to run in production, so it is not even constructed there: key creation
+    // then answers 503 until a cloud KMS wrapper is configured.
+    const keyWrapper =
+        env.NODE_ENV === 'production' ? undefined : createLocalKeyWrapper(env);
+    const kmsKeyRef = env.NFC_KMS_KEY_REF ?? (keyWrapper ? 'local-dev' : undefined);
+
     const supplyModule = createSupplyModule({
         prisma,
         eventBus,
@@ -522,6 +530,8 @@ export function bootstrap(): Bootstrapped {
         resolvePrincipal: (req) => accessControlModule.guard.describePrincipal(req),
         resolveUserId: (req: Request) => req.auth?.accountId,
         tagCipher,
+        keyWrapper,
+        kmsKeyRef,
         /**
          * ACCEPTED consignment → sellable units: skus' minting core, inside the
          * accept transaction, so serials, the drop's totalSupply cap and each
@@ -628,6 +638,18 @@ export function bootstrap(): Bootstrapped {
         eventBus,
         mediaUrls,
         tagUidHash: tagCipher ? (uid: string) => tagCipher.hash(uid) : undefined,
+        // Tap-URL verification needs the chip-UID hash AND a key wrapper. Without
+        // both the tap routes answer 503 rather than pretend to verify.
+        tapVerifier:
+            tagCipher && keyWrapper
+                ? new NfcVerifyService({
+                    prisma,
+                    keyWrapper,
+                    tagUidHash: (uid: string) => tagCipher.hash(uid),
+                    logger: createModuleLogger('nfc-verify'),
+                })
+                : undefined,
+        legacyTagIdRoutes: env.CLAIMS_LEGACY_TAG_ROUTES !== 'false',
     });
     const claimsRouters = claimsModule.createRouters(authModule.requireAuth);
 
@@ -802,6 +824,7 @@ export function bootstrap(): Bootstrapped {
         marketplace: marketplaceModule.router,
         collections: collectionsModule.createRouter(authModule.requireAuth),
         claims: claimsRouters.claims,
+        claim: claimsRouters.claim,
         verify: claimsRouters.verify,
         ledger: claimsRouters.ledger,
         authz: accessControlModule.createSelfRouter(authModule.requireAuth),

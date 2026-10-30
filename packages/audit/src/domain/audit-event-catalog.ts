@@ -606,6 +606,59 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         defaultSeverity: CRITICAL,
         sourceStories: ['docs/admin/supply-inventory-api.md 8'],
     },
+    {
+        eventType: 'supply.keyset.create',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'A batch of NFC keys (Key 00/01/02) was created. Carries the key set code and ' +
+            'the KMS key reference — NEVER a key, wrapped or plain.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/nfc-claim-verify-api.md'],
+    },
+    {
+        eventType: 'supply.keyset.retire',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'A batch key set was retired: every chip in it fails verification from now on. ' +
+            'Carries before/after status and the reason.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/nfc-claim-verify-api.md'],
+    },
+    {
+        eventType: 'supply.tags.personalise',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A consignment's chips were given a key set. Carries the key set id and a count — " +
+            'NEVER tag UIDs.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/nfc-claim-verify-api.md'],
+    },
+    {
+        eventType: 'supply.tag-keys.generate',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'Per-tag NFC keys (Key 00/01/02) were generated for one chip or a consignment. ' +
+            'Carries ids, counts and the KMS key reference — NEVER a key or a UID.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/nfc-claim-verify-api.md'],
+    },
+    {
+        eventType: 'supply.tag-keys.personalize',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A chip's generated keys were recorded as written onto the chip. Carries ids only.",
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/nfc-claim-verify-api.md'],
+    },
+    {
+        eventType: 'supply.tag-keys.revoke',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A chip's keys were revoked: the chip fails verification until it is re-keyed. " +
+            'Carries ids and the reason.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/nfc-claim-verify-api.md'],
+    },
     // Vendor portal administration. Inviting someone to a vendor grants them a
     // role, and assigning a drop decides which goods they may book in — both
     // are access decisions, so WARNING like the rest of supply administration.

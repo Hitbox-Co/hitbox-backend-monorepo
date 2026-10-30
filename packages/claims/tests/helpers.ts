@@ -1,5 +1,6 @@
 import type { IEventBus } from '@hitbox/shared';
 import type { Logger } from 'pino';
+import type { INfcTapVerifier } from '../src/domain/interfaces/nfc-tap-verifier.interface';
 import { ClaimsRepository } from '../src/repository/claims.repository';
 import { ClaimsService } from '../src/service/claims.service';
 import { FakePrisma } from './fake-prisma';
@@ -73,9 +74,9 @@ export interface Harness {
  * test, and two users.
  */
 export function harness(
-    options: { claimTokenRequired?: boolean } & FakePrismaOptions = {},
+    options: { claimTokenRequired?: boolean; tapVerifier?: INfcTapVerifier } & FakePrismaOptions = {},
 ): Harness {
-    const { claimTokenRequired = false, ...prismaOptions } = options;
+    const { claimTokenRequired = false, tapVerifier, ...prismaOptions } = options;
     const prisma = new FakePrisma(prismaOptions);
     const logger = fakeLogger();
     const eventBus = fakeEventBus();
@@ -85,6 +86,7 @@ export function harness(
         groupCode: 'HB-DEMO-001',
         name: 'Demo Collectible',
         status: 'PUBLISHED',
+        rarity: 'RARE',
         collectionId: null,
         collection: null,
         dropPrices: [],
@@ -115,6 +117,7 @@ export function harness(
         eventBus,
         logger,
         claimTokenRequired,
+        tapVerifier,
     });
 
     return {

@@ -21,13 +21,21 @@ import {
     isClaimTokenRejected,
 } from '../domain/claim-token';
 import type { IMediaUrlResolver } from '../domain/interfaces/media-url-resolver.interface';
+import type { INfcTapVerifier } from '../domain/interfaces/nfc-tap-verifier.interface';
 import type {
     ClaimBodyDto,
     ClaimFlowResult,
+    ClaimTapBody,
     LedgerEntryView,
     OwnerView,
+    TapClaimNotVerified,
+    TapClaimResult,
+    TapNotVerified,
+    TapProductView,
+    TapVerifyResult,
     ValidateResult,
     VerifyResult,
+    VerifyTapQuery,
 } from '../dto/claims.dto';
 import {
     basePriceOf,
@@ -52,6 +60,12 @@ interface ClaimsServiceDeps {
      * in full, and the race outcome applies either way.
      */
     claimTokenRequired: boolean;
+    /**
+     * Authenticates a tap URL (u/e/c, or the batch-key form b/e/c). Absent on a deployment with no key
+     * wrapper or chip-UID key: the tap routes then answer 503 instead of
+     * pretending to verify.
+     */
+    tapVerifier?: INfcTapVerifier | undefined;
 }
 
 /** Minimal user shape needed to render an owner. */
@@ -62,6 +76,14 @@ function generateClaimCode(): string {
     for (let i = 0; i < CLAIM_CODE_DIGITS; i += 1) digits += String(randomInt(0, 10));
     return `${CLAIM_CODE_PREFIX}${digits}`;
 }
+
+const NOT_VERIFIED_MESSAGE = 'We could not verify this item. Try tapping again.';
+const NOT_VERIFIED_VERIFY: TapNotVerified = { verified: false, message: NOT_VERIFIED_MESSAGE };
+const NOT_VERIFIED_CLAIM: TapClaimNotVerified = {
+    verified: false,
+    outcome: 'NOT_VERIFIED',
+    message: NOT_VERIFIED_MESSAGE,
+};
 
 /**
  * The NFC claim flow.
@@ -207,6 +229,31 @@ export class ClaimsService {
     async claim(tagId: string, userId: string, body: ClaimBodyDto): Promise<ClaimFlowResult> {
         const sku = await this.requireSku(tagId);
         const tokenHash = this.resolveTokenHash(sku.id, userId, body.claimToken);
+        return this.runClaim({
+            sku,
+            userId,
+            visibility: body.visibility,
+            tokenHash,
+            nfcTagId: null,
+            refetch: () => this.deps.claims.findSkuByTagId(tagId),
+        });
+    }
+
+    /**
+     * The claim transaction and its outcomes, shared by the legacy tag-id flow
+     * (token-guarded) and the tap-URL flow (authenticated by the tap itself).
+     * `tokenHash` null skips the token step; `nfcTagId` set also activates the
+     * chip. `refetch` re-reads the unit after a lost race, to name the winner.
+     */
+    private async runClaim(params: {
+        sku: SkuForTag;
+        userId: string;
+        visibility: 'PUBLIC' | 'PRIVATE';
+        tokenHash: string | null;
+        nfcTagId: string | null;
+        refetch: () => Promise<SkuForTag | null>;
+    }): Promise<ClaimFlowResult> {
+        const { sku, userId, tokenHash, nfcTagId, refetch } = params;
 
         // The item's state as of *now*, before the token is spent. Two things
         // depend on it, and it has to be captured here:
@@ -236,14 +283,15 @@ export class ClaimsService {
                     userId,
                     ownerLabel,
                     claimCode: generateClaimCode(),
-                    visibility: body.visibility,
+                    visibility: params.visibility,
                     now,
                     tokenHash,
+                    nfcTagId,
                 });
 
                 if (result.lost) {
                     // Re-read to name whoever holds it now.
-                    const fresh = await this.deps.claims.findSkuByTagId(tagId);
+                    const fresh = await refetch();
                     const winner = fresh?.owner ?? null;
 
                     // Race, or an old claim? The discriminator is the status
@@ -254,6 +302,13 @@ export class ClaimsService {
                     // someone else's before the caller ever tapped, and
                     // telling them they "just" lost would be a lie.
                     if (claimedBeforeWeStarted) {
+                        return this.alreadyClaimed(fresh ?? sku, winner, userId);
+                    }
+
+                    // The "winner" is the caller's own account: a double tap, or a
+                    // slow first request that had not finished saving when this
+                    // one read the item. Nobody beat them to it — they own it.
+                    if (winner?.id === userId) {
                         return this.alreadyClaimed(fresh ?? sku, winner, userId);
                     }
 
@@ -320,6 +375,180 @@ export class ClaimsService {
             'Could not allocate a unique claim code',
             CLAIMS_ERROR_CODES.CLAIM_CODE_TAKEN,
         );
+    }
+
+    // ── tap-URL flow (b / e / c) ───────────────────────────────────────────
+
+    /**
+     * GET /verify?b=&e=&c= — public authenticity check. Authenticates the tap
+     * and reports the item; never claims. The tap's counter is spent either
+     * way, so a URL that was verified cannot also be claimed afterwards.
+     */
+    async verifyByTap(
+        input: VerifyTapQuery,
+        requestId: string,
+    ): Promise<TapVerifyResult | TapNotVerified> {
+        const verified = await this.authenticateTap(input, requestId);
+        if (!verified) return NOT_VERIFIED_VERIFY;
+
+        const sku = await this.deps.claims.findSkuById(verified.skuId);
+        if (!sku) return NOT_VERIFIED_VERIFY;
+
+        const claimed = sku.claimedStatus === 'CLAIMED';
+        // Public and anonymous, so there is no "you": a private owner stays private.
+        const owner = claimed ? await this.visibleOwner(sku, null) : null;
+        return {
+            verified: true,
+            claimed,
+            claimedStatus: sku.claimedStatus,
+            sku: { id: sku.id, skuCode: sku.skuCode, serialNumber: sku.serialNumber },
+            product: this.productView(sku),
+            owner,
+            claimedAt: this.claimedAtOf(sku),
+            verifiedAt: new Date().toISOString(),
+        };
+    }
+
+    /**
+     * POST /claim — authenticate the tap, then claim.
+     *
+     * Order is the whole security model: nothing about the item is read, and
+     * nothing is written, until the tap has passed every check. A failed tap
+     * answers a generic NOT_VERIFIED (HTTP 200) whatever the cause.
+     *
+     * Unclaimed → claim it for the caller. Already claimed → change nothing
+     * and say who holds it (unless they keep it private).
+     */
+    async claimByTap(
+        userId: string,
+        body: ClaimTapBody,
+        requestId: string,
+    ): Promise<TapClaimResult | TapClaimNotVerified> {
+        const verified = await this.authenticateTap(body, requestId);
+        if (!verified) return NOT_VERIFIED_CLAIM;
+
+        const sku = await this.deps.claims.findSkuById(verified.skuId);
+        if (!sku) return NOT_VERIFIED_CLAIM;
+
+        // Frozen (fraud hold) or mid-transfer: authentic, but nobody can claim
+        // it now. Reported as its own outcome rather than as a lost race.
+        if (sku.claimedStatus === 'FLAGGED' || sku.claimedStatus === 'IN_TRANSFER') {
+            return this.tapResult(sku, {
+                outcome: 'UNAVAILABLE',
+                claimedByYou: false,
+                message: "This item can't be claimed right now.",
+                owner: null,
+                claimedAt: this.claimedAtOf(sku),
+                claim: null,
+            });
+        }
+
+        const flow = await this.runClaim({
+            sku,
+            userId,
+            visibility: body.visibility,
+            tokenHash: null,
+            nfcTagId: verified.nfcTagId,
+            refetch: () => this.deps.claims.findSkuById(sku.id),
+        });
+
+        return this.tapResult(sku, {
+            outcome: flow.outcome,
+            claimedByYou: flow.claimedByYou,
+            message: flow.message,
+            owner: flow.owner.id ? flow.owner : null,
+            claimedAt: flow.claimedAt,
+            claim: flow.claim,
+        });
+    }
+
+    /** Runs the verifier; null for any refusal. The reason stays in the log. */
+    private async authenticateTap(
+        input: VerifyTapQuery,
+        requestId: string,
+    ): Promise<{ nfcTagId: string; skuId: string } | null> {
+        const verifier = this.deps.tapVerifier;
+        if (!verifier) {
+            throw new AppError(
+                'Tap verification is unavailable on this deployment.',
+                503,
+                CLAIMS_ERROR_CODES.TAP_UNAVAILABLE,
+            );
+        }
+        const base = { e: input.e, c: input.c, requestId };
+        const result = await verifier.verifyTap(
+            input.u !== undefined ? { ...base, u: input.u } : { ...base, b: input.b! },
+        );
+        return result.ok ? { nfcTagId: result.nfcTagId, skuId: result.skuId } : null;
+    }
+
+    /**
+     * Builds the claim response and applies the owner-privacy rule: someone
+     * else's owner details are shown only when that owner made the item PUBLIC.
+     */
+    private async tapResult(
+        sku: SkuForTag,
+        flow: {
+            outcome: TapClaimResult['outcome'];
+            claimedByYou: boolean;
+            message: string;
+            owner: OwnerView | null;
+            claimedAt: string | null;
+            claim: TapClaimResult['claim'];
+        },
+    ): Promise<TapClaimResult> {
+        let owner = flow.owner;
+        let message = flow.message;
+
+        if (owner && !flow.claimedByYou && flow.outcome !== CLAIM_OUTCOME.CLAIMED) {
+            const visibility = await this.deps.claims.findCollectionVisibility(owner.id, sku.id);
+            if (visibility !== 'PUBLIC') {
+                owner = null;
+                if (flow.outcome === 'ALREADY_CLAIMED') {
+                    message = `"${sku.drop.name}" is already claimed by another collector.`;
+                }
+            }
+        }
+
+        return {
+            verified: true,
+            outcome: flow.outcome,
+            claimedByYou: flow.claimedByYou,
+            message,
+            owner,
+            sku: {
+                id: sku.id,
+                skuCode: sku.skuCode,
+                serialNumber: sku.serialNumber,
+                claimedStatus: flow.outcome === 'CLAIMED' ? 'CLAIMED' : sku.claimedStatus,
+            },
+            product: this.productView(sku),
+            claimedAt: flow.claimedAt,
+            claim: flow.claim,
+        };
+    }
+
+    /** The owner of a claimed item, or null when they keep it private. */
+    private async visibleOwner(sku: SkuForTag, callerId: string | null): Promise<OwnerView | null> {
+        const owner = this.ownerView(sku.owner);
+        if (!owner) return null;
+        if (callerId && owner.id === callerId) return owner;
+        const visibility = await this.deps.claims.findCollectionVisibility(owner.id, sku.id);
+        return visibility === 'PUBLIC' ? owner : null;
+    }
+
+    private productView(sku: SkuForTag): TapProductView {
+        const price = basePriceOf(sku);
+        return {
+            id: sku.drop.id,
+            groupCode: sku.drop.groupCode,
+            name: sku.drop.name,
+            status: sku.drop.status,
+            rarity: sku.drop.rarity ?? null,
+            imageUrl: this.imageUrlOf(sku),
+            priceInDollars: price?.amount ?? null,
+            currency: price?.currency ?? null,
+        };
     }
 
     // ── token helpers ─────────────────────────────────────────────────────

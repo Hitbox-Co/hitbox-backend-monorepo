@@ -19,6 +19,10 @@ export const CLAIMS_ERROR_CODES = {
      * them it was tells them whether a token exists and who holds it.
      */
     TOKEN_INVALID: 'CLAIMS_TOKEN_INVALID',
+    /** No tap verifier is configured (no key wrapper / chip-UID key). 503. */
+    TAP_UNAVAILABLE: 'CLAIMS_TAP_UNAVAILABLE',
+    /** A retired route (CLAIMS_LEGACY_TAG_ROUTES=false). 410. */
+    LEGACY_ROUTE_DISABLED: 'CLAIMS_LEGACY_ROUTE_DISABLED',
 } as const;
 
 /** Outcome of a tap on POST /claims/:tagId/confirm. */
@@ -37,6 +41,15 @@ export const CLAIM_OUTCOME = {
      * the difference between a race and an accusation.
      */
     CLAIMED_BY_OTHER_JUST_NOW: 'CLAIMED_BY_OTHER_JUST_NOW',
+} as const;
+
+/** Rate limits for the two tap routes, per window. */
+export const TAP_RATE_LIMIT = {
+    windowMs: 60_000,
+    /** Per client IP, on both GET /verify and POST /claim. */
+    perIp: 30,
+    /** Per signed-in user, on POST /claim. */
+    perUser: 15,
 } as const;
 
 export const CLAIMS_EVENTS = {

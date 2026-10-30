@@ -4,7 +4,7 @@
 // listed below. Edit the module-owned partial instead, then re-run db:merge.
 // ============================================================================
 
-// ───── source: packages/shared/database/prisma/base.prisma ─────────────────────────
+// ───── source: packages\shared\database\prisma\base.prisma ─────────────────────────
 
 // ============================================================================
 // SOURCE PARTIAL — merged first into the generated schema.prisma
@@ -22,7 +22,7 @@ datasource db {
     directUrl = env("DIRECT_URL")
 }
 
-// ───── source: packages/shared/database/prisma/enums.prisma ────────────────────────
+// ───── source: packages\shared\database\prisma\enums.prisma ────────────────────────
 
 // ============================================================================
 // SOURCE PARTIAL — shared enums. Owned by shared/database.
@@ -72,7 +72,7 @@ enum PaymentGateway {
     STRIPE
 }
 
-// ───── source: packages/access-control/prisma/access-control.prisma ────────────────
+// ───── source: packages\access-control\prisma\access-control.prisma ────────────────
 
 // ============================================================================
 // ACCESS-CONTROL MODULE SCHEMA  (packages/access-control/prisma/access-control.prisma)
@@ -400,7 +400,7 @@ enum RoleScopeType {
   GLOBAL
 }
 
-// ───── source: packages/artist/prisma/artist.prisma ────────────────────────────────
+// ───── source: packages\artist\prisma\artist.prisma ────────────────────────────────
 
 // ============================================================================
 // ARTIST MODULE SCHEMA  (packages/artist/prisma/artist.prisma)
@@ -533,7 +533,7 @@ enum ArtistBrandLinkType {
   DISTRIBUTION
 }
 
-// ───── source: packages/audit/prisma/audit.prisma ──────────────────────────────────
+// ───── source: packages\audit\prisma\audit.prisma ──────────────────────────────────
 
 // ============================================================================
 // AUDIT MODULE SCHEMA  (packages/audit/prisma/audit.prisma)
@@ -667,7 +667,7 @@ enum AuditSeverity {
   CRITICAL
 }
 
-// ───── source: packages/auth/prisma/auth.prisma ────────────────────────────────────
+// ───── source: packages\auth\prisma\auth.prisma ────────────────────────────────────
 
 // ============================================================================
 // AUTH MODULE SCHEMA  (packages/auth/prisma/auth.prisma)
@@ -691,7 +691,7 @@ model AuthWebhookEvent {
   receivedAt  DateTime
 }
 
-// ───── source: packages/claims/prisma/claims.prisma ────────────────────────────────
+// ───── source: packages\claims\prisma\claims.prisma ────────────────────────────────
 
 // ============================================================================
 // CLAIMS MODULE SCHEMA  (packages/claims/prisma/claims.prisma)
@@ -916,7 +916,7 @@ enum AcquisitionMethod {
   ADMIN
 }
 
-// ───── source: packages/collections/prisma/collections.prisma ──────────────────────
+// ───── source: packages\collections\prisma\collections.prisma ──────────────────────
 
 // ============================================================================
 // COLLECTIONS MODULE SCHEMA  (packages/collections/prisma/collections.prisma)
@@ -949,7 +949,7 @@ model BuyerCollection {
   @@unique([userId, skuId])
 }
 
-// ───── source: packages/content/prisma/content.prisma ──────────────────────────────
+// ───── source: packages\content\prisma\content.prisma ──────────────────────────────
 
 // ============================================================================
 // CONTENT MODULE SCHEMA  (packages/content/prisma/content.prisma)
@@ -1041,7 +1041,7 @@ enum ContentAccessType {
   REWARD_GRANT
 }
 
-// ───── source: packages/evolution/prisma/evolution.prisma ──────────────────────────
+// ───── source: packages\evolution\prisma\evolution.prisma ──────────────────────────
 
 // ============================================================================
 // EVOLUTION MODULE SCHEMA  (packages/evolution/prisma/evolution.prisma)
@@ -1107,7 +1107,7 @@ enum EvolutionThresholdType {
   EVENT_SPECIFIC
 }
 
-// ───── source: packages/finance/prisma/finance.prisma ──────────────────────────────
+// ───── source: packages\finance\prisma\finance.prisma ──────────────────────────────
 
 // ============================================================================
 // FINANCE MODULE SCHEMA  (packages/finance/prisma/finance.prisma)
@@ -1542,7 +1542,7 @@ enum FinanceCategory {
   ADJUSTMENT
 }
 
-// ───── source: packages/markets/prisma/markets.prisma ──────────────────────────────
+// ───── source: packages\markets\prisma\markets.prisma ──────────────────────────────
 
 // ============================================================================
 // MARKETS MODULE SCHEMA  (packages/markets/prisma/markets.prisma)
@@ -1592,7 +1592,7 @@ model MarketCountry {
   createdAt   DateTime
 }
 
-// ───── source: packages/media/prisma/media.prisma ──────────────────────────────────
+// ───── source: packages\media\prisma\media.prisma ──────────────────────────────────
 
 // ============================================================================
 // MEDIA MODULE SCHEMA  (packages/media/prisma/media.prisma)
@@ -1669,7 +1669,7 @@ enum VirusScanStatus {
   SKIPPED
 }
 
-// ───── source: packages/notifications/prisma/notifications.prisma ──────────────────
+// ───── source: packages\notifications\prisma\notifications.prisma ──────────────────
 
 // ============================================================================
 // NOTIFICATIONS MODULE SCHEMA  (packages/notifications/prisma/notifications.prisma)
@@ -1749,7 +1749,7 @@ enum NotificationStatus {
   READ
 }
 
-// ───── source: packages/orders/prisma/orders.prisma ────────────────────────────────
+// ───── source: packages\orders\prisma\orders.prisma ────────────────────────────────
 
 // ============================================================================
 // ORDERS MODULE SCHEMA  (packages/orders/prisma/orders.prisma)
@@ -2005,7 +2005,7 @@ enum ReservationStatus {
   RELEASED
 }
 
-// ───── source: packages/organizations/prisma/organizations.prisma ──────────────────
+// ───── source: packages\organizations\prisma\organizations.prisma ──────────────────
 
 // ============================================================================
 // ORGANIZATIONS MODULE SCHEMA  (packages/organizations/prisma/organizations.prisma)
@@ -2064,7 +2064,7 @@ enum OrganizationType {
   ARTIST_INDIVIDUAL
 }
 
-// ───── source: packages/payments/prisma/payments.prisma ────────────────────────────
+// ───── source: packages\payments\prisma\payments.prisma ────────────────────────────
 
 // ============================================================================
 // PAYMENTS MODULE SCHEMA  (packages/payments/prisma/payments.prisma)
@@ -2377,7 +2377,7 @@ enum DisputeReason {
   OTHER
 }
 
-// ───── source: packages/platform/prisma/platform.prisma ────────────────────────────
+// ───── source: packages\platform\prisma\platform.prisma ────────────────────────────
 
 // ============================================================================
 // PLATFORM MODULE SCHEMA  (packages/platform/prisma/platform.prisma)
@@ -2443,7 +2443,7 @@ enum ExceptionStatus {
   RESOLVED
 }
 
-// ───── source: packages/products/prisma/products.prisma ────────────────────────────
+// ───── source: packages\products\prisma\products.prisma ────────────────────────────
 
 // ============================================================================
 // PRODUCTS MODULE SCHEMA  (packages/products/prisma/products.prisma)
@@ -2792,7 +2792,7 @@ enum DropPriceStatus {
   DISABLED
 }
 
-// ───── source: packages/releases/prisma/releases.prisma ────────────────────────────
+// ───── source: packages\releases\prisma\releases.prisma ────────────────────────────
 
 // ============================================================================
 // RELEASES MODULE SCHEMA  (packages/releases/prisma/releases.prisma)
@@ -2898,7 +2898,7 @@ enum ApprovalStatus {
   REJECTED
 }
 
-// ───── source: packages/resale/prisma/resale.prisma ────────────────────────────────
+// ───── source: packages\resale\prisma\resale.prisma ────────────────────────────────
 
 // ============================================================================
 // RESALE MODULE SCHEMA  (packages/resale/prisma/resale.prisma)
@@ -2939,7 +2939,7 @@ enum ResaleStatus {
   BLOCKED
 }
 
-// ───── source: packages/search/prisma/search.prisma ────────────────────────────────
+// ───── source: packages\search\prisma\search.prisma ────────────────────────────────
 
 // ============================================================================
 // SEARCH MODULE SCHEMA  (packages/search/prisma/search.prisma)
@@ -2985,7 +2985,7 @@ enum IndexJobStatus {
   FAILED
 }
 
-// ───── source: packages/skus/prisma/skus.prisma ────────────────────────────────────
+// ───── source: packages\skus\prisma\skus.prisma ────────────────────────────────────
 
 // ============================================================================
 // SKUS MODULE SCHEMA  (packages/skus/prisma/skus.prisma)
@@ -3120,12 +3120,18 @@ model NfcVerification {
   skuId            String?            @db.Uuid
   sku              Sku?               @relation(fields: [skuId], references: [id])
   counter          Int?
-  result           VerificationResult
+  /// The key set used to check this tap. Plain column, no FK, so the log still
+  /// says which keys were used after a re-key or retirement.
+  keySetId         String?            @db.Uuid
+  /// The per-tag key row used to check this tap. Plain column, no FK.
+  nfcTagKeyId      String?            @db.Uuid
+  result          VerificationResult
   reasonCode       String?            // internal only
   requestId        String
   createdAt        DateTime           @default(now())
 
   @@index([skuId, createdAt])
+  @@index([nfcTagId, createdAt])
 }
 
 /// Whether the item has been claimed by an owner. IN_TRANSFER blocks
@@ -3156,7 +3162,7 @@ enum VerificationResult {
   REJECTED
 }
 
-// ───── source: packages/social/prisma/social.prisma ────────────────────────────────
+// ───── source: packages\social\prisma\social.prisma ────────────────────────────────
 
 // ============================================================================
 // SOCIAL MODULE SCHEMA  (packages/social/prisma/social.prisma)
@@ -3211,7 +3217,7 @@ model WishlistItem {
   @@unique([userId, productId, variantId])
 }
 
-// ───── source: packages/supply/prisma/supply.prisma ────────────────────────────────
+// ───── source: packages\supply\prisma\supply.prisma ────────────────────────────────
 
 // ============================================================================
 // SUPPLY MODULE SCHEMA  (packages/supply/prisma/supply.prisma)
@@ -3395,9 +3401,10 @@ model SupplyBatch {
   updatedAt           DateTime          @default(now()) @updatedAt
 
   // ── Own- and cross-module back-relations ──────────────────────────────────
-  skus    Sku[]
-  nfcTags NfcTag[]
-  lines   SupplyBatchLine[]
+  skus       Sku[]
+  nfcTags    NfcTag[]
+  nfcKeySets NfcKeySet[]
+  lines      SupplyBatchLine[]
 }
 
 /// The variant breakdown of a consignment — "this carton is 100 S, 100 M,
@@ -3453,7 +3460,14 @@ model NfcTag {
   qcNotes         String?
   lifecycleState  TagLifecycleState @default(UNPROVISIONED)
   keyReference    String?           // KMS pointer — never a key
-  lastTapCounter  Int               @default(0)
+  /// The key set (batch keys) this chip was personalised with. Null = not yet
+  /// keyed. A tap is checked against the keys found through this link, and the
+  /// `b` value in the tap URL must name the same key set.
+  keySetId        String?           @db.Uuid
+  keySet          NfcKeySet?        @relation(fields: [keySetId], references: [id])
+  /// Highest SDM counter seen from this chip. -1 = never tapped, so a first
+  /// tap that reports counter 0 still counts as an increase.
+  lastTapCounter  Int               @default(-1)
   tamperStatus    String?
   personalizedAt  DateTime?
   boundAt         DateTime?
@@ -3465,9 +3479,113 @@ model NfcTag {
   verifications   NfcVerification[]
   ledgerEntries   BlockchainLedger[]
   supportCases    SupportCase[]
+  /// Per-tag keys (Prisma-only relation, no column on this table).
+  keys            NfcTagKey[]
 
   @@index([skuId])
   @@index([variantId])
+  @@index([keySetId])
+}
+
+/// The secret keys of ONE physical tag (NTAG 424 DNA). Every tag has its own.
+/// Keys are stored ONLY wrapped by the KMS key named in `kmsKeyRef`; this
+/// table never holds a plaintext key and nothing may log one.
+///   Key 00  master key, only for re-keying the chip, never used to verify
+///   Key 01  decrypts `e` (PICC data: UID + counter)
+///   Key 02  checks `c` (SDM MAC)
+/// A tag may have several rows over time (re-keying); exactly one is ACTIVE.
+/// That is enforced by the partial unique index `NfcTagKey_one_active_per_tag`
+/// (UNIQUE ("nfcTagId") WHERE "status" = 'ACTIVE'), added by hand in the
+/// migration because Prisma cannot express it.
+model NfcTagKey {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`ntk…`). Written by the publicCode client extension.
+  publicCode     String?         @unique @db.VarChar(32)
+  nfcTagId       String          @db.Uuid
+  nfcTag         NfcTag          @relation(fields: [nfcTagId], references: [id])
+  /// The chip UID these keys belong to, kept with the keys so a key row says
+  /// which chip it is for. Same scheme as NfcTag: encrypted (never plaintext)
+  /// and a deterministic hash for lookup. Always written by the key service.
+  tagUidEncrypted String?
+  tagUidHash      String?
+  key0Wrapped    Bytes
+  key1Wrapped    Bytes
+  key2Wrapped    Bytes
+  /// Which KMS key wrapped the three above (ARN / key id).
+  kmsKeyRef      String
+  keyVersion     Int             @default(1)
+  status         NfcTagKeyStatus @default(ACTIVE)
+  /// Highest SDM read counter accepted with these keys. -1 = never tapped.
+  lastTapCounter Int             @default(-1)
+  lastTapAt      DateTime?
+  /// When the keys were written onto the chip. Null = generated, not written yet.
+  personalizedAt DateTime?
+  revokedAt      DateTime?
+  revokeReason   String?
+  /// No FK, same rule as other audit-style pointers in this schema.
+  createdById    String?         @db.Uuid
+  createdAt      DateTime        @default(now())
+
+  @@index([nfcTagId, status])
+  @@index([tagUidHash])
+}
+
+enum NfcTagKeyStatus {
+  ACTIVE
+  REVOKED
+}
+
+/// One set of NTAG 424 DNA keys shared by every chip in a batch. This is the
+/// key management record: a tap URL carries its `publicCode` as `b`, and the
+/// verifier uses the keys found here to decrypt `e` and check `c`.
+///
+///   Key 00  master key — re-keying only, never used to verify a tap
+///   Key 01  decrypts `e` (PICC data: UID + tap counter)
+///   Key 02  checks `c` (the CMAC)
+///
+/// Every key is stored ONLY wrapped (encrypted) by the cloud KMS key named in
+/// `kmsKeyRef`. This table never holds a plaintext key, and nothing may log
+/// one. Retiring a set makes every chip in it fail verification.
+model NfcKeySet {
+  id            String          @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`nks…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  /// This is the value printed into the tag URL as `b`.
+  publicCode    String?         @unique @db.VarChar(32)
+  /// Operator-facing label, e.g. KS-2026-07.
+  keySetCode    String          @unique @db.VarChar(20)
+  /// The consignment these keys were made for. Optional so a key set can be
+  /// created before the batch row exists.
+  supplyBatchId String?         @db.Uuid
+  supplyBatch   SupplyBatch?    @relation(fields: [supplyBatchId], references: [id])
+  /// Key 00 (master), wrapped by the KMS.
+  key0Wrapped   Bytes
+  /// Key 01 (decrypts `e`), wrapped by the KMS.
+  key1Wrapped   Bytes
+  /// Key 02 (checks `c`), wrapped by the KMS.
+  key2Wrapped   Bytes
+  /// Which KMS key wrapped the three above (ARN / key id), so the wrapping key
+  /// can be rotated without losing the ability to unwrap old sets.
+  kmsKeyRef     String
+  keyVersion    Int             @default(1)
+  status        NfcKeySetStatus @default(ACTIVE)
+  retiredAt     DateTime?
+  retireReason  String?
+  /// No FK — the record outlives the account, same rule as the rest of the
+  /// schema.
+  createdById   String?         @db.Uuid
+  createdAt     DateTime        @default(now())
+
+  nfcTags NfcTag[]
+
+  @@index([supplyBatchId])
+}
+
+/// Whether a key set may still verify taps. RETIRED is the response to a
+/// leaked key: every chip in the set fails from then on.
+enum NfcKeySetStatus {
+  ACTIVE
+  RETIRED
 }
 
 /// Vendor quality control on a chip, recorded before it is bound to anything.
@@ -3549,7 +3667,7 @@ enum SupplyBatchStatus {
   REJECTED
 }
 
-// ───── source: packages/support/prisma/support.prisma ──────────────────────────────
+// ───── source: packages\support\prisma\support.prisma ──────────────────────────────
 
 // ============================================================================
 // SUPPORT MODULE SCHEMA  (packages/support/prisma/support.prisma)
@@ -3607,7 +3725,7 @@ enum SupportCaseStatus {
   REJECTED
 }
 
-// ───── source: packages/tax/prisma/tax.prisma ──────────────────────────────────────
+// ───── source: packages\tax\prisma\tax.prisma ──────────────────────────────────────
 
 // ============================================================================
 // TAX & INVOICING MODULE SCHEMA  (packages/tax/prisma/tax.prisma)
@@ -4137,7 +4255,7 @@ enum TaxAdjustmentStatus {
   REJECTED
 }
 
-// ───── source: packages/users/prisma/users.prisma ──────────────────────────────────
+// ───── source: packages\users\prisma\users.prisma ──────────────────────────────────
 
 // ============================================================================
 // USERS MODULE SCHEMA  (packages/users/prisma/users.prisma)

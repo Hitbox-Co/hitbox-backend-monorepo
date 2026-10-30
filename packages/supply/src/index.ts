@@ -21,6 +21,7 @@
  */
 
 export { createSupplyModule } from './module';
+export type { IKeyWrapper } from './domain/interfaces/key-wrapper.interface';
 export type { SupplyModule, SupplyModuleDeps, SupplyPermissionGuard } from './module';
 
 export {

@@ -40,6 +40,7 @@ const skuByTagInclude = {
             groupCode: true,
             name: true,
             status: true,
+            rarity: true,
             collectionId: true,
             collection: { select: { id: true, artistId: true } },
             dropImages: {
@@ -113,6 +114,11 @@ export interface ClaimTxParams {
      * entirely; it never means "accept any token".
      */
     tokenHash?: string | null;
+    /**
+     * The chip that authenticated this claim (tap-URL flow). When set, the
+     * claim also moves the chip, and the unit's tag state, to ACTIVE.
+     */
+    nfcTagId?: string | null;
 }
 
 /**
@@ -199,6 +205,22 @@ export class ClaimsRepository {
 
     findSkuById(id: string): Promise<SkuForTag | null> {
         return this.prisma.sku.findUnique({ where: { id }, include: skuByTagInclude });
+    }
+
+    /**
+     * Who can see this unit in the owner's collection. Null when the owner has
+     * no live collection row — treated as private by every caller.
+     */
+    async findCollectionVisibility(
+        userId: string,
+        skuId: string,
+    ): Promise<'PUBLIC' | 'PRIVATE' | null> {
+        const row = await this.prisma.buyerCollection.findUnique({
+            where: { userId_skuId: { userId, skuId } },
+            select: { visibility: true, archivedAt: true },
+        });
+        if (!row || row.archivedAt) return null;
+        return row.visibility as 'PUBLIC' | 'PRIVATE';
     }
 
     findUserById(id: string): Promise<User | null> {
@@ -443,6 +465,7 @@ export class ClaimsRepository {
     async claimByTag(params: ClaimTxParams): Promise<ClaimTxOutcome> {
         const { sku, userId, ownerLabel, claimCode, visibility, now } = params;
         const tokenHash = params.tokenHash ?? null;
+        const nfcTagId = params.nfcTagId ?? null;
         const price = basePriceOf(sku);
 
         return this.prisma.$transaction(async (tx) => {
@@ -489,6 +512,7 @@ export class ClaimsRepository {
                     claimedStatus: 'CLAIMED',
                     ownerId: userId,
                     claimTokenUsedAt: now,
+                    ...(nfcTagId ? { tagLifecycleState: 'ACTIVE' as const } : {}),
                     updatedAt: now,
                 },
             });
@@ -504,6 +528,15 @@ export class ClaimsRepository {
                     });
                 }
                 return { lost: true, tokenId };
+            }
+
+            // The chip is in use from its first claim. Only a BOUND chip moves:
+            // a chip that is not live can never have reached this point.
+            if (nfcTagId) {
+                await tx.nfcTag.updateMany({
+                    where: { id: nfcTagId, lifecycleState: 'BOUND' },
+                    data: { lifecycleState: 'ACTIVE', activatedAt: now },
+                });
             }
 
             // claimedNo counts claims on this SKU — unique [skuId, claimedNo].

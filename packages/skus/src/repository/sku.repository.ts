@@ -298,6 +298,16 @@ export class SkuRepository {
 
         await tx.sku.createMany({ data: rows });
 
+        // The unit is born BOUND to its chip, and so is the chip: a tap is only
+        // verified for a chip that is BOUND or ACTIVE. Only UNPROVISIONED chips
+        // move — a LOST / REVOKED / DISPUTED chip keeps its state.
+        if (nfcTagIds.length > 0) {
+            await tx.nfcTag.updateMany({
+                where: { id: { in: nfcTagIds }, lifecycleState: TagLifecycleState.UNPROVISIONED },
+                data: { lifecycleState: TagLifecycleState.BOUND, boundAt: now },
+            });
+        }
+
         return {
             outcome: {
                 minted: rows.length,

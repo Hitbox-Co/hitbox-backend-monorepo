@@ -1,5 +1,7 @@
 # NFC Claim API (demo)
 
+> **Current flow:** see [Secure tap flow](#secure-tap-flow-current-tap-url--verify--claim) — `POST /claim` and `GET /verify?b=&e=&c=`. The tag-id routes below are deprecated.
+
 The authenticity flow behind HitBox collectibles. Every physical item ships
 with an NFC tag (`Sku.tagId`). A user taps the tag to **claim** first
 ownership. Re-tapping a claimed item just tells you **who owns it**.
@@ -25,6 +27,205 @@ ownership. Re-tapping a claimed item just tells you **who owns it**.
 > **Scope note:** peer-to-peer **transfer/trading is intentionally out of scope**
 > for the demo. The ledger still supports it (a `TRANSFER` row type exists) but
 > no transfer endpoint is exposed.
+
+---
+
+## Secure tap flow (current): tap URL → verify → claim
+
+> **This is the flow the app uses.** The tag-id routes further down
+> (`POST /claims/:tagId`, `POST /claims/:tagId/confirm`, `GET /verify/:tagId`) are
+> **deprecated**. They keep working, and answer with a `Deprecation: true` header,
+> until `CLAIMS_LEGACY_TAG_ROUTES=false` turns them into `410`.
+
+Every collectible carries an NXP NTAG 424 DNA chip. On each tap the chip writes
+a fresh URL:
+
+```
+https://hitboxcollectibles.com/verify?b=<batch code>&e=<32 hex>&c=<16 hex>
+```
+
+| Param | What it is |
+|---|---|
+| `b` | Which batch's keys to use: the key set's short code (e.g. `101`, 3–20 chars of `A-Z a-z 0-9 . _ -`) **or** its long `publicCode` (`nks…`, 22 chars). A lookup label only — public, not a secret; the keys, not `b`, are what authenticate a tap. Shorter is better for tag memory. |
+| `e` | Encrypted PICC data (AES-128-CBC, zero IV, **Key 01**): `0xC7 \| UID(7) \| counter(3, LE) \| padding`. |
+| `c` | SDM MAC (**Key 02**): 8 bytes of an AES-CMAC under a session key derived from Key 02, the UID and the counter. |
+
+The counter goes up on every tap, so **a URL is good for exactly one use.**
+
+**The app never decrypts and never holds a key.** It reads the URL from the tag
+and sends `b`, `e`, `c` to the server. Keys exist only wrapped (encrypted by a
+KMS) in `NfcKeySet`.
+
+### Per-tag keys: `u` instead of `b` (preferred)
+
+Each chip can instead carry **its own** Key 00/01/02 (table `NfcTagKey`, wrapped by the KMS),
+and its UID written into the URL as plain text:
+
+```
+https://hitboxcollectibles.com/verify?u=<UID, 14 hex>&e=<32 hex>&c=<16 hex>
+```
+
+Send **exactly one** of `u` or `b` (both, or neither, is a 400). `u` is only a lookup hint: anyone can
+edit it, so the UID that the chip encrypted into `e` must equal it. Both `POST /claim` and
+`GET /verify` take `u`/`e`/`c`; the response shapes are unchanged. Per-tag `e`/`c` are single-use
+exactly like the batch form: call **either** claim **or** verify for one tap, never both (the second is a `REPLAY`).
+
+Server order for `u` (reason codes are logged in `NfcVerification.reasonCode`, never returned):
+
+| # | Step | Refused as |
+|---|---|---|
+| 1 | format: `u` 14 hex, `e` 32 hex, `c` 16 hex | `BAD_FORMAT` |
+| 2 | find the chip by `ITagCipher.hash(u.toUpperCase())` | `UNKNOWN_TAG` |
+| 3 | chip lifecycle `BOUND` or `ACTIVE` | `TAG_NOT_ACTIVE` |
+| 4 | the chip's ACTIVE `NfcTagKey` row | `NO_KEYS` (never keyed, revoked, or the row names another UID) |
+| 5 | unwrap Key 01 / Key 02 (memory only, zeroed after) | *(HTTP 500, not logged as tamper)* |
+| 6 | decrypt `e` with Key 01, first byte `0xC7` | `BAD_PICC` |
+| 7 | UID inside `e` equals `u` (constant time) | `UID_MISMATCH` |
+| 8 | check `c` with Key 02 (constant time) | `BAD_CMAC` |
+| 9 | chip is embedded in a unit | `NO_ITEM` |
+| 10 | atomic `updateMany where lastTapCounter < counter` on the **`NfcTagKey`** row | `REPLAY` |
+
+The counter lives on `NfcTagKey.lastTapCounter` (new rows start at `-1`, so a first tap with counter 0
+passes); `NfcTag.lastTapCounter` is never touched by a per-tag tap. The `NfcVerification` row records
+`nfcTagKeyId` (and `keySetId` for a batch tap).
+
+Key management (admin, permission `nfc-tag-claim:manage:global`; responses with keys are `no-store`):
+
+| Route | Does |
+|---|---|
+| `POST /admin/supply/tags/:tagId/keys` | generate Key 00/01/02 for one chip; returns the keys, UID and URL **once** |
+| `POST /admin/supply/batches/:batchId/tag-keys` | body `{ limit? }` (default 500, max 1000); keys that many un-keyed chips, returns a CSV once (contains secrets, delete after programming) and how many remain |
+| `POST /admin/supply/tag-keys/:nfcTagKeyId/personalize` | record that the keys were written onto the chip |
+| `POST /admin/supply/tags/:tagId/keys/revoke` | body `{ reason }`; the chip then fails `NO_KEYS` until re-keyed (old rows are kept) |
+| `GET /admin/supply/tags/:tagId/keys` | the active key row's metadata, never key material |
+
+Audit events: `supply.tag-keys.generate`, `supply.tag-keys.personalize`, `supply.tag-keys.revoke`.
+
+### Batch keys: `b` (existing form)
+
+### What the server does, in this order
+
+| # | Step | Refused as (logged only — never sent to the caller) |
+|---|---|---|
+| 1 | find `NfcKeySet` by `b` (`publicCode` if it looks like `nks…`, otherwise `keySetCode`) | `UNKNOWN_BATCH` |
+| 2 | key set must be `ACTIVE` | `KEY_SET_RETIRED` |
+| 3 | unwrap Key 01 / Key 02 | *(HTTP 500, not logged as tamper)* |
+| 4 | decrypt `e` with Key 01 → UID + counter | `BAD_PICC` |
+| 5 | find the chip by UID hash (`ITagCipher.hash`) | `UNKNOWN_TAG` |
+| 6 | chip's `keySetId` must equal the batch | `BATCH_MISMATCH` |
+| 7 | chip lifecycle `BOUND` or `ACTIVE` | `TAG_NOT_ACTIVE` |
+| 8 | check `c` with Key 02 (constant time) | `BAD_CMAC` |
+| 9 | chip must be embedded in a unit (`Sku.currentNfcTagId`) | `NO_ITEM` |
+| 10 | atomic `updateMany where lastTapCounter < counter` must change 1 row | `REPLAY` |
+
+The counter is consumed only at step 10, after everything else passed, so a
+forged URL can never burn a real chip's counter. Every attempt writes one
+`NfcVerification` row (result, `reasonCode`, counter, chip, unit, `keySetId`,
+request id) — never `e`, `c`, the UID or a key.
+
+### `POST /claim` 🔒
+
+```json
+{ "b": "nks…", "e": "<32 hex>", "c": "<16 hex>", "visibility": "PRIVATE" }
+```
+
+`visibility` is optional (`PUBLIC` | `PRIVATE`, default `PRIVATE`). The claimer is
+always the signed-in user. Unknown body fields are a `422`.
+
+- Tap does not authenticate → **HTTP 200**
+  `{ "data": { "verified": false, "outcome": "NOT_VERIFIED", "message": "…" } }`.
+  The message is the same whatever failed (forged, replayed, retired, unknown).
+- Authenticated and unclaimed → claims it (the existing transaction: `Sku` →
+  `CLAIMED`, `SkuClaim`, MINT/CLAIM ledger rows, `SkuHistory`,
+  `BuyerCollection`, `claims.product.claimed`) and moves the chip and unit to
+  `ACTIVE`. `outcome: "CLAIMED"`.
+- Authenticated and already claimed → **changes nothing**. `outcome:
+  "ALREADY_CLAIMED"`, with `claimedByYou`.
+
+`outcome` is one of `CLAIMED`, `ALREADY_CLAIMED`,
+`CLAIMED_BY_OTHER_JUST_NOW` (lost a simultaneous race by milliseconds),
+`UNAVAILABLE` (authentic, but frozen or in transfer), or `NOT_VERIFIED`.
+
+```json
+{
+  "data": {
+    "verified": true,
+    "outcome": "CLAIMED",
+    "claimedByYou": true,
+    "message": "You claimed \"Demo Collectible\". You now own it.",
+    "owner": { "id": "…", "handle": "alice", "displayName": "alice" },
+    "sku": { "id": "…", "skuCode": "HB-DEMO-001-000007", "serialNumber": 7, "claimedStatus": "CLAIMED" },
+    "product": {
+      "id": "…", "groupCode": "HB-DEMO-001", "name": "Demo Collectible", "status": "ACTIVE",
+      "rarity": "RARE", "imageUrl": "https://…", "priceInDollars": "49.00", "currency": "USD"
+    },
+    "claimedAt": "2026-10-26T10:00:00.000Z",
+    "claim": { "id": "…", "claimCode": "HBPC123456", "claimedNo": 1 }
+  }
+}
+```
+
+### `GET /verify?u=&e=&c=` (or `?b=&e=&c=`) (public, no login)
+
+Authenticity check only. **Never claims.** Returns `{ verified, claimed,
+claimedStatus, sku, product, owner, claimedAt, verifiedAt }`, or the generic
+`{ verified: false, message }`.
+
+> **One tap = one use.** A URL spent on `GET /verify` is rejected as a replay if
+> it is then sent to `POST /claim`. The app calls **either** verify **or** claim
+> with a given tap, never both. In the Claim section it calls claim directly; to
+> claim after a verify the user taps again.
+
+### Owner privacy (both endpoints)
+
+Someone else's owner details (`owner`) are returned **only when that owner made
+the item `PUBLIC`**. If it is `PRIVATE` (or the owner has no live collection
+entry) `owner` is `null` and the message says "claimed by another collector".
+The owner always sees themselves (`claimedByYou: true`).
+
+### Rate limits
+
+On top of the global limiter: `GET /verify` 30 / min per IP; `POST /claim` 30 /
+min per IP **and** 15 / min per user. Over the limit → `429`.
+
+### Status codes
+
+| Code | Meaning |
+|---|---|
+| 200 | Any authenticated or unauthenticated tap (check `verified` / `outcome`) |
+| 401 | `POST /claim` without a session |
+| 422 | Malformed `b` / `e` / `c`, or an unknown body field |
+| 429 | Rate limited |
+| 503 | No verifier configured (no key wrapper or `NFC_TAG_UID_KEY`) |
+| 500 | Batch keys could not be unwrapped (server fault) |
+
+### Setting up a batch (admin, `nfc-tag-claim:manage:global`)
+
+| Route | Purpose |
+|---|---|
+| `POST /admin/supply/key-sets` | Create Key 00/01/02 for a batch. Returns the plaintext keys **once**, for programming the chips. |
+| `GET /admin/supply/key-sets` | List key sets. Never returns key material. |
+| `POST /admin/supply/key-sets/:id/personalise` | Give a consignment's un-keyed chips this key set. |
+| `POST /admin/supply/key-sets/:id/retire` | Retire a set: every chip in it fails verification. One-way. |
+
+When a consignment is accepted and minted into units, each chip moves to
+`BOUND` — which is what lets a tap verify.
+
+### Environment
+
+| Variable | Purpose |
+|---|---|
+| `NFC_TAG_UID_KEY` | ≥32 chars. Hashes chip UIDs (`NfcTag.tagUidHash`). Do not change once chips are registered. |
+| `NFC_KMS_KEY_REF` | Names the KMS key that wraps batch keys. |
+| `NFC_LOCAL_WRAP_KEY` | **Development only.** ≥32 chars. Local stand-in for a KMS; refused when `NODE_ENV=production`. |
+| `CLAIMS_LEGACY_TAG_ROUTES` | `false` turns the deprecated tag-id routes into `410`. |
+
+---
+
+## Legacy tag-id flow (deprecated)
+
+The sections below describe the original flow, keyed by the raw chip UID in the
+path. It is kept for existing clients only.
 
 ---
 
