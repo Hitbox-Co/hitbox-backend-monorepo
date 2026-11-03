@@ -40,6 +40,10 @@ export const ARTIST_COLLECTION_ERROR_CODES = {
     DROPS_CHANGED: 'ARTIST_COLLECTION_DROPS_CHANGED',
     /** No drop catalog is wired on this deployment. */
     DROPS_UNAVAILABLE: 'ARTIST_COLLECTION_DROPS_UNAVAILABLE',
+    /** The collection has no reward yet. Same code the content module answers with. */
+    REWARD_NOT_FOUND: 'CONTENT_REWARD_NOT_FOUND',
+    /** No content module is wired on this deployment. */
+    REWARDS_UNAVAILABLE: 'ARTIST_COLLECTION_REWARDS_UNAVAILABLE',
 } as const;
 
 /** Drops one add request may carry. */
@@ -70,6 +74,12 @@ export const ARTIST_AUDIT_EVENTS = {
     COLLECTION_REORDER: 'artist.collection.reorder',
     COLLECTION_DROPS_ADD: 'artist.collection.drops.add',
     COLLECTION_DROPS_REMOVE: 'artist.collection.drops.remove',
+    /** The collection reward — docs/content/collection-rewards.md. */
+    REWARD_SAVE: 'artist.collection.reward.save',
+    REWARD_REMOVE: 'artist.collection.reward.remove',
+    REWARD_ITEM_ADD: 'artist.collection.reward.item.add',
+    REWARD_ITEM_UPDATE: 'artist.collection.reward.item.update',
+    REWARD_ITEM_REMOVE: 'artist.collection.reward.item.remove',
 } as const;
 
 export const COLLECTION_NAME_MAX = 120;
@@ -88,6 +98,9 @@ export const ARTIST_COLLECTION_EVENTS = {
     REORDERED: 'artist.collection.reordered',
     DROPS_ADDED: 'artist.collection.drops-added',
     DROP_REMOVED: 'artist.collection.drop-removed',
+    /** The reward was created, edited, restored, or its files changed. */
+    REWARD_SAVED: 'artist.collection.reward-saved',
+    REWARD_REMOVED: 'artist.collection.reward-removed',
 } as const;
 
 export const COLLECTION_DEFAULT_LIMIT = 20;

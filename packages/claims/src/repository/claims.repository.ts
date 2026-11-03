@@ -238,7 +238,7 @@ export class ClaimsRepository {
         reason: string;
         resaleBlockedUntil: Date | null;
         now: Date;
-    }): Promise<{ claimId: string | null; ledgerEntryId: string } | null> {
+    }): Promise<{ claimId: string | null; userId: string | null; ledgerEntryId: string } | null> {
         const { sku, reason, resaleBlockedUntil, now } = params;
 
         return this.prisma.$transaction(async (tx) => {
@@ -338,7 +338,7 @@ export class ClaimsRepository {
                 },
             });
 
-            return { claimId: claim?.id ?? null, ledgerEntryId: ledger.id };
+            return { claimId: claim?.id ?? null, userId: claim?.userId ?? null, ledgerEntryId: ledger.id };
         }, { maxWait: 10_000, timeout: 20_000 });
     }
 

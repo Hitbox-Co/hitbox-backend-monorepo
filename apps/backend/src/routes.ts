@@ -40,6 +40,10 @@ export interface ApiRouters {
     adminProducts: Router;
     /** Artist self-service — docs/artist/artist-profile-api.md. */
     artistSelf: Router;
+    /** A buyer's collection rewards — docs/content/collection-rewards.md. */
+    rewards: Router;
+    /** HitBox monitoring and moderation of every collection reward — docs/content/admin-rewards-api.md. */
+    adminRewards: Router;
     /** Drop types & variant rules — docs/admin/drop-types-and-variants.md. */
     adminDropTypes: Router;
     /** Serialized units of one drop: mint, list, summary. */
@@ -149,11 +153,13 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/admin/products/:productId/skus', routers.adminProductSkus);
     api.use('/admin/products', routers.adminProducts);
     api.use('/artist', routers.artistSelf);
+    api.use('/rewards', routers.rewards);
     api.use('/admin/drop-types', routers.adminDropTypes);
     api.use('/admin/skus', routers.adminSkus);
     api.use('/admin/organizations', routers.adminOrganizations);
     api.use('/admin/artists', routers.adminArtists);
     api.use('/admin/artist-collections', routers.adminArtistCollections);
+    api.use('/admin/rewards', routers.adminRewards);
     api.use('/admin/audit', routers.adminAudit);
     api.use('/admin/supply', routers.adminSupply);
     api.use('/vendor', routers.vendor);

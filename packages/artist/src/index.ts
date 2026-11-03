@@ -63,6 +63,21 @@ export type {
     MyCollectionView,
 } from './collection/dto/artist-collection.dto';
 
+// Collection rewards — the port the content module implements.
+export type {
+    CollectionRewardItem,
+    CollectionRewardUploadTicket,
+    CollectionRewardView,
+    ICollectionRewards,
+} from './collection/domain/collection-rewards.port';
+export {
+    addRewardItemSchema,
+    reorderRewardItemsSchema,
+    rewardUploadSchema,
+    saveRewardSchema,
+    updateRewardItemSchema,
+} from './collection/dto/collection-reward.dto';
+
 // Drops in collections — the port products implements.
 export type { IDropCollectionMembership, MembershipDrop } from './collection/domain/drop-membership.port';
 

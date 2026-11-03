@@ -17,6 +17,7 @@ import { createDiscoverModule } from '@hitbox/discover';
 import { createMarketplaceModule } from '@hitbox/marketplace';
 import { createCollectionsModule } from '@hitbox/collections';
 import { createArtistModule } from '@hitbox/artist';
+import { createContentModule } from '@hitbox/content';
 import { createClaimsModule } from '@hitbox/claims';
 import { createMarketsModule } from '@hitbox/markets';
 import { createOrganizationsModule } from '@hitbox/organizations';
@@ -464,6 +465,24 @@ export function bootstrap(): Bootstrapped {
         catalog: productsModule.listings,
     });
 
+    /**
+     * Collection rewards: exclusive content (video, music, GIFs, images) an
+     * artist attaches to a collection, unlocked by a buyer who collects every
+     * released drop of it. Built before artist, which manages rewards through
+     * it; subscribes to claims to grant and revoke. Media holds the files.
+     * docs/content/collection-rewards.md.
+     */
+    const contentModule = createContentModule({
+        prisma,
+        eventBus,
+        guard: accessControlModule.guard,
+        resolveUserId: (req: Request) => req.auth?.accountId,
+        media: mediaModule?.exclusiveContent,
+        // Deferred: the audit module is built further down. Staff moderation
+        // of rewards is recorded through it; only called at request time.
+        audit: { record: (input, options) => auditModule.recorder.record(input, options) },
+    });
+
     // Artist provides ArtistCollection capacity; collections consumes it for
     // the buyer collection-progress stat.
     const artistModule = createArtistModule({
@@ -478,6 +497,9 @@ export function bootstrap(): Bootstrapped {
         // Products owns Drop; artists file their own active drops into their
         // collections through its adapter. docs/artist-collection/.
         drops: productsModule.collectionMembership,
+        // The content module owns collection rewards; the artist panel
+        // manages its own collections' rewards through it.
+        rewards: contentModule.collectionRewards,
         // Deferred: the audit module is built further down. Only called at
         // request time, long after bootstrap has finished.
         audit: { record: (input, options) => auditModule.recorder.record(input, options) },
@@ -816,6 +838,8 @@ export function bootstrap(): Bootstrapped {
         adminReleases: releasesModule.createRouter(authModule.requireAuth),
         adminProducts: productsModule.createAdminRouter(authModule.requireAuth),
         artistSelf: artistModule.createSelfRouter(authModule.requireAuth),
+        rewards: contentModule.createBuyerRouter(authModule.requireAuth),
+        adminRewards: contentModule.createAdminRouter(authModule.requireAuth),
         adminDropTypes: productsModule.createDropTypesRouter(authModule.requireAuth),
         adminProductSkus: skusModule.createProductRouter(authModule.requireAuth),
         adminSkus: skusModule.createRouter(authModule.requireAuth),

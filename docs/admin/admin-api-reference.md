@@ -609,7 +609,7 @@ call. It is `null` for every other asset type; those need
 |---|---|---|---|
 | `DROP_IMAGE` | `product` | jpeg, png, webp, gif | 15 MB |
 | `PROFILE_IMAGE` | `user`, `artist` | jpeg, png, webp, gif | 15 MB |
-| `EXCLUSIVE_CONTENT` | `product`, `collection` | images, mp4, mpeg, pdf | 500 MB |
+| `EXCLUSIVE_CONTENT` | `product`, `collection` | images (jpeg, png, webp, gif), video (mp4, webm, quicktime), audio (mpeg, mp4/m4a, aac, wav, ogg, flac), pdf | 500 MB. Never public; signed links last 1 hour. Collection rewards: [collection-rewards.md](../content/collection-rewards.md) |
 | `LEGAL_DOCUMENT` | `organization` | pdf | 25 MB |
 | `SUPPLY_SPREADSHEET` | `vendor` | csv, xls, xlsx | 25 MB |
 | `RETURN_EVIDENCE` | `order` | jpeg, png, webp, heic, heif | 15 MB — **not on this route** (422). Buyers upload return photos via `POST /refunds/evidence/upload-url`; see [order-payments-and-refunds-api.md §6.0](../orders/order-payments-and-refunds-api.md#60-placing-a-return--photos-and-description) |

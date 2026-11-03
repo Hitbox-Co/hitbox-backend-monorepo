@@ -915,6 +915,16 @@ model ContentBundle {
   createdAt    DateTime
   updatedAt    DateTime
 
+  // ── Moderation (HitBox staff) ─────────────────────────────────────────────
+  /// Set when HitBox switched the reward off or removed it. While set, the
+  /// artist cannot switch it back on or restore it — only staff can lift it.
+  /// docs/content/admin-rewards-api.md.
+  moderationLockedAt DateTime?
+  /// Why — shown to the artist.
+  moderationReason   String?   @db.VarChar(500)
+  /// The staff member's user id. Not a foreign key: the record outlives the account.
+  moderatedById      String?   @db.Uuid
+
   // ── Own-module back-relations ─────────────────────────────────────────────
   contentBundleItems ContentBundleItem[]
   contentUnlocks     ContentUnlock[]
@@ -935,6 +945,9 @@ model ContentBundleItem {
   assetId  String        @db.Uuid
   asset    MediaAsset    @relation(fields: [assetId], references: [id])
   position Int
+  /// Display title shown to the buyer ("Behind the scenes"). Optional — the
+  /// file name is the fallback.
+  title    String?       @db.VarChar(200)
 
   @@unique([bundleId, assetId])
 }
@@ -966,12 +979,15 @@ model ContentUnlock {
 }
 
 /// How a bundle is earned: simply by owning the item (OWNER_ONLY), by hitting
-/// an evolution threshold (EVOLUTION_GRANT), or by a campaign/reward
-/// (REWARD_GRANT).
+/// an evolution threshold (EVOLUTION_GRANT), by a campaign/reward
+/// (REWARD_GRANT), or by collecting every released drop of an artist
+/// collection (COLLECTION_COMPLETE — the artist's collection reward, one per
+/// collection; see docs/content/collection-rewards.md).
 enum ContentAccessType {
   OWNER_ONLY
   EVOLUTION_GRANT
   REWARD_GRANT
+  COLLECTION_COMPLETE
 }
 
 // ───── source: packages\evolution\prisma\evolution.prisma ──────────────────────────

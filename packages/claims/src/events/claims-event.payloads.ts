@@ -29,6 +29,14 @@ export interface ProductClaimedPayload {
 export interface ClaimRevokedPayload {
     skuId: string;
     claimId: string | null;
+    /**
+     * Who owned it until now — the user whose claim was revoked. Null when no
+     * claim row was found. Subscribers that track what a buyer holds (the
+     * collection-reward unlocks) re-check that user.
+     */
+    userId: string | null;
+    /** The drop the unit belongs to. */
+    productId: string | null;
     reason: string;
     actorId: string | null;
     resaleBlockedUntil: string | null;

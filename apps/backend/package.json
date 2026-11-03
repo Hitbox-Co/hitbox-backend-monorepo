@@ -21,6 +21,7 @@
     "@hitbox/auth": "workspace:*",
     "@hitbox/claims": "workspace:*",
     "@hitbox/collections": "workspace:*",
+    "@hitbox/content": "workspace:*",
     "@hitbox/dashboard": "workspace:*",
     "@hitbox/database": "workspace:*",
     "@hitbox/discover": "workspace:*",

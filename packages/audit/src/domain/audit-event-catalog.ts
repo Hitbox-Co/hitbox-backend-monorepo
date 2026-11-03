@@ -229,6 +229,75 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         defaultSeverity: INFO,
         sourceStories: ['docs/artist-collection/README.md'],
     },
+    // ── Collection rewards (exclusive content unlocked by collecting a set) ──
+    {
+        eventType: 'artist.collection.reward.save',
+        personaGroup: ARTIST,
+        description:
+            'An artist created, edited, paused, switched on or restored the reward on one of their collections. ' +
+            'metadata.newlyUnlocked counts buyers who already held the set and got it with this save.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/collection-rewards.md'],
+    },
+    {
+        eventType: 'artist.collection.reward.remove',
+        personaGroup: ARTIST,
+        description: 'An artist removed the reward from a collection — buyers who unlocked it can no longer open it.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/content/collection-rewards.md'],
+    },
+    {
+        eventType: 'artist.collection.reward.item.add',
+        personaGroup: ARTIST,
+        description: 'An artist added a file (video, music, GIF or image) to a collection reward.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/collection-rewards.md'],
+    },
+    {
+        eventType: 'artist.collection.reward.item.update',
+        personaGroup: ARTIST,
+        description: 'An artist renamed or reordered the files of a collection reward (metadata.action).',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/collection-rewards.md'],
+    },
+    {
+        eventType: 'artist.collection.reward.item.remove',
+        personaGroup: ARTIST,
+        description: 'An artist took a file out of a collection reward.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/collection-rewards.md'],
+    },
+    // HitBox moderating a reward. A switch-off or removal locks it: the artist
+    // can't bring it back, so each one is WARNING and carries the reason the
+    // artist is shown.
+    {
+        eventType: 'content.reward.switch-off',
+        personaGroup: HITBOX_ADMIN,
+        description: 'HitBox staff switched a collection reward off and locked it (metadata.reason).',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/content/admin-rewards-api.md'],
+    },
+    {
+        eventType: 'content.reward.switch-on',
+        personaGroup: HITBOX_ADMIN,
+        description: 'HitBox staff lifted a switch-off: the reward is on again (metadata.newlyUnlocked).',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/admin-rewards-api.md'],
+    },
+    {
+        eventType: 'content.reward.remove',
+        personaGroup: HITBOX_ADMIN,
+        description: 'HitBox staff removed a collection reward and locked it (metadata.reason).',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/content/admin-rewards-api.md'],
+    },
+    {
+        eventType: 'content.reward.restore',
+        personaGroup: HITBOX_ADMIN,
+        description: 'HitBox staff restored a reward they had removed, lifting the lock.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/admin-rewards-api.md'],
+    },
 
     // ── Artist records, administered by HitBox staff ────────────────────────
     // Changing who appears on the storefront, and whether they can sell, is a

@@ -22,6 +22,7 @@ export type {
     ArtistImageUpload,
     IArtistProfileImages,
     IAssetLookup,
+    IExclusiveContentMedia,
     IReturnEvidenceMedia,
     MediaModule,
     MediaModuleDeps,
@@ -33,6 +34,11 @@ export type {
     ReturnEvidenceFile,
     ReturnEvidenceUpload,
 } from './service/return-evidence.service';
+export type {
+    ExclusiveContentAsset,
+    ExclusiveContentLink,
+    ExclusiveContentUpload,
+} from './service/exclusive-content.service';
 
 export {
     ALLOWED_MIME_TYPES,

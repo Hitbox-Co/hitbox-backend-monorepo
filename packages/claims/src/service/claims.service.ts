@@ -319,6 +319,8 @@ export class ClaimsService {
         await this.deps.eventBus.publish(CLAIMS_EVENTS.CLAIM_REVOKED, {
             skuId: input.skuId,
             claimId: result.claimId,
+            userId: result.userId,
+            productId: sku.drop.id,
             reason: input.reason,
             actorId: input.actorId,
             resaleBlockedUntil: input.resaleBlockedUntil?.toISOString() ?? null,

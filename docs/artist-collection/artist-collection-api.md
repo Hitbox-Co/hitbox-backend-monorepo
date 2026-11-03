@@ -26,6 +26,7 @@ it is always the signed-in artist.
 | 10 | `GET /artist/collections/:collectionId/available-drops` | The **Add drops** picker: my active drops not already in this collection |
 | 11 | `POST /artist/collections/:collectionId/drops` | Add drops (or move them from another of my collections) |
 | 12 | `DELETE /artist/collections/:collectionId/drops/:dropId` | Take a drop out of this collection |
+| 13 | `/artist/collections/:collectionId/reward…` | The collection's **reward**: exclusive content a buyer unlocks by collecting every drop. Eight routes, documented in [content/collection-rewards.md](../content/collection-rewards.md) §3. |
 
 ---
 

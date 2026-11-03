@@ -124,7 +124,7 @@ paper.
 
 | Event | Publisher | Subscriber |
 | --- | --- | --- |
-| `claims.claim.revoked` | claims | — (collections / search / notifications are the obvious future ones) |
+| `claims.claim.revoked` | claims | content (collection rewards); collections / search / notifications are the obvious future ones |
 | `finance.royalty.accrued` | finance | — |
 | `finance.royalty.reversed` | finance | — |
 | `finance.payout.scheduled` | finance | — |
