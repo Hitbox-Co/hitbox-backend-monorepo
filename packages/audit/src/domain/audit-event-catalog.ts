@@ -267,6 +267,45 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         defaultSeverity: INFO,
         sourceStories: ['docs/content/collection-rewards.md'],
     },
+    // ── Drop content (regular for every owner, exclusive for specific units) ─
+    {
+        eventType: 'artist.drop.content.save',
+        personaGroup: ARTIST,
+        description:
+            'An artist created, edited, switched on/off or restored content on one of their drops ' +
+            '(metadata.action, metadata.tier). For an exclusive tier, metadata.serialsAdded / serialsRemoved ' +
+            'list the units that gained or lost access.',
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/drop-content.md'],
+    },
+    {
+        eventType: 'artist.drop.content.remove',
+        personaGroup: ARTIST,
+        description: 'An artist removed content from a drop — owners of its units can no longer open it.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/content/drop-content.md'],
+    },
+    {
+        eventType: 'artist.drop.content.item.add',
+        personaGroup: ARTIST,
+        description: "An artist added a file (video, music, GIF or image) to a drop's content.",
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/drop-content.md'],
+    },
+    {
+        eventType: 'artist.drop.content.item.update',
+        personaGroup: ARTIST,
+        description: "An artist renamed or reordered the files of a drop's content (metadata.action).",
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/drop-content.md'],
+    },
+    {
+        eventType: 'artist.drop.content.item.remove',
+        personaGroup: ARTIST,
+        description: "An artist took a file out of a drop's content.",
+        defaultSeverity: INFO,
+        sourceStories: ['docs/content/drop-content.md'],
+    },
     // HitBox moderating a reward. A switch-off or removal locks it: the artist
     // can't bring it back, so each one is WARNING and carries the reason the
     // artist is shown.

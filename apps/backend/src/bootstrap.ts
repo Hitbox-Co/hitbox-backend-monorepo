@@ -500,6 +500,9 @@ export function bootstrap(): Bootstrapped {
         // The content module owns collection rewards; the artist panel
         // manages its own collections' rewards through it.
         rewards: contentModule.collectionRewards,
+        // ...and drop content: regular content for every owner of a drop,
+        // exclusive tiers for specific units. docs/content/drop-content.md.
+        dropContent: contentModule.dropContent,
         // Deferred: the audit module is built further down. Only called at
         // request time, long after bootstrap has finished.
         audit: { record: (input, options) => auditModule.recorder.record(input, options) },

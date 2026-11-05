@@ -38,6 +38,9 @@ import type { IArtistAuditRecorder } from './domain/interfaces/audit-recorder.po
 import type { IDropCollectionMembership } from './collection/domain/drop-membership.port';
 import type { ICollectionRewards } from './collection/domain/collection-rewards.port';
 import { ArtistRewardService } from './collection/service/artist-reward.service';
+import type { IDropContent } from './drop/domain/drop-content.port';
+import { ArtistDropContentService } from './drop/service/artist-drop-content.service';
+import { ArtistDropContentController } from './drop/controller/artist-drop-content.controller';
 import { ArtistSelfRepository } from './self/repository/artist-self.repository';
 import {
     ARTIST_ADMIN_READ_CAPABILITY,
@@ -97,6 +100,14 @@ export interface ArtistModuleDeps {
      * routes answer ARTIST_COLLECTION_REWARDS_UNAVAILABLE.
      */
     rewards?: ICollectionRewards | undefined;
+    /**
+     * Drop content — a drop's regular content (every owner) and its exclusive
+     * tiers (owners of specific units, by serial number) — provided by
+     * @hitbox/content (`contentModule.dropContent`). Optional: without it the
+     * drop content routes answer ARTIST_DROP_CONTENT_UNAVAILABLE. Needs
+     * `drops` too, to prove the drop is the caller's.
+     */
+    dropContent?: IDropContent | undefined;
     /**
      * The audit hook. Every collection change is recorded through it
      * (`artist.collection.*`). Required to build the self-service and
@@ -194,6 +205,13 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
         artists: selfRepository,
         audit: deps.audit ?? { record: () => Promise.reject(new Error('artist module built without an audit recorder')) },
         rewards: deps.rewards,
+        eventBus: deps.eventBus,
+    });
+    const dropContentService = new ArtistDropContentService({
+        artists: selfRepository,
+        drops: deps.drops,
+        content: deps.dropContent,
+        audit: deps.audit ?? { record: () => Promise.reject(new Error('artist module built without an audit recorder')) },
         eventBus: deps.eventBus,
     });
     const selfService = new ArtistSelfService({
@@ -315,6 +333,25 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
             router.post('/collections/:collectionId/hero/upload-url', writeCollections, collectionsController.createHeroUpload);
             router.put('/collections/:collectionId/hero', writeCollections, collectionsController.setHero);
             router.delete('/collections/:collectionId/hero', writeCollections, collectionsController.removeHero);
+
+            // Drop content: regular content for every owner of the drop, and
+            // exclusive tiers only the owners of specific units (by serial
+            // number) open. The artist's own drops only, checked in the
+            // service. docs/content/drop-content.md.
+            const dropContent = new ArtistDropContentController(dropContentService, resolveUserId);
+            const dropContentPath = '/drops/:dropId/content';
+            router.get(dropContentPath, readCollections, dropContent.overview);
+            router.post(dropContentPath, writeCollections, dropContent.create);
+            router.get(`${dropContentPath}/:bundleId`, readCollections, dropContent.get);
+            router.patch(`${dropContentPath}/:bundleId`, writeCollections, dropContent.update);
+            router.delete(`${dropContentPath}/:bundleId`, writeCollections, dropContent.remove);
+            router.post(`${dropContentPath}/:bundleId/restore`, writeCollections, dropContent.restore);
+            router.post(`${dropContentPath}/:bundleId/items/upload-url`, writeCollections, dropContent.createItemUpload);
+            router.post(`${dropContentPath}/:bundleId/items`, writeCollections, dropContent.addItem);
+            // Before '/items/:itemId' so "order" is never read as an id.
+            router.put(`${dropContentPath}/:bundleId/items/order`, writeCollections, dropContent.reorderItems);
+            router.patch(`${dropContentPath}/:bundleId/items/:itemId`, writeCollections, dropContent.updateItem);
+            router.delete(`${dropContentPath}/:bundleId/items/:itemId`, writeCollections, dropContent.removeItem);
             return router;
         },
 

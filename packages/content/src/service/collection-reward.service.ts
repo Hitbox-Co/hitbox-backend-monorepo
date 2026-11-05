@@ -1,15 +1,11 @@
 import { Prisma } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
-import {
-    CONTENT_ERROR_CODES,
-    MAX_BYTES_BY_KIND,
-    MAX_REWARD_ITEMS,
-} from '../constants/content.constant';
-import { ALL_REWARD_MIME_TYPES, rewardKindOf } from '../domain/reward-kind';
+import { CONTENT_ERROR_CODES } from '../constants/content.constant';
 import type { IRewardMedia, RewardUploadTicket } from '../domain/reward-media.port';
 import type { ArtistRewardView } from '../dto/reward.views';
 import type { ContentRepository, RewardRow } from '../repository/content.repository';
 import { isOpen, itemCounts, itemViews, moderationOf } from './reward-mapping';
+import { assertRoom, assertSameItems, assertUploadable, assertUsableAsset, duplicateFile, requireMedia } from './reward-files';
 import type { RewardUnlockService } from './reward-unlock.service';
 
 interface CollectionRewardServiceDeps {
@@ -143,26 +139,10 @@ export class CollectionRewardService {
         mimeType: string;
         sizeBytes: number;
     }): Promise<RewardUploadTicket & { kind: string }> {
-        const media = this.requireMedia();
+        const media = requireMedia(this.deps.media);
         const row = await this.requireLiveReward(input.collectionId);
-        this.assertRoom(row);
-
-        const kind = rewardKindOf(input.mimeType);
-        if (!kind) {
-            throw AppError.badRequest(
-                'A reward file must be a video, a music track, a GIF or an image.',
-                CONTENT_ERROR_CODES.FILE_TYPE,
-                { allowed: ALL_REWARD_MIME_TYPES },
-            );
-        }
-        const maxBytes = MAX_BYTES_BY_KIND[kind];
-        if (input.sizeBytes > maxBytes) {
-            throw AppError.badRequest(
-                `A ${kind.toLowerCase()} file can be at most ${Math.round(maxBytes / (1024 * 1024))} MB.`,
-                CONTENT_ERROR_CODES.FILE_TYPE,
-                { kind, maxBytes },
-            );
-        }
+        assertRoom(row.contentBundleItems.length);
+        const kind = assertUploadable(input.mimeType, input.sizeBytes);
         const ticket = await media.createUpload({
             collectionId: input.collectionId,
             uploadedById: input.uploadedById,
@@ -175,25 +155,18 @@ export class CollectionRewardService {
 
     /** Step 2: put the uploaded file into the reward, at the end. */
     async addItem(input: { collectionId: string; assetId: string; title?: string | null | undefined }): Promise<ArtistRewardView> {
-        const media = this.requireMedia();
+        const media = requireMedia(this.deps.media);
         const row = await this.requireLiveReward(input.collectionId);
-        this.assertRoom(row);
-        if (row.contentBundleItems.some((item) => item.assetId === input.assetId)) {
-            throw AppError.conflict('That file is already in this reward.', CONTENT_ERROR_CODES.FILE_DUPLICATE);
-        }
+        assertRoom(row.contentBundleItems.length);
+        if (row.contentBundleItems.some((item) => item.assetId === input.assetId)) throw duplicateFile();
 
         const [asset] = await media.inspect([input.assetId]);
-        const refuse = (why: string): never => {
-            throw AppError.badRequest(`That file can't be added: ${why}`, CONTENT_ERROR_CODES.FILE_INVALID, {
-                assetId: input.assetId,
-            });
-        };
-        if (!asset) refuse('it does not exist.');
-        if (asset!.collectionId !== input.collectionId) refuse('it was not uploaded to this collection.');
-        if (asset!.archived) refuse('it has been deleted.');
-        if (asset!.infected) refuse('it failed the virus scan.');
-        if (!asset!.uploaded) refuse('the upload has not finished — PUT the file to the upload URL first.');
-        if (!rewardKindOf(asset!.mimeType)) refuse('it is not a video, music track, GIF or image.');
+        assertUsableAsset(
+            asset,
+            input.assetId,
+            (a) => a.collectionId === input.collectionId,
+            'it was not uploaded to this collection.',
+        );
 
         try {
             await this.deps.content.addItem({
@@ -203,9 +176,7 @@ export class CollectionRewardService {
                 now: this.now(),
             });
         } catch (error) {
-            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-                throw AppError.conflict('That file is already in this reward.', CONTENT_ERROR_CODES.FILE_DUPLICATE);
-            }
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw duplicateFile();
             throw error;
         }
         return this.view(await this.requireReward(input.collectionId));
@@ -221,18 +192,7 @@ export class CollectionRewardService {
     /** The full new order: every item of the reward, each once. */
     async reorderItems(input: { collectionId: string; itemIds: string[] }): Promise<ArtistRewardView> {
         const row = await this.requireLiveReward(input.collectionId);
-        const current = row.contentBundleItems.map((item) => item.id);
-        const sameSet =
-            input.itemIds.length === current.length &&
-            new Set(input.itemIds).size === input.itemIds.length &&
-            input.itemIds.every((id) => current.includes(id));
-        if (!sameSet) {
-            throw AppError.badRequest(
-                'Send every item of the reward exactly once, in the new order.',
-                CONTENT_ERROR_CODES.ORDER_MISMATCH,
-                { itemIds: current },
-            );
-        }
+        assertSameItems(row.contentBundleItems.map((item) => item.id), input.itemIds);
         await this.deps.content.reorderItems(row.id, input.itemIds, this.now());
         return this.view(await this.requireReward(input.collectionId));
     }
@@ -300,26 +260,5 @@ export class CollectionRewardService {
         if (!row.contentBundleItems.some((item) => item.id === itemId)) {
             throw AppError.notFound('No such file in this reward.', CONTENT_ERROR_CODES.ITEM_NOT_FOUND);
         }
-    }
-
-    private assertRoom(row: RewardRow): void {
-        if (row.contentBundleItems.length >= MAX_REWARD_ITEMS) {
-            throw AppError.conflict(
-                `A reward can hold at most ${MAX_REWARD_ITEMS} files. Remove one first.`,
-                CONTENT_ERROR_CODES.TOO_MANY_ITEMS,
-                { max: MAX_REWARD_ITEMS },
-            );
-        }
-    }
-
-    private requireMedia(): IRewardMedia {
-        if (!this.deps.media) {
-            // 400, not 503: a 5xx AppError is rendered as an opaque 500.
-            throw AppError.badRequest(
-                'File uploads are not configured on this server.',
-                CONTENT_ERROR_CODES.MEDIA_UNAVAILABLE,
-            );
-        }
-        return this.deps.media;
     }
 }

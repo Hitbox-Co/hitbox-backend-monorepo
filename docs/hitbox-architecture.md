@@ -340,6 +340,8 @@ Current event catalog:
 | `claims.product.claimed` | claims | **finance** (accrue a royalty), **orders** (link `Order.claimId`), collections, **content** (unlock a collection reward) | `ProductClaimedPayload` |
 | `claims.claim.revoked` | claims | **content** (end a reward whose set was broken) | `ClaimRevokedPayload` (now with `userId`, `productId`) |
 | `content.reward.moderated` | content | — (notifications: tell the artist) | `{ rewardId, collectionId, artistId, action, reason, actorId }`, see [content/admin-rewards-api.md](content/admin-rewards-api.md) |
+| `content.drop-content.opened` | content | — | `{ bundleId, dropId, tier, userId, skuId, serialNumber }`: first open of a drop content tier with a unit, see [content/drop-content.md](content/drop-content.md) |
+| `artist.drop.content-changed` | artist | — | `{ dropId, artistId, bundleId, tier, status, itemCount }`, see [content/drop-content.md](content/drop-content.md) |
 | `content.reward.unlocked` / `.access-lost` | content | — (notifications is the obvious next one) | `{ rewardId, collectionId, userId }` — [content/collection-rewards.md](content/collection-rewards.md) |
 | `finance.royalty.accrued` / `.reversed` | finance | — | see `@hitbox/finance` |
 | `finance.payout.scheduled` / `.paid` | finance | — (artist notification is the obvious next one) | see `@hitbox/finance` |

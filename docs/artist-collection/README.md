@@ -9,6 +9,7 @@
 | Document | For |
 |---|---|
 | [artist-collection-api.md](artist-collection-api.md) | **Artist dashboard** — every route under `/api/v1/artist/collections`, request/response shapes, errors, the screens and a frontend checklist |
+| [../content/drop-content.md](../content/drop-content.md) | **Drop content**: regular content for every owner of a drop, plus exclusive content only the owners of specific units (by serial number) open. Artist routes under `/api/v1/artist/drops/:dropId/content`; buyer routes `/api/v1/rewards/drops/:dropId` and `/api/v1/rewards/units/:skuId`. |
 | [../content/collection-rewards.md](../content/collection-rewards.md) | **Collection rewards**: exclusive content (video, music, GIFs, images) on a collection, unlocked by a buyer who collects every drop. The artist panel routes under `/api/v1/artist/collections/:id/reward` and the buyer's `/api/v1/rewards`. |
 | [../content/admin-rewards-api.md](../content/admin-rewards-api.md) | **Admin console**: monitoring every collection reward and switching off or removing one (`/api/v1/admin/rewards`) |
 | [admin-monitoring-api.md](admin-monitoring-api.md) | **Admin console** — `/api/v1/admin/artist-collections`: the monitoring list, filters, summary tiles, detail and the audit trail |

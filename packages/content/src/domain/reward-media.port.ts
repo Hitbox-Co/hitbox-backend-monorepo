@@ -17,6 +17,8 @@ export interface RewardUploadTicket {
 export interface RewardMediaAsset {
     id: string;
     collectionId: string | null;
+    /** Set for a drop-content file (uploaded for that drop). */
+    dropId: string | null;
     fileName: string;
     mimeType: string;
     sizeBytes: number | null;
@@ -34,8 +36,10 @@ export interface RewardMediaLink {
 }
 
 export interface IRewardMedia {
+    /** Exactly one of `collectionId` (collection reward) or `dropId` (drop content). */
     createUpload(input: {
-        collectionId: string;
+        collectionId?: string | undefined;
+        dropId?: string | undefined;
         uploadedById: string;
         fileName: string;
         mimeType: string;

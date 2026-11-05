@@ -94,3 +94,50 @@ export const MAX_BYTES_BY_KIND = {
     GIF: 50 * 1024 * 1024,
     IMAGE: 25 * 1024 * 1024,
 } as const;
+
+// ── Drop content — docs/content/drop-content.md ─────────────────────────────
+
+/**
+ * A drop's content comes in two tiers:
+ *   - REGULAR: one per drop, for the owner of any unit of it;
+ *   - EXCLUSIVE: only for the owners of the specific units it names, by
+ *     serial number ("#001 of 100"). A drop can have several.
+ * Exclusive content comes on top of the regular content, not instead of it.
+ */
+export type DropContentTier = 'REGULAR' | 'EXCLUSIVE';
+
+export const DROP_CONTENT_ACCESS = {
+    REGULAR: 'OWNER_ONLY',
+    EXCLUSIVE: 'SKU_EXCLUSIVE',
+} as const;
+
+/** Exclusive tiers one drop may have (removed ones included). Raise freely. */
+export const MAX_EXCLUSIVE_TIERS_PER_DROP = 10;
+/** Units one exclusive tier may name. */
+export const MAX_SERIALS_PER_TIER = 1000;
+
+export const DROP_CONTENT_ERROR_CODES = {
+    /** No such content on this drop. */
+    NOT_FOUND: 'DROP_CONTENT_NOT_FOUND',
+    /** The drop already has its regular content — edit that one. */
+    REGULAR_EXISTS: 'DROP_CONTENT_REGULAR_EXISTS',
+    /** The drop already has the maximum number of exclusive tiers. */
+    TOO_MANY_TIERS: 'DROP_CONTENT_TOO_MANY_TIERS',
+    /** A serial number is outside 1…totalSupply, or serials were sent for regular content / left out for exclusive. */
+    SERIALS_INVALID: 'DROP_CONTENT_SERIALS_INVALID',
+    /** Removed content is read-only: restore it first. */
+    ARCHIVED: 'DROP_CONTENT_ARCHIVED',
+    /** Restore was asked for content that isn't removed. */
+    NOT_ARCHIVED: 'DROP_CONTENT_NOT_ARCHIVED',
+    /** The buyer does not own a unit that opens it. */
+    LOCKED: 'DROP_CONTENT_LOCKED',
+    /** The unit isn't the caller's, isn't claimed, or doesn't exist. */
+    UNIT_NOT_FOUND: 'DROP_CONTENT_UNIT_NOT_FOUND',
+    /** The drop doesn't exist or isn't released. */
+    DROP_NOT_FOUND: 'DROP_CONTENT_DROP_NOT_FOUND',
+} as const;
+
+export const DROP_CONTENT_EVENTS = {
+    /** A buyer opened a drop's content with one of their units for the first time. */
+    OPENED: 'content.drop-content.opened',
+} as const;

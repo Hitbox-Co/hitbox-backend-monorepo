@@ -16,7 +16,11 @@ import { BuyerRewardController } from './controller/buyer-reward.controller';
 import type { ContentUserIdResolver } from './controller/buyer-reward.controller';
 import type { IRewardMedia } from './domain/reward-media.port';
 import { ContentRepository } from './repository/content.repository';
+import { DropContentRepository } from './repository/drop-content.repository';
+import { BuyerDropContentController } from './controller/buyer-drop-content.controller';
 import { CollectionRewardService } from './service/collection-reward.service';
+import { DropContentService } from './service/drop-content.service';
+import { DropContentAccessService } from './service/drop-content-access.service';
 import { RewardUnlockService } from './service/reward-unlock.service';
 
 /** Structural guard — the shape of `requirePermission`, not an import. */
@@ -59,6 +63,14 @@ export interface ContentModule {
      * rewards through it, after proving the caller owns the collection.
      */
     collectionRewards: CollectionRewardService;
+    /**
+     * Injected into createArtistModule — the artist module's `IDropContent`
+     * port: a drop's regular content and its SKU-exclusive tiers, managed by
+     * the drop's artist. docs/content/drop-content.md.
+     */
+    dropContent: DropContentService;
+    /** Who opens which drop content. Exposed for tests; the buyer router serves it. */
+    dropContentAccess: DropContentAccessService;
     /** The unlock rule. Exposed for tests and backfills; the running app drives it from claim events. */
     unlocks: RewardUnlockService;
     /**
@@ -82,6 +94,9 @@ export function createContentModule(deps: ContentModuleDeps): ContentModule {
     const content = new ContentRepository(deps.prisma);
     const unlocks = new RewardUnlockService({ content, media: deps.media, eventBus: deps.eventBus, logger });
     const collectionRewards = new CollectionRewardService({ content, unlocks, media: deps.media });
+    const drops = new DropContentRepository(deps.prisma);
+    const dropContent = new DropContentService({ content, drops, media: deps.media });
+    const dropContentAccess = new DropContentAccessService({ drops, media: deps.media, eventBus: deps.eventBus, logger });
     const adminRewards = new AdminRewardService({
         content,
         unlocks,
@@ -118,6 +133,8 @@ export function createContentModule(deps: ContentModuleDeps): ContentModule {
 
     return {
         collectionRewards,
+        dropContent,
+        dropContentAccess,
         unlocks,
 
         createBuyerRouter(requireAuth) {
@@ -136,8 +153,13 @@ export function createContentModule(deps: ContentModuleDeps): ContentModule {
             const router = Router();
             router.use(requireAuth);
             router.get('/', read, controller.list);
-            // Before '/:rewardId' so "collections" is never read as an id.
+            // Before '/:rewardId' so "collections", "drops" and "units" are never read as an id.
             router.get('/collections/:collectionId', read, controller.teaser);
+            // Drop content: a drop's regular content and its SKU-exclusive
+            // tiers, opened by owning the unit. docs/content/drop-content.md.
+            const dropController = new BuyerDropContentController(dropContentAccess, resolveUserId);
+            router.get('/drops/:dropId', read, dropController.forDrop);
+            router.get('/units/:skuId', read, dropController.forUnit);
             router.get('/:rewardId', read, controller.get);
             return router;
         },

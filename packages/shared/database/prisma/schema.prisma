@@ -888,7 +888,7 @@ model BuyerCollection {
 // CONTENT MODULE SCHEMA  (packages/content/prisma/content.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: ContentBundle, ContentBundleItem, ContentUnlock
+// Owns: ContentBundle, ContentBundleItem, ContentBundleSerial, ContentUnlock
 //
 // The reward layer: exclusive content attached to a drop or collection, and
 // the per-user grants that open it. Files themselves belong to the media
@@ -928,6 +928,8 @@ model ContentBundle {
   // ── Own-module back-relations ─────────────────────────────────────────────
   contentBundleItems ContentBundleItem[]
   contentUnlocks     ContentUnlock[]
+  /// SKU_EXCLUSIVE only: which units of the drop open it.
+  eligibleSerials    ContentBundleSerial[]
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   evolutionRules EvolutionRule[]
@@ -978,8 +980,25 @@ model ContentUnlock {
   @@unique([userId, bundleId, skuId])
 }
 
-/// How a bundle is earned: simply by owning the item (OWNER_ONLY), by hitting
-/// an evolution threshold (EVOLUTION_GRANT), by a campaign/reward
+/// One unit of a drop that opens a SKU_EXCLUSIVE bundle, named by its serial
+/// number ("#001 of 100") rather than by Sku id: the serial is the unit's
+/// printed identity and exists before the Sku row is minted. Whoever owns
+/// (has claimed) that unit now can open the bundle — access follows the item
+/// on resale and ends with a revoked claim. docs/content/drop-content.md.
+model ContentBundleSerial {
+  bundleId     String        @db.Uuid
+  bundle       ContentBundle @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  serialNumber Int
+  createdAt    DateTime      @default(now())
+
+  @@id([bundleId, serialNumber])
+}
+
+/// How a bundle is earned: simply by owning the item (OWNER_ONLY — on a drop,
+/// its regular content, for the owner of any unit), by owning one of the
+/// specific units listed in ContentBundleSerial (SKU_EXCLUSIVE — a drop's
+/// exclusive content; see docs/content/drop-content.md), by hitting an
+/// evolution threshold (EVOLUTION_GRANT), by a campaign/reward
 /// (REWARD_GRANT), or by collecting every released drop of an artist
 /// collection (COLLECTION_COMPLETE — the artist's collection reward, one per
 /// collection; see docs/content/collection-rewards.md).
@@ -988,6 +1007,7 @@ enum ContentAccessType {
   EVOLUTION_GRANT
   REWARD_GRANT
   COLLECTION_COMPLETE
+  SKU_EXCLUSIVE
 }
 
 // ───── source: packages\evolution\prisma\evolution.prisma ──────────────────────────
