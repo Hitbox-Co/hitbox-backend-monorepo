@@ -13,7 +13,6 @@ import {
     VENDOR_PORTAL_WRITE_CAPABILITY,
 } from './constants/supply.constant';
 import { SupplyController } from './controller/supply.controller';
-import { NfcKeySetController } from './controller/nfc-key-set.controller';
 import { NfcTagKeyController } from './controller/nfc-tag-key.controller';
 import { VendorAdminController, VendorPortalController } from './controller/vendor.controller';
 import type { VendorUserIdResolver } from './controller/vendor.controller';
@@ -31,10 +30,8 @@ import type { ISupplyAudit } from './domain/interfaces/supply-audit.interface';
 import type { IKeyWrapper } from './domain/interfaces/key-wrapper.interface';
 import type { ITagCipher } from './domain/interfaces/tag-cipher.interface';
 import type { ISupplyStockMinter } from './domain/interfaces/stock-minter.interface';
-import { NfcKeySetRepository } from './repository/nfc-key-set.repository';
 import { NfcTagKeyRepository } from './repository/nfc-tag-key.repository';
 import { SupplyRepository } from './repository/supply.repository';
-import { NfcKeySetService } from './service/nfc-key-set.service';
 import { NfcTagKeyService } from './service/nfc-tag-key.service';
 import { SupplyService } from './service/supply.service';
 
@@ -124,6 +121,8 @@ export function createSupplyModule(deps: SupplyModuleDeps): SupplyModule {
         audit: deps.audit ?? NOOP_SUPPLY_AUDIT,
         logger,
         tagCipher: deps.tagCipher,
+        keyWrapper: deps.keyWrapper,
+        kmsKeyRef: deps.kmsKeyRef,
     });
     const controller = new SupplyController(service, deps.resolvePrincipal);
 
@@ -142,16 +141,6 @@ export function createSupplyModule(deps: SupplyModuleDeps): SupplyModule {
         allotmentGate,
     });
     const vendorAdminController = new VendorAdminController(vendorAdmin, deps.resolvePrincipal);
-
-    const keySetService = new NfcKeySetService({
-        keys: new NfcKeySetRepository(deps.prisma),
-        eventBus: deps.eventBus,
-        audit: deps.audit ?? NOOP_SUPPLY_AUDIT,
-        logger,
-        keyWrapper: deps.keyWrapper,
-        kmsKeyRef: deps.kmsKeyRef,
-    });
-    const keySetController = new NfcKeySetController(keySetService, deps.resolvePrincipal);
 
     const tagKeyService = new NfcTagKeyService({
         keys: new NfcTagKeyRepository(deps.prisma),
@@ -302,31 +291,6 @@ export function createSupplyModule(deps: SupplyModuleDeps): SupplyModule {
                 '/tags/:tagId/qc',
                 deps.guard.requirePermission(SUPPLY_WRITE_CAPABILITY, { globalOnly: true }),
                 controller.recordQc,
-            );
-
-            // ── NFC key sets ────────────────────────────────────────────────
-            //
-            // Batch keys for the chips. Reads never return key material; the
-            // create response is the one place plaintext keys appear.
-            router.get(
-                '/key-sets',
-                deps.guard.requirePermission(SUPPLY_TAG_READ_CAPABILITY),
-                keySetController.list,
-            );
-            router.post(
-                '/key-sets',
-                deps.guard.requirePermission(SUPPLY_WRITE_CAPABILITY, { globalOnly: true }),
-                keySetController.create,
-            );
-            router.post(
-                '/key-sets/:keySetId/personalise',
-                deps.guard.requirePermission(SUPPLY_WRITE_CAPABILITY, { globalOnly: true }),
-                keySetController.personalise,
-            );
-            router.post(
-                '/key-sets/:keySetId/retire',
-                deps.guard.requirePermission(SUPPLY_WRITE_CAPABILITY, { globalOnly: true }),
-                keySetController.retire,
             );
 
             // ── Per-tag NFC keys ────────────────────────────────────────────

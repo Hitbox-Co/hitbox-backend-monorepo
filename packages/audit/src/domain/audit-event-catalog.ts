@@ -610,8 +610,8 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         eventType: 'supply.keyset.create',
         personaGroup: HITBOX_ADMIN,
         description:
-            'A batch of NFC keys (Key 00/01/02) was created. Carries the key set code and ' +
-            'the KMS key reference — NEVER a key, wrapped or plain.',
+            'Legacy, no longer emitted (batch keys were replaced by per-tag keys). A batch of NFC ' +
+            'keys was created. Carries the key set code and the KMS key reference — NEVER a key.',
         defaultSeverity: CRITICAL,
         sourceStories: ['docs/nfc-claim-verify-api.md'],
     },
@@ -619,8 +619,8 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         eventType: 'supply.keyset.retire',
         personaGroup: HITBOX_ADMIN,
         description:
-            'A batch key set was retired: every chip in it fails verification from now on. ' +
-            'Carries before/after status and the reason.',
+            'Legacy, no longer emitted (batch keys were replaced by per-tag keys). A batch key set ' +
+            'was retired. Carries before/after status and the reason.',
         defaultSeverity: CRITICAL,
         sourceStories: ['docs/nfc-claim-verify-api.md'],
     },
@@ -628,8 +628,8 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         eventType: 'supply.tags.personalise',
         personaGroup: HITBOX_ADMIN,
         description:
-            "A consignment's chips were given a key set. Carries the key set id and a count — " +
-            'NEVER tag UIDs.',
+            "Legacy, no longer emitted (batch keys were replaced by per-tag keys). A consignment's " +
+            'chips were given a key set. Carries the key set id and a count — NEVER tag UIDs.',
         defaultSeverity: CRITICAL,
         sourceStories: ['docs/nfc-claim-verify-api.md'],
     },

@@ -38,6 +38,7 @@ interface Options {
     keyStatus?: 'ACTIVE' | 'REVOKED' | 'NONE';
     keyRowUidHash?: string | null;
     failUnwrap?: boolean;
+    failLogWrites?: boolean;
 }
 
 function setup(options: Options = {}) {
@@ -122,6 +123,7 @@ function setup(options: Options = {}) {
         },
         nfcVerification: {
             create: async ({ data }: any) => {
+                if (options.failLogWrites) throw new Error('db down');
                 verifications.push(data);
                 return data;
             },
@@ -172,6 +174,11 @@ describe('a genuine per-tag tap', () => {
         await expect(t.service.verifyTap(t.input(0))).resolves.toMatchObject({ ok: true, counter: 0 });
     });
 
+    it('accepts an ACTIVE chip too (already claimed once)', async () => {
+        const t = setup({ lifecycle: 'ACTIVE' });
+        await expect(t.service.verifyTap(t.input(3))).resolves.toMatchObject({ ok: true });
+    });
+
     it('accepts u in lower case', async () => {
         const t = setup();
         await expect(t.service.verifyTap(t.input(2, { u: UID_A.toLowerCase() }))).resolves.toMatchObject({
@@ -198,7 +205,6 @@ describe('a genuine per-tag tap', () => {
             skuId: 'sku-a',
             nfcTagKeyId: 'key-a',
             counter: 4,
-            keySetId: null,
         });
         const logged = JSON.stringify(t.verifications);
         for (const secret of [UID_A, tap.e, tap.c, t.keysA.key1.toString('hex'), t.keysA.key2.toString('hex')]) {
@@ -301,6 +307,15 @@ describe('replay', () => {
         expect(reasonOf(await t.service.verifyTap(t.input(8)) as never)).toBe('REPLAY');
     });
 
+    it('five at once with the same counter: still exactly one winner', async () => {
+        const t = setup();
+        const tap = t.input(14);
+        const results = await Promise.all(
+            [1, 2, 3, 4, 5].map((n) => t.service.verifyTap({ ...tap, requestId: `r${n}` })),
+        );
+        expect(results.filter((r) => r.ok)).toHaveLength(1);
+    });
+
     it('two simultaneous taps with the same counter: exactly one passes', async () => {
         const t = setup();
         const tap = t.input(12);
@@ -319,6 +334,18 @@ describe('server faults and isolation', () => {
         await expect(t.service.verifyTap(t.input(1))).rejects.toMatchObject({ statusCode: 500 });
         expect(t.verifications).toHaveLength(0);
         expect(JSON.stringify(t.errors)).not.toContain(UID_A);
+    });
+
+    it('a failed log write does not fail a genuine tap', async () => {
+        const t = setup({ failLogWrites: true });
+        await expect(t.service.verifyTap(t.input(1))).resolves.toMatchObject({ ok: true });
+        expect(t.errors.length).toBeGreaterThan(0);
+    });
+
+    it('a chip with no item does not have its counter consumed', async () => {
+        const t = setup({ withItem: false });
+        await t.service.verifyTap(t.input(5));
+        expect(t.rows.find((r) => r.id === 'key-a')!.lastTapCounter).toBe(-1);
     });
 
     it('never writes to an NfcTag row (the fake throws if it does)', async () => {

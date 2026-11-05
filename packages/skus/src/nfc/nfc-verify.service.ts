@@ -12,26 +12,28 @@ import { decryptPicc, verifySdmMac } from './sun-crypto';
  * which step failed tells them which part of a forged URL to fix next.
  */
 export const NFC_TAP_REASON = {
-    UNKNOWN_BATCH: 'UNKNOWN_BATCH',
-    KEY_SET_RETIRED: 'KEY_SET_RETIRED',
-    BAD_PICC: 'BAD_PICC',
+    BAD_FORMAT: 'BAD_FORMAT',
     UNKNOWN_TAG: 'UNKNOWN_TAG',
-    BATCH_MISMATCH: 'BATCH_MISMATCH',
     TAG_NOT_ACTIVE: 'TAG_NOT_ACTIVE',
+    /** The chip has no ACTIVE NfcTagKey row (never keyed, or revoked). */
+    NO_KEYS: 'NO_KEYS',
+    BAD_PICC: 'BAD_PICC',
+    /** `e` decrypted to a different UID than the one written in `u`. */
+    UID_MISMATCH: 'UID_MISMATCH',
     BAD_CMAC: 'BAD_CMAC',
     /** The chip is genuine but is not embedded in any unit yet. */
     NO_ITEM: 'NO_ITEM',
     REPLAY: 'REPLAY',
-    // Per-tag keys (`u` in the URL).
-    BAD_FORMAT: 'BAD_FORMAT',
-    /** The chip has no ACTIVE NfcTagKey row (never keyed, or revoked). */
-    NO_KEYS: 'NO_KEYS',
-    /** `e` decrypted to a different UID than the one written in `u`. */
-    UID_MISMATCH: 'UID_MISMATCH',
 } as const;
 export type NfcTapReason = (typeof NFC_TAP_REASON)[keyof typeof NFC_TAP_REASON];
 
-interface NfcTapBase {
+export interface NfcTapInput {
+    /**
+     * The chip UID, 14 hex, written into the URL as plain text. A lookup hint
+     * only: anyone can edit it, so it is never trusted on its own — the UID
+     * inside `e` must match it.
+     */
+    u: string;
     /** 32 hex — encrypted PICC data. */
     e: string;
     /** 16 hex — the SDM MAC. */
@@ -39,41 +41,14 @@ interface NfcTapBase {
     requestId: string;
 }
 
-/**
- * A tap URL carries either `u` (per-tag keys) or `b` (batch keys), never both.
- */
-export type NfcTapInput = NfcTapBase &
-    (
-        | {
-            /**
-             * The chip UID, 14 hex, written into the URL as plain text. A lookup
-             * hint only: anyone can edit it, so it is never trusted on its own —
-             * the UID inside `e` must match it.
-             */
-            u: string;
-            b?: undefined;
-        }
-        | {
-            /**
-             * Which batch's keys to use: either the long `NfcKeySet.publicCode`
-             * (`nks…`) or the short operator-chosen `NfcKeySet.keySetCode` (e.g. `101`).
-             * A lookup label only — knowing it grants nothing, the keys do the work.
-             */
-            b: string;
-            u?: undefined;
-        }
-    );
-
 export type TapVerification =
     | {
         ok: true;
         nfcTagId: string;
         /** The unit the chip is embedded in (`Sku.currentNfcTagId`). */
         skuId: string;
-        /** Set for a batch-key (`b`) tap. */
-        keySetId?: string;
-        /** Set for a per-tag-key (`u`) tap. */
-        nfcTagKeyId?: string;
+        /** The key row the tap was checked against. */
+        nfcTagKeyId: string;
         counter: number;
     }
     | { ok: false; reason: NfcTapReason };
@@ -91,8 +66,6 @@ interface NfcVerifyDeps {
     logger: Logger;
 }
 
-/** `nks` + 19 Crockford base32 characters — see packages/shared/database/src/public-code.ts. */
-const PUBLIC_CODE = /^nks[0-9a-hjkmnp-tv-z]{19}$/;
 const UID_HEX = /^[0-9A-Fa-f]{14}$/;
 const E_HEX = /^[0-9A-Fa-f]{32}$/;
 const C_HEX = /^[0-9A-Fa-f]{16}$/;
@@ -100,44 +73,32 @@ const ACCEPTED_LIFECYCLE = new Set(['BOUND', 'ACTIVE']);
 const CODE_ATTEMPTS = 5;
 
 /**
- * Authenticates one tap of an NTAG 424 DNA chip.
+ * Authenticates one tap of an NTAG 424 DNA chip. Every chip has its own
+ * Key 01 / Key 02 (`NfcTagKey`).
  *
  * The checks run in a fixed order, cheapest and least revealing first, and
  * each failure is logged with its reason:
  *
- *   batch → key set active → unwrap keys → decrypt `e` → chip by UID hash →
- *   chip belongs to that batch → chip BOUND/ACTIVE → MAC `c` → chip is in a
- *   unit → counter strictly higher than the last (atomic).
+ *   format → chip by UID hash → BOUND/ACTIVE → ACTIVE key row → unwrap →
+ *   decrypt `e` → UID in `e` equals `u` → MAC `c` → chip is in a unit →
+ *   counter strictly higher (atomic, on the key row).
  *
- * The counter is consumed only after everything else has passed, so a forged
- * URL can never burn a real chip's counter. Plaintext keys live in local
- * Buffers for the length of one call and are zeroed afterwards.
+ * The counter lives on `NfcTagKey`, not `NfcTag`, so a new key row starts at
+ * -1 and no NfcTag value is touched. It is consumed only after everything else
+ * has passed, so a forged URL can never burn a real chip's counter. Plaintext
+ * keys live in local Buffers for the length of one call and are zeroed
+ * afterwards.
  */
 export class NfcVerifyService implements INfcTapVerifier {
     constructor(private readonly deps: NfcVerifyDeps) { }
 
     async verifyTap(input: NfcTapInput): Promise<TapVerification> {
-        if (input.u !== undefined) return this.verifyPerTag(input, input.u);
-        return this.verifyBatch(input, input.b);
-    }
-
-    /**
-     * Per-tag keys (`u`): every chip has its own Key 01 / Key 02.
-     *
-     *   format → chip by UID hash → BOUND/ACTIVE → ACTIVE key row → unwrap →
-     *   decrypt `e` → UID in `e` equals `u` → MAC `c` → chip is in a unit →
-     *   counter strictly higher (atomic, on the key row).
-     *
-     * The counter lives on `NfcTagKey`, not `NfcTag`, so a new key row starts at
-     * -1 and no existing NfcTag value is touched.
-     */
-    private async verifyPerTag(input: NfcTapInput, uRaw: string): Promise<TapVerification> {
         const { prisma } = this.deps;
 
-        if (!UID_HEX.test(uRaw) || !E_HEX.test(input.e) || !C_HEX.test(input.c)) {
+        if (!UID_HEX.test(input.u) || !E_HEX.test(input.e) || !C_HEX.test(input.c)) {
             return this.reject(input, NFC_TAP_REASON.BAD_FORMAT, {});
         }
-        const u = uRaw.toUpperCase();
+        const u = input.u.toUpperCase();
 
         const tag = await prisma.nfcTag.findUnique({
             where: { tagUidHash: this.deps.tagUidHash(u) },
@@ -179,6 +140,8 @@ export class NfcVerifyService implements INfcTapVerifier {
                     this.deps.keyWrapper.unwrap(Buffer.from(keyRow.key2Wrapped), keyRow.kmsKeyRef),
                 ]);
             } catch (error) {
+                // A server-side fault, not a tampered URL: not logged as a
+                // rejection, and nothing about the cause reaches the caller.
                 this.deps.logger.error(
                     { nfcTagKeyId: keyRow.id, err: error instanceof Error ? error.name : 'unknown' },
                     'could not unwrap NFC tag keys',
@@ -225,96 +188,6 @@ export class NfcVerifyService implements INfcTapVerifier {
         }
     }
 
-    /** Batch keys (`b`): one key set shared by every chip of a batch. */
-    private async verifyBatch(input: NfcTapInput, b: string): Promise<TapVerification> {
-        const { prisma } = this.deps;
-
-        const keySet = await prisma.nfcKeySet.findUnique({
-            where: PUBLIC_CODE.test(b) ? { publicCode: b } : { keySetCode: b },
-            select: {
-                id: true,
-                status: true,
-                kmsKeyRef: true,
-                key1Wrapped: true,
-                key2Wrapped: true,
-            },
-        });
-        if (!keySet) return this.reject(input, NFC_TAP_REASON.UNKNOWN_BATCH, {});
-        const log = { keySetId: keySet.id };
-        if (keySet.status !== 'ACTIVE') {
-            return this.reject(input, NFC_TAP_REASON.KEY_SET_RETIRED, log);
-        }
-
-        let key1: Buffer | undefined;
-        let key2: Buffer | undefined;
-        try {
-            try {
-                [key1, key2] = await Promise.all([
-                    this.deps.keyWrapper.unwrap(Buffer.from(keySet.key1Wrapped), keySet.kmsKeyRef),
-                    this.deps.keyWrapper.unwrap(Buffer.from(keySet.key2Wrapped), keySet.kmsKeyRef),
-                ]);
-            } catch (error) {
-                // A server-side fault, not a tampered URL: not logged as a
-                // rejection, and nothing about the cause reaches the caller.
-                this.deps.logger.error(
-                    { keySetId: keySet.id, err: error instanceof Error ? error.name : 'unknown' },
-                    'could not unwrap NFC batch keys',
-                );
-                throw new AppError('Verification is temporarily unavailable.', 500);
-            }
-
-            const picc = decryptPicc(input.e, key1);
-            if (!picc) return this.reject(input, NFC_TAP_REASON.BAD_PICC, log);
-
-            const tag = await prisma.nfcTag.findUnique({
-                where: { tagUidHash: this.deps.tagUidHash(picc.uidHex) },
-                select: {
-                    id: true,
-                    keySetId: true,
-                    lifecycleState: true,
-                    currentFor: { select: { id: true } },
-                },
-            });
-            if (!tag) return this.reject(input, NFC_TAP_REASON.UNKNOWN_TAG, log);
-            const tagLog = { ...log, nfcTagId: tag.id, counter: picc.counter };
-
-            if (tag.keySetId !== keySet.id) {
-                return this.reject(input, NFC_TAP_REASON.BATCH_MISMATCH, tagLog);
-            }
-            if (!ACCEPTED_LIFECYCLE.has(tag.lifecycleState)) {
-                return this.reject(input, NFC_TAP_REASON.TAG_NOT_ACTIVE, tagLog);
-            }
-            if (!verifySdmMac(input.c, key2, picc)) {
-                return this.reject(input, NFC_TAP_REASON.BAD_CMAC, tagLog);
-            }
-            if (!tag.currentFor) {
-                return this.reject(input, NFC_TAP_REASON.NO_ITEM, tagLog);
-            }
-            const skuLog = { ...tagLog, skuId: tag.currentFor.id };
-
-            // The one write that decides a replay: only a strictly higher
-            // counter updates the row, and the database makes that atomic, so
-            // two simultaneous taps with the same counter cannot both pass.
-            const advanced = await prisma.nfcTag.updateMany({
-                where: { id: tag.id, lastTapCounter: { lt: picc.counter } },
-                data: { lastTapCounter: picc.counter },
-            });
-            if (advanced.count !== 1) return this.reject(input, NFC_TAP_REASON.REPLAY, skuLog);
-
-            await this.log(input, { ...skuLog, result: 'VERIFIED', reasonCode: null });
-            return {
-                ok: true,
-                nfcTagId: tag.id,
-                skuId: tag.currentFor.id,
-                keySetId: keySet.id,
-                counter: picc.counter,
-            };
-        } finally {
-            key1?.fill(0);
-            key2?.fill(0);
-        }
-    }
-
     private async reject(
         input: NfcTapInput,
         reason: NfcTapReason,
@@ -341,7 +214,6 @@ export class NfcVerifyService implements INfcTapVerifier {
                         verificationCode: verificationCode(),
                         nfcTagId: row.nfcTagId ?? null,
                         skuId: row.skuId ?? null,
-                        keySetId: row.keySetId ?? null,
                         nfcTagKeyId: row.nfcTagKeyId ?? null,
                         counter: row.counter ?? null,
                         result: row.result,
@@ -365,7 +237,6 @@ export class NfcVerifyService implements INfcTapVerifier {
 }
 
 interface LogFields {
-    keySetId?: string;
     nfcTagKeyId?: string;
     nfcTagId?: string;
     skuId?: string;

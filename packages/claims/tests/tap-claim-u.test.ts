@@ -45,7 +45,6 @@ describe('claiming with u/e/c', () => {
 
         expect(result).toMatchObject({ verified: true, outcome: 'CLAIMED', claimedByYou: true });
         expect(seen).toEqual([{ ...tap, requestId: 'req-1' }]);
-        expect(seen[0]!.b).toBeUndefined();
         expect(h.claims()).toHaveLength(1);
     });
 
@@ -117,13 +116,10 @@ describe('the request schemas', () => {
         expect(claimTapBodySchema.parse({ ...base, u: UID }).visibility).toBe('PRIVATE');
     });
 
-    it('still accept the batch form b', () => {
-        expect(verifyTapQuerySchema.parse({ ...base, b: '786' }).b).toBe('786');
-    });
-
-    it('refuse both u and b, and neither', () => {
-        expect(verifyTapQuerySchema.safeParse({ ...base, u: UID, b: '786' }).success).toBe(false);
+    it('refuse a request without u, including the old batch form b', () => {
         expect(verifyTapQuerySchema.safeParse(base).success).toBe(false);
+        expect(verifyTapQuerySchema.safeParse({ ...base, b: '786' }).success).toBe(false);
+        expect(claimTapBodySchema.safeParse({ ...base, b: '786' }).success).toBe(false);
         expect(claimTapBodySchema.safeParse({ ...base, u: UID, b: '786' }).success).toBe(false);
     });
 

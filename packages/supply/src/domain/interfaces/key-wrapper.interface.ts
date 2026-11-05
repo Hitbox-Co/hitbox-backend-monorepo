@@ -1,11 +1,11 @@
 /**
- * Wraps and unwraps NFC batch keys, as a port.
+ * Wraps and unwraps NFC chip keys, as a port.
  *
  * Structurally identical to the port in @hitbox/skus (which unwraps the same
  * keys to verify a tap), declared again here so neither package imports the
  * other; bootstrap hands both the same implementation.
  *
- * `NfcKeySet` stores Key 00/01/02 only as the blobs `wrap` returns. Callers
+ * `NfcTagKey` stores Key 00/01/02 only as the blobs `wrap` returns. Callers
  * hold a plaintext key only in a local Buffer, zero it afterwards, and never
  * log it.
  */

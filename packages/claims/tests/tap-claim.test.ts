@@ -15,7 +15,7 @@ import type { Harness } from './helpers';
  * is covered in packages/skus/tests/nfc-verify.test.ts.
  */
 
-const B = 'nks0h2k9m4p7x3f8q2n6';
+const U = '04DE5F1EACC040';
 const TAG = 'tag-1';
 
 function makeTaps() {
@@ -26,23 +26,23 @@ function makeTaps() {
     const verifier: INfcTapVerifier = {
         async verifyTap(input) {
             seen.push(input);
-            const key = `${input.b}|${input.e}|${input.c}`;
+            const key = `${input.u}|${input.e}|${input.c}`;
             const hit = known.get(key);
             if (!hit) return { ok: false, reason: 'BAD_CMAC' };
             if (used.has(key)) return { ok: false, reason: 'REPLAY' };
             used.add(key);
-            return { ok: true, ...hit, keySetId: 'ks-1', counter: used.size };
+            return { ok: true, ...hit, nfcTagKeyId: 'key-1', counter: used.size };
         },
     };
 
     /** A fresh, never-used URL for the chip in SKU_A. */
     const url = (n: number) => {
         const tap = {
-            b: B,
+            u: U,
             e: n.toString(16).padStart(32, '0').toUpperCase(),
             c: n.toString(16).padStart(16, '0').toUpperCase(),
         };
-        known.set(`${tap.b}|${tap.e}|${tap.c}`, { nfcTagId: TAG, skuId: SKU_A });
+        known.set(`${tap.u}|${tap.e}|${tap.c}`, { nfcTagId: TAG, skuId: SKU_A });
         return tap;
     };
     return { verifier, url, seen };
@@ -72,7 +72,7 @@ function ownedBy(h: Harness, ownerId: string, visibility: 'PUBLIC' | 'PRIVATE') 
     });
 }
 
-const claimBody = (tap: { b: string; e: string; c: string }, visibility: 'PUBLIC' | 'PRIVATE' = 'PRIVATE') => ({
+const claimBody = (tap: { u: string; e: string; c: string }, visibility: 'PUBLIC' | 'PRIVATE' = 'PRIVATE') => ({
     ...tap,
     visibility,
 });
@@ -140,7 +140,7 @@ describe('claiming with a tap URL', () => {
 describe('a tap that does not authenticate', () => {
     it('answers NOT_VERIFIED, generically, and writes nothing', async () => {
         const { h } = setup();
-        const forged = { b: B, e: 'F'.repeat(32), c: 'F'.repeat(16) };
+        const forged = { u: U, e: 'F'.repeat(32), c: 'F'.repeat(16) };
         const result = await h.service.claimByTap(ALICE, claimBody(forged), 'req-1');
 
         expect(result).toEqual({
@@ -334,7 +334,7 @@ describe('verifying with a tap URL (public, never claims)', () => {
     it('answers a generic not-verified for a bad tap', async () => {
         const { h } = setup();
         const result = await h.service.verifyByTap(
-            { b: B, e: 'A'.repeat(32), c: 'B'.repeat(16) },
+            { u: U, e: 'A'.repeat(32), c: 'B'.repeat(16) },
             'req-1',
         );
         expect(result).toEqual({ verified: false, message: expect.any(String) });

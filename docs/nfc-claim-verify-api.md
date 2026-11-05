@@ -1,6 +1,6 @@
 # NFC Claim API (demo)
 
-> **Current flow:** see [Secure tap flow](#secure-tap-flow-current-tap-url--verify--claim) — `POST /claim` and `GET /verify?b=&e=&c=`. The tag-id routes below are deprecated.
+> **Current flow:** see [Secure tap flow](#secure-tap-flow-current-tap-url--verify--claim) — `POST /claim` and `GET /verify?u=&e=&c=`. The tag-id routes below are deprecated.
 
 The authenticity flow behind HitBox collectibles. Every physical item ships
 with an NFC tag (`Sku.tagId`). A user taps the tag to **claim** first
@@ -37,42 +37,30 @@ ownership. Re-tapping a claimed item just tells you **who owns it**.
 > **deprecated**. They keep working, and answer with a `Deprecation: true` header,
 > until `CLAIMS_LEGACY_TAG_ROUTES=false` turns them into `410`.
 
-Every collectible carries an NXP NTAG 424 DNA chip. On each tap the chip writes
-a fresh URL:
-
-```
-https://hitboxcollectibles.com/verify?b=<batch code>&e=<32 hex>&c=<16 hex>
-```
-
-| Param | What it is |
-|---|---|
-| `b` | Which batch's keys to use: the key set's short code (e.g. `101`, 3–20 chars of `A-Z a-z 0-9 . _ -`) **or** its long `publicCode` (`nks…`, 22 chars). A lookup label only — public, not a secret; the keys, not `b`, are what authenticate a tap. Shorter is better for tag memory. |
-| `e` | Encrypted PICC data (AES-128-CBC, zero IV, **Key 01**): `0xC7 \| UID(7) \| counter(3, LE) \| padding`. |
-| `c` | SDM MAC (**Key 02**): 8 bytes of an AES-CMAC under a session key derived from Key 02, the UID and the counter. |
-
-The counter goes up on every tap, so **a URL is good for exactly one use.**
-
-**The app never decrypts and never holds a key.** It reads the URL from the tag
-and sends `b`, `e`, `c` to the server. Keys exist only wrapped (encrypted by a
-KMS) in `NfcKeySet`.
-
-### Per-tag keys: `u` instead of `b` (preferred)
-
-Each chip can instead carry **its own** Key 00/01/02 (table `NfcTagKey`, wrapped by the KMS),
-and its UID written into the URL as plain text:
+Every collectible carries an NXP NTAG 424 DNA chip with **its own** Key 00/01/02
+(table `NfcTagKey`, stored only wrapped by the KMS). Its UID is written into the
+URL once, as plain text, when the chip is programmed. On each tap the chip fills
+in fresh `e` and `c`:
 
 ```
 https://hitboxcollectibles.com/verify?u=<UID, 14 hex>&e=<32 hex>&c=<16 hex>
 ```
 
-Send **exactly one** of `u` or `b` (both, or neither, is a 400). `u` is only a lookup hint: anyone can
-edit it, so the UID that the chip encrypted into `e` must equal it. Both `POST /claim` and
-`GET /verify` take `u`/`e`/`c`; the response shapes are unchanged. Per-tag `e`/`c` are single-use
-exactly like the batch form: call **either** claim **or** verify for one tap, never both (the second is a `REPLAY`).
+| Param | What it is |
+|---|---|
+| `u` | The chip UID. A lookup hint only: anyone can edit it, so the UID the chip encrypted into `e` must equal it. |
+| `e` | Encrypted PICC data (AES-128-CBC, zero IV, the chip's **Key 01**): `0xC7 \| UID(7) \| counter(3, LE) \| padding`. |
+| `c` | SDM MAC (the chip's **Key 02**): 8 bytes of an AES-CMAC under a session key derived from Key 02, the UID and the counter. |
 
-Server order for `u` (reason codes are logged in `NfcVerification.reasonCode`, never returned):
+The counter goes up on every tap, so **a URL is good for exactly one use**: call
+**either** claim **or** verify for one tap, never both (the second is a `REPLAY`).
 
-| # | Step | Refused as |
+**The app never decrypts and never holds a key.** It reads the URL from the tag
+and sends `u`, `e`, `c` to the server.
+
+### What the server does, in this order
+
+| # | Step | Refused as (logged only — never sent to the caller) |
 |---|---|---|
 | 1 | format: `u` 14 hex, `e` 32 hex, `c` 16 hex | `BAD_FORMAT` |
 | 2 | find the chip by `ITagCipher.hash(u.toUpperCase())` | `UNKNOWN_TAG` |
@@ -82,14 +70,17 @@ Server order for `u` (reason codes are logged in `NfcVerification.reasonCode`, n
 | 6 | decrypt `e` with Key 01, first byte `0xC7` | `BAD_PICC` |
 | 7 | UID inside `e` equals `u` (constant time) | `UID_MISMATCH` |
 | 8 | check `c` with Key 02 (constant time) | `BAD_CMAC` |
-| 9 | chip is embedded in a unit | `NO_ITEM` |
-| 10 | atomic `updateMany where lastTapCounter < counter` on the **`NfcTagKey`** row | `REPLAY` |
+| 9 | chip is embedded in a unit (`Sku.currentNfcTagId`) | `NO_ITEM` |
+| 10 | atomic `updateMany where lastTapCounter < counter` on the `NfcTagKey` row | `REPLAY` |
 
-The counter lives on `NfcTagKey.lastTapCounter` (new rows start at `-1`, so a first tap with counter 0
-passes); `NfcTag.lastTapCounter` is never touched by a per-tag tap. The `NfcVerification` row records
-`nfcTagKeyId` (and `keySetId` for a batch tap).
+The counter lives on `NfcTagKey.lastTapCounter` (new rows start at `-1`, so a
+first tap with counter 0 passes) and is consumed only at step 10, after
+everything else passed, so a forged URL can never burn a real chip's counter.
+Every attempt from step 1 on writes one `NfcVerification` row (result,
+`reasonCode`, counter, chip, unit, `nfcTagKeyId`, request id) — never `e`,
+`c`, the UID or a key.
 
-Key management (admin, permission `nfc-tag-claim:manage:global`; responses with keys are `no-store`):
+### Chip keys (admin, permission `nfc-tag-claim:manage:global`; responses with keys are `no-store`)
 
 | Route | Does |
 |---|---|
@@ -99,34 +90,14 @@ Key management (admin, permission `nfc-tag-claim:manage:global`; responses with 
 | `POST /admin/supply/tags/:tagId/keys/revoke` | body `{ reason }`; the chip then fails `NO_KEYS` until re-keyed (old rows are kept) |
 | `GET /admin/supply/tags/:tagId/keys` | the active key row's metadata, never key material |
 
+**Keys sent with the chip manifest.** When the vendor writes the keys onto the chips, the manifest (`POST /admin/supply/batches/:batchId/tags` and the vendor portal's `POST /vendor/batches/:batchId/tags`) takes optional `key0`, `key1`, `key2` per row (32 hex each, all three or none, all different). The server wraps them and creates the chip's ACTIVE `NfcTagKey` row in the same transaction as the chip, marked personalised. The response and the audit row carry only a count (`withKeys` / `keysRegistered`). With no key wrapper configured a manifest carrying keys is refused (503 `SUPPLY_KEY_WRAPPER_UNAVAILABLE`). Check a consignment afterwards with `apps/backend/scripts/check-chip-keys.ts <batchRef>` (read-only).
+
 Audit events: `supply.tag-keys.generate`, `supply.tag-keys.personalize`, `supply.tag-keys.revoke`.
-
-### Batch keys: `b` (existing form)
-
-### What the server does, in this order
-
-| # | Step | Refused as (logged only — never sent to the caller) |
-|---|---|---|
-| 1 | find `NfcKeySet` by `b` (`publicCode` if it looks like `nks…`, otherwise `keySetCode`) | `UNKNOWN_BATCH` |
-| 2 | key set must be `ACTIVE` | `KEY_SET_RETIRED` |
-| 3 | unwrap Key 01 / Key 02 | *(HTTP 500, not logged as tamper)* |
-| 4 | decrypt `e` with Key 01 → UID + counter | `BAD_PICC` |
-| 5 | find the chip by UID hash (`ITagCipher.hash`) | `UNKNOWN_TAG` |
-| 6 | chip's `keySetId` must equal the batch | `BATCH_MISMATCH` |
-| 7 | chip lifecycle `BOUND` or `ACTIVE` | `TAG_NOT_ACTIVE` |
-| 8 | check `c` with Key 02 (constant time) | `BAD_CMAC` |
-| 9 | chip must be embedded in a unit (`Sku.currentNfcTagId`) | `NO_ITEM` |
-| 10 | atomic `updateMany where lastTapCounter < counter` must change 1 row | `REPLAY` |
-
-The counter is consumed only at step 10, after everything else passed, so a
-forged URL can never burn a real chip's counter. Every attempt writes one
-`NfcVerification` row (result, `reasonCode`, counter, chip, unit, `keySetId`,
-request id) — never `e`, `c`, the UID or a key.
 
 ### `POST /claim` 🔒
 
 ```json
-{ "b": "nks…", "e": "<32 hex>", "c": "<16 hex>", "visibility": "PRIVATE" }
+{ "u": "<14 hex>", "e": "<32 hex>", "c": "<16 hex>", "visibility": "PRIVATE" }
 ```
 
 `visibility` is optional (`PUBLIC` | `PRIVATE`, default `PRIVATE`). The claimer is
@@ -134,7 +105,7 @@ always the signed-in user. Unknown body fields are a `422`.
 
 - Tap does not authenticate → **HTTP 200**
   `{ "data": { "verified": false, "outcome": "NOT_VERIFIED", "message": "…" } }`.
-  The message is the same whatever failed (forged, replayed, retired, unknown).
+  The message is the same whatever failed (forged, replayed, unknown, no keys).
 - Authenticated and unclaimed → claims it (the existing transaction: `Sku` →
   `CLAIMED`, `SkuClaim`, MINT/CLAIM ledger rows, `SkuHistory`,
   `BuyerCollection`, `claims.product.claimed`) and moves the chip and unit to
@@ -165,7 +136,7 @@ always the signed-in user. Unknown body fields are a `422`.
 }
 ```
 
-### `GET /verify?u=&e=&c=` (or `?b=&e=&c=`) (public, no login)
+### `GET /verify?u=&e=&c=` (public, no login)
 
 Authenticity check only. **Never claims.** Returns `{ verified, claimed,
 claimedStatus, sku, product, owner, claimedAt, verifiedAt }`, or the generic
@@ -194,19 +165,12 @@ min per IP **and** 15 / min per user. Over the limit → `429`.
 |---|---|
 | 200 | Any authenticated or unauthenticated tap (check `verified` / `outcome`) |
 | 401 | `POST /claim` without a session |
-| 422 | Malformed `b` / `e` / `c`, or an unknown body field |
+| 422 | Malformed `u` / `e` / `c`, or an unknown body field (including the old `b`) |
 | 429 | Rate limited |
 | 503 | No verifier configured (no key wrapper or `NFC_TAG_UID_KEY`) |
-| 500 | Batch keys could not be unwrapped (server fault) |
+| 500 | The chip's keys could not be unwrapped (server fault) |
 
-### Setting up a batch (admin, `nfc-tag-claim:manage:global`)
-
-| Route | Purpose |
-|---|---|
-| `POST /admin/supply/key-sets` | Create Key 00/01/02 for a batch. Returns the plaintext keys **once**, for programming the chips. |
-| `GET /admin/supply/key-sets` | List key sets. Never returns key material. |
-| `POST /admin/supply/key-sets/:id/personalise` | Give a consignment's un-keyed chips this key set. |
-| `POST /admin/supply/key-sets/:id/retire` | Retire a set: every chip in it fails verification. One-way. |
+### Before a tap verifies
 
 When a consignment is accepted and minted into units, each chip moves to
 `BOUND` — which is what lets a tap verify.
@@ -216,7 +180,7 @@ When a consignment is accepted and minted into units, each chip moves to
 | Variable | Purpose |
 |---|---|
 | `NFC_TAG_UID_KEY` | ≥32 chars. Hashes chip UIDs (`NfcTag.tagUidHash`). Do not change once chips are registered. |
-| `NFC_KMS_KEY_REF` | Names the KMS key that wraps batch keys. |
+| `NFC_KMS_KEY_REF` | Names the KMS key that wraps chip keys. |
 | `NFC_LOCAL_WRAP_KEY` | **Development only.** ≥32 chars. Local stand-in for a KMS; refused when `NODE_ENV=production`. |
 | `CLAIMS_LEGACY_TAG_ROUTES` | `false` turns the deprecated tag-id routes into `410`. |
 

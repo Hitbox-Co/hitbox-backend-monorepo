@@ -13,6 +13,8 @@ import {
 import { acceptsRows, canTransition } from '../domain/batch-state';
 import type { ISupplyAudit, SupplyActorType } from '../domain/interfaces/supply-audit.interface';
 import type { ITagCipher } from '../domain/interfaces/tag-cipher.interface';
+import type { IKeyWrapper } from '../domain/interfaces/key-wrapper.interface';
+import { rowHasKeys } from '../dto/supply.dto';
 import type { ISupplyStockMinter } from '../domain/interfaces/stock-minter.interface';
 import {
     requireConsignmentAccess,
@@ -95,6 +97,13 @@ interface SupplyServiceDeps {
      * against a real tap.
      */
     tagCipher?: ITagCipher | undefined;
+    /**
+     * Wraps chip keys sent with a manifest. Absent: a manifest whose rows carry
+     * keys is refused with a 503 — keys are never stored unwrapped.
+     */
+    keyWrapper?: IKeyWrapper | undefined;
+    /** Which KMS key wraps them. Stored on each key row. */
+    kmsKeyRef?: string | undefined;
     /**
      * Vendor allotment coverage. Accepting a consignment its vendor's
      * allotment does not cover is refused. Absent in a bare test harness.
@@ -638,6 +647,19 @@ export class SupplyService {
             );
         }
 
+        // Checked before anything else is read: a file that brings keys must
+        // never reach the database without them, so it is refused outright
+        // when there is nothing to wrap them with.
+        const withKeys = dto.tags.filter(rowHasKeys).length;
+        const { keyWrapper, kmsKeyRef } = this.deps;
+        if (withKeys > 0 && (!keyWrapper || !kmsKeyRef)) {
+            throw new AppError(
+                'This manifest carries chip keys, but no key wrapper is configured on this deployment.',
+                503,
+                SUPPLY_ERROR_CODES.KEY_WRAPPER_UNAVAILABLE,
+            );
+        }
+
         if (!MANIFEST_ITEM_TYPES.has(batch.itemType)) {
             throw AppError.conflict(
                 `A ${batch.itemType} consignment does not carry chips, so no manifest can be ` +
@@ -703,6 +725,7 @@ export class SupplyService {
                 batchId,
                 dryRun: true,
                 registered: hashed.length,
+                withKeys,
                 duplicates: [],
                 batch: {
                     rowsReceived: batch.rowsReceived + hashed.length,
@@ -724,18 +747,26 @@ export class SupplyService {
             };
         }
 
-        const sealed: SealedTag[] = hashed.map((tag) => ({
-            uidHash: tag.hash,
-            uidEncrypted: cipher.encrypt(tag.uid),
-            keyReference: cipher.keyReference,
-            qcStatus: tag.qcStatus ?? QcStatus.PENDING,
-            qcNotes: tag.qcNotes,
-            variantId: tag.variantId,
-        }));
+        const sealed: SealedTag[] = [];
+        for (const tag of hashed) {
+            sealed.push({
+                uidHash: tag.hash,
+                uidEncrypted: cipher.encrypt(tag.uid),
+                keyReference: cipher.keyReference,
+                qcStatus: tag.qcStatus ?? QcStatus.PENDING,
+                qcNotes: tag.qcNotes,
+                variantId: tag.variantId,
+                keys: rowHasKeys(tag) ? await wrapChipKeys(keyWrapper!, kmsKeyRef!, tag) : undefined,
+            });
+        }
 
         let result: Awaited<ReturnType<SupplyRepository['registerTags']>>;
         try {
-            result = await this.deps.supply.registerTags({ batchId, tags: sealed });
+            result = await this.deps.supply.registerTags({
+                batchId,
+                tags: sealed,
+                createdById: input.actorId,
+            });
         } catch (error) {
             // The pre-check above read before this manifest's transaction; a
             // UID registered by a concurrent manifest in between lands here.
@@ -761,7 +792,11 @@ export class SupplyService {
             // Counts, never UIDs. An audit trail that recorded the UIDs would
             // be a second place the anti-counterfeiting material is stored, and
             // a longer-lived one than the table it came from.
-            metadata: { registered: result.created, keyReference: cipher.keyReference },
+            metadata: {
+                registered: result.created,
+                keysRegistered: result.keysCreated,
+                keyReference: cipher.keyReference,
+            },
         });
         this.deps.eventBus.publish(SUPPLY_EVENTS.TAGS_REGISTERED, {
             batchId,
@@ -772,6 +807,7 @@ export class SupplyService {
             batchId,
             dryRun: false,
             registered: result.created,
+            withKeys: result.keysCreated,
             duplicates: [],
             batch: {
                 rowsReceived: result.batch.rowsReceived,
@@ -1335,4 +1371,25 @@ function isUniqueViolation(error: unknown): boolean {
         error !== null &&
         (error as { code?: unknown }).code === 'P2002'
     );
+}
+
+/**
+ * Wraps one row's Key 00/01/02. The plaintext exists only as local Buffers
+ * here and is zeroed before returning; the row's hex strings are what the
+ * request carried and are dropped with it.
+ */
+async function wrapChipKeys(
+    wrapper: IKeyWrapper,
+    kmsKeyRef: string,
+    row: { key0: string; key1: string; key2: string },
+): Promise<NonNullable<SealedTag['keys']>> {
+    const plain = [row.key0, row.key1, row.key2].map((hex) => Buffer.from(hex, 'hex'));
+    try {
+        const [key0Wrapped, key1Wrapped, key2Wrapped] = await Promise.all(
+            plain.map((key) => wrapper.wrap(key, kmsKeyRef)),
+        );
+        return { key0Wrapped: key0Wrapped!, key1Wrapped: key1Wrapped!, key2Wrapped: key2Wrapped!, kmsKeyRef };
+    } finally {
+        for (const key of plain) key.fill(0);
+    }
 }

@@ -61,7 +61,7 @@ interface ClaimsServiceDeps {
      */
     claimTokenRequired: boolean;
     /**
-     * Authenticates a tap URL (u/e/c, or the batch-key form b/e/c). Absent on a deployment with no key
+     * Authenticates a tap URL (u/e/c). Absent on a deployment with no key
      * wrapper or chip-UID key: the tap routes then answer 503 instead of
      * pretending to verify.
      */
@@ -475,10 +475,7 @@ export class ClaimsService {
                 CLAIMS_ERROR_CODES.TAP_UNAVAILABLE,
             );
         }
-        const base = { e: input.e, c: input.c, requestId };
-        const result = await verifier.verifyTap(
-            input.u !== undefined ? { ...base, u: input.u } : { ...base, b: input.b! },
-        );
+        const result = await verifier.verifyTap({ u: input.u, e: input.e, c: input.c, requestId });
         return result.ok ? { nfcTagId: result.nfcTagId, skuId: result.skuId } : null;
     }
 

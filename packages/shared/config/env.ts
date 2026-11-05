@@ -74,9 +74,9 @@ const envSchema = z.object({
 
     // ── NFC batch keys (Key 00/01/02) ───────────────────────────────────────
     /**
-     * Names the KMS key that wraps new batch key sets (an ARN / key id). Stored
-     * on each `NfcKeySet` as `kmsKeyRef`, so the wrapping key can be rotated
-     * without losing the ability to unwrap old sets. A pointer, never a key.
+     * Names the KMS key that wraps new chip keys (an ARN / key id). Stored
+     * on each `NfcTagKey` as `kmsKeyRef`, so the wrapping key can be rotated
+     * without losing the ability to unwrap old keys. A pointer, never a key.
      */
     NFC_KMS_KEY_REF: z.string().min(1).optional(),
     /**

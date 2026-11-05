@@ -131,9 +131,6 @@ model NfcVerification {
   skuId            String?            @db.Uuid
   sku              Sku?               @relation(fields: [skuId], references: [id])
   counter          Int?
-  /// The key set used to check this tap. Plain column, no FK, so the log still
-  /// says which keys were used after a re-key or retirement.
-  keySetId         String?            @db.Uuid
   /// The per-tag key row used to check this tap. Plain column, no FK.
   nfcTagKeyId      String?            @db.Uuid
   result          VerificationResult

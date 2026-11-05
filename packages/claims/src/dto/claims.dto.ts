@@ -179,18 +179,14 @@ export interface LedgerEntryView {
     peerToPeerTrading: boolean;
 }
 
-// ── Tap-URL flow (u|b / e / c) ─────────────────────────────────────────────
+// ── Tap-URL flow (u / e / c) ───────────────────────────────────────────────
 
 /**
  * The values a tag's URL carries, format-checked only. Nothing here decrypts
- * anything — the server does that after looking up the keys.
+ * anything — the server does that after looking up the chip's keys.
  *
- * Exactly one of:
- *   u  the chip UID, 14 hex, written as plain text (per-tag keys). A lookup
- *      hint only: the UID inside `e` must match it.
- *   b  the batch: `NfcKeySet.publicCode` (`nks` + 19 Crockford base32
- *      characters) or the short `NfcKeySet.keySetCode` (3-20 of A-Z a-z 0-9 . _ -)
- * plus
+ *   u  the chip UID, 14 hex, written as plain text. A lookup hint only: the
+ *      UID inside `e` must match it.
  *   e  32 hex (encrypted PICC data)
  *   c  16 hex (SDM MAC)
  */
@@ -199,23 +195,13 @@ const tapFields = {
         .string()
         .trim()
         .regex(/^[0-9a-fA-F]{14}$/, 'Invalid value.')
-        .transform((value) => value.toUpperCase())
-        .optional(),
-    b: z
-        .string()
-        .trim()
-        .regex(/^(nks[0-9a-hjkmnp-tv-z]{19}|[A-Za-z0-9._-]{3,20})$/, 'Invalid batch code.')
-        .optional(),
+        .transform((value) => value.toUpperCase()),
     e: z.string().trim().regex(/^[0-9a-fA-F]{32}$/, 'Invalid value.'),
     c: z.string().trim().regex(/^[0-9a-fA-F]{16}$/, 'Invalid value.'),
 };
 
-const exactlyOneOfUB = (value: { u?: unknown; b?: unknown }) =>
-    (value.u !== undefined) !== (value.b !== undefined);
-const UB_MESSAGE = { message: 'Send either u or b, not both and not neither.' };
-
-/** GET /verify?u=&e=&c=  (or the batch-key form ?b=&e=&c=) */
-export const verifyTapQuerySchema = z.object(tapFields).refine(exactlyOneOfUB, UB_MESSAGE);
+/** GET /verify?u=&e=&c= */
+export const verifyTapQuerySchema = z.object(tapFields);
 export type VerifyTapQuery = z.infer<typeof verifyTapQuerySchema>;
 
 /**
@@ -227,8 +213,7 @@ export const claimTapBodySchema = z
         ...tapFields,
         visibility: z.enum(['PUBLIC', 'PRIVATE']).default('PRIVATE'),
     })
-    .strict()
-    .refine(exactlyOneOfUB, UB_MESSAGE);
+    .strict();
 export type ClaimTapBody = z.infer<typeof claimTapBodySchema>;
 
 /** The product a tap resolved to — what the app shows without a second call. */

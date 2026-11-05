@@ -8,14 +8,12 @@
  * `reason` exists for logs and tests only. It must never reach an HTTP
  * response: it would tell a prober which part of a forged URL to fix next.
  */
-interface NfcTapBase {
+export interface NfcTapInput {
+    u: string;
     e: string;
     c: string;
     requestId: string;
 }
-
-/** Either `u` (per-tag keys) or `b` (batch keys), never both. */
-export type NfcTapInput = NfcTapBase & ({ u: string; b?: undefined } | { b: string; u?: undefined });
 
 export type TapVerification =
     | {
@@ -23,8 +21,7 @@ export type TapVerification =
         nfcTagId: string;
         /** The unit the chip is embedded in. */
         skuId: string;
-        keySetId?: string;
-        nfcTagKeyId?: string;
+        nfcTagKeyId: string;
         counter: number;
     }
     | { ok: false; reason: string };

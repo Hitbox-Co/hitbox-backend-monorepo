@@ -1,7 +1,7 @@
 /**
- * Wraps and unwraps NFC batch keys, as a port.
+ * Wraps and unwraps NFC chip keys, as a port.
  *
- * `NfcKeySet` stores Key 00/01/02 only as the blobs this returns: the database
+ * `NfcTagKey` stores Key 00/01/02 only as the blobs this returns: the database
  * never holds a plaintext key. Defined here and implemented at the bootstrap
  * boundary because the wrapping key belongs to the deployment (a cloud KMS
  * key), not to the package.
