@@ -52,6 +52,10 @@ export const CONTENT_AUDIT_EVENTS = {
     SWITCH_ON: 'content.reward.switch-on',
     REMOVE: 'content.reward.remove',
     RESTORE: 'content.reward.restore',
+    /** HitBox put specific unclaimed SKUs on a drop's exclusive tier. */
+    EXCLUSIVE_UNITS_ADD: 'content.drop-exclusive.units-add',
+    /** HitBox took specific unclaimed SKUs off a drop's exclusive tier. */
+    EXCLUSIVE_UNITS_REMOVE: 'content.drop-exclusive.units-remove',
 } as const;
 
 export const CONTENT_EVENTS = {
@@ -135,6 +139,15 @@ export const DROP_CONTENT_ERROR_CODES = {
     UNIT_NOT_FOUND: 'DROP_CONTENT_UNIT_NOT_FOUND',
     /** The drop doesn't exist or isn't released. */
     DROP_NOT_FOUND: 'DROP_CONTENT_DROP_NOT_FOUND',
+    /** Admin selection: the content is regular, not an exclusive tier. */
+    NOT_EXCLUSIVE: 'DROP_CONTENT_NOT_EXCLUSIVE',
+    /** Admin selection: a SKU isn't a unit of this drop. */
+    UNIT_NOT_IN_DROP: 'DROP_CONTENT_UNIT_NOT_IN_DROP',
+    /**
+     * Admin selection: a SKU is already claimed (or owned), so whether it
+     * opens exclusive content is settled — it can no longer be added or taken off.
+     */
+    UNIT_CLAIMED: 'DROP_CONTENT_UNIT_CLAIMED',
 } as const;
 
 export const DROP_CONTENT_EVENTS = {

@@ -72,6 +72,28 @@ export interface OwnedUnit {
 
 const unitSelect = { id: true, publicCode: true, productId: true, serialNumber: true } satisfies Prisma.SkuSelect;
 
+const adminUnitSelect = {
+    id: true,
+    publicCode: true,
+    skuCode: true,
+    serialNumber: true,
+    variantId: true,
+    variant: { select: { variantCode: true, label: true } },
+    claimedStatus: true,
+    ownerId: true,
+} satisfies Prisma.SkuSelect;
+
+export type AdminUnitRow = Prisma.SkuGetPayload<{ select: typeof adminUnitSelect }>;
+
+/** A unit as read under `FOR UPDATE` while an admin changes its exclusivity. */
+export interface LockedUnit {
+    id: string;
+    productId: string;
+    serialNumber: number;
+    claimedStatus: string;
+    owned: boolean;
+}
+
 function toUnit(row: Prisma.SkuGetPayload<{ select: typeof unitSelect }>): OwnedUnit {
     return { skuId: row.id, publicCode: row.publicCode, productId: row.productId, serialNumber: row.serialNumber };
 }
@@ -116,8 +138,13 @@ export class DropContentRepository {
         isActive: boolean;
         serialNumbers: number[];
         now: Date;
+        /** Runs on the locked units behind the serials being listed; throws to abort. */
+        guardUnits?: ((units: LockedUnit[]) => void) | undefined;
     }): Promise<DropContentRow> {
         return this.prisma.$transaction(async (tx) => {
+            if (input.guardUnits && input.serialNumbers.length > 0) {
+                input.guardUnits(await this.lockUnitsBySerial(tx, input.dropId, input.serialNumbers));
+            }
             const id = randomUUID();
             await tx.contentBundle.create({
                 data: {
@@ -151,8 +178,27 @@ export class DropContentRepository {
         },
         serialNumbers: number[] | undefined,
         now: Date,
+        /**
+         * When the serial list changes: runs on the locked units behind the
+         * serials being ADDED or REMOVED (not the unchanged ones); throws to abort.
+         */
+        guard?: { dropId: string; units: (units: LockedUnit[]) => void } | undefined,
     ): Promise<DropContentRow> {
         return this.prisma.$transaction(async (tx) => {
+            if (serialNumbers && guard) {
+                const current = (
+                    await tx.contentBundleSerial.findMany({ where: { bundleId: id }, select: { serialNumber: true } })
+                ).map((row) => row.serialNumber);
+                const next = new Set(serialNumbers);
+                const was = new Set(current);
+                const changed = [
+                    ...serialNumbers.filter((n) => !was.has(n)),
+                    ...current.filter((n) => !next.has(n)),
+                ];
+                if (changed.length > 0) {
+                    guard.units(await this.lockUnitsBySerial(tx, guard.dropId, changed));
+                }
+            }
             await tx.contentBundle.update({ where: { id }, data: { ...data, updatedAt: now } });
             if (serialNumbers) {
                 await tx.contentBundleSerial.deleteMany({
@@ -168,6 +214,119 @@ export class DropContentRepository {
     }
 
     // ── Drops and units ─────────────────────────────────────────────────────
+
+    /**
+     * The minted units of a drop behind these serial numbers, locked
+     * `FOR UPDATE` for the rest of the transaction — a claim on any of them
+     * waits until the serial list is written. Serials with no unit yet are
+     * simply absent: nobody can own them.
+     */
+    private async lockUnitsBySerial(
+        tx: Prisma.TransactionClient,
+        dropId: string,
+        serials: number[],
+    ): Promise<LockedUnit[]> {
+        return tx.$queryRaw<LockedUnit[]>`
+            SELECT "id", "productId", "serialNumber", "claimedStatus"::text AS "claimedStatus",
+                   ("ownerId" IS NOT NULL) AS "owned"
+              FROM "Sku"
+             WHERE "productId" = ${dropId}::uuid
+               AND "serialNumber" IN (${Prisma.join(serials)})
+             ORDER BY "id"
+               FOR UPDATE`;
+    }
+
+    // ── Admin: choosing exclusive units ─────────────────────────────────────
+
+    /** A drop's minted units with what an admin needs to choose exclusive ones. */
+    async listDropUnits(
+        dropId: string,
+        query: {
+            claimed?: boolean | undefined;
+            variantId?: string | undefined;
+            serialFrom?: number | undefined;
+            serialTo?: number | undefined;
+            page: number;
+            limit: number;
+        },
+    ): Promise<{ total: number; items: AdminUnitRow[] }> {
+        const where: Prisma.SkuWhereInput = {
+            productId: dropId,
+            ...(query.variantId ? { variantId: query.variantId } : {}),
+            ...(query.claimed === undefined
+                ? {}
+                : query.claimed
+                    ? { OR: [{ claimedStatus: { not: 'UNCLAIMED' } }, { ownerId: { not: null } }] }
+                    : { claimedStatus: 'UNCLAIMED', ownerId: null }),
+            ...(query.serialFrom || query.serialTo
+                ? {
+                    serialNumber: {
+                        ...(query.serialFrom ? { gte: query.serialFrom } : {}),
+                        ...(query.serialTo ? { lte: query.serialTo } : {}),
+                    },
+                }
+                : {}),
+        };
+        const [total, items] = await Promise.all([
+            this.prisma.sku.count({ where }),
+            this.prisma.sku.findMany({
+                where,
+                select: adminUnitSelect,
+                orderBy: { serialNumber: 'asc' },
+                skip: (query.page - 1) * query.limit,
+                take: query.limit,
+            }),
+        ]);
+        return { total, items };
+    }
+
+    /**
+     * Adds or removes serials on an exclusive tier for specific units, in one
+     * transaction that locks those units' rows first.
+     *
+     * The lock is the point: a claim updates the same Sku row, so a unit
+     * cannot be claimed between "it is unclaimed" and the write — the claim
+     * waits for this transaction, or this one sees it claimed and refuses.
+     * `check` runs on the locked rows and throws to abort.
+     */
+    async changeExclusiveUnits(input: {
+        bundleId: string;
+        dropId: string;
+        skuIds: string[];
+        mode: 'add' | 'remove';
+        check: (units: LockedUnit[]) => void;
+    }): Promise<{ serials: number[]; changed: number }> {
+        return this.prisma.$transaction(async (tx) => {
+            const units = await tx.$queryRaw<LockedUnit[]>`
+                SELECT "id", "productId", "serialNumber", "claimedStatus"::text AS "claimedStatus",
+                       ("ownerId" IS NOT NULL) AS "owned"
+                  FROM "Sku"
+                 WHERE "id" IN (${Prisma.join(input.skuIds.map((id) => Prisma.sql`${id}::uuid`))})
+                 ORDER BY "id"
+                   FOR UPDATE`;
+            input.check(units);
+
+            const serials = units.map((unit) => unit.serialNumber);
+            const changed =
+                input.mode === 'add'
+                    ? (
+                        await tx.contentBundleSerial.createMany({
+                            data: serials.map((serialNumber) => ({ bundleId: input.bundleId, serialNumber })),
+                            skipDuplicates: true,
+                        })
+                    ).count
+                    : (
+                        await tx.contentBundleSerial.deleteMany({
+                            where: { bundleId: input.bundleId, serialNumber: { in: serials } },
+                        })
+                    ).count;
+            await tx.contentBundle.update({
+                where: { id: input.bundleId },
+                data: { updatedAt: new Date() },
+            });
+            return { serials, changed };
+        });
+    }
 
     async findDrop(dropId: string): Promise<DropRef | null> {
         const row = await this.prisma.drop.findUnique({

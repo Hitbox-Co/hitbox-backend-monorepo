@@ -10,6 +10,8 @@ import {
     SUBSCRIBED_EVENTS,
 } from './constants/content.constant';
 import { AdminRewardController } from './controller/admin-reward.controller';
+import { AdminDropContentController } from './controller/admin-drop-content.controller';
+import { AdminDropContentService } from './service/admin-drop-content.service';
 import type { IContentAuditRecorder } from './domain/content-audit.port';
 import { AdminRewardService } from './service/admin-reward.service';
 import { BuyerRewardController } from './controller/buyer-reward.controller';
@@ -173,9 +175,21 @@ export function createContentModule(deps: ContentModuleDeps): ContentModule {
             // :organization grant does not pass.
             const staff = deps.guard.requirePermission(REWARD_ADMIN_CAPABILITY, { globalOnly: true });
             const controller = new AdminRewardController(adminRewards);
+            const dropController = new AdminDropContentController(
+                new AdminDropContentService({ drops, audit: deps.audit, logger }),
+            );
 
             const router = Router();
             router.use(requireAuth);
+
+            // Drop exclusive content — which specific SKUs open it. Literal
+            // `/drops` paths first, ahead of `/:rewardId`. Changes are allowed
+            // only for units still unclaimed; docs/content/drop-content.md.
+            router.get('/drops/:dropId/content', staff, dropController.tiers);
+            router.get('/drops/:dropId/units', staff, dropController.units);
+            router.post('/drops/:dropId/content/:bundleId/units', staff, dropController.addUnits);
+            router.post('/drops/:dropId/content/:bundleId/units/remove', staff, dropController.removeUnits);
+
             router.get('/', staff, controller.list);
             // Before '/:rewardId' so "summary" is never read as an id.
             router.get('/summary', staff, controller.summary);

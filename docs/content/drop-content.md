@@ -55,7 +55,7 @@ Nothing is granted and nothing has to be revoked:
 |---|---|
 | The unit is resold or transferred | The new owner opens it. The old owner no longer does. |
 | A claim is taken back (refund, lost dispute) | Access ends as soon as the buyer no longer owns the unit. |
-| The artist changes a tier's serial list | Owners of units taken off lose access at once. Owners of units added get it at once. |
+| The artist (or HitBox) changes a tier's serial list | Allowed only for units that are **still unclaimed with no owner**, or not minted yet. A claimed or owned unit can't be added or taken off (`409 DROP_CONTENT_UNIT_CLAIMED`), so an owner never gains or loses exclusive content after buying. |
 | The artist switches a tier off or removes it | Nobody opens it. It's hidden from buyers. |
 
 One unit can be listed in more than one exclusive tier.
@@ -176,6 +176,15 @@ can't be empty: remove the tier instead. Access moves at once (see 1).
 - A removed tier is `409 DROP_CONTENT_ARCHIVED`: restore it first.
 - If HitBox locked the tier, switching it back on (`isActive: true`) is
   `409 CONTENT_REWARD_MODERATION_LOCKED`.
+- **Claimed units are locked.** Only the serials that *change* are checked
+  (added or removed); serials that stay listed are left alone. If any changed
+  serial belongs to a unit that is claimed or owned, the edit is refused with
+  `409 DROP_CONTENT_UNIT_CLAIMED`. The message names the units (`#7`), and
+  `details.units[]` = `{ skuId, serialNumber, claimedStatus, owned }`. Nothing
+  is saved. Serials with no minted unit yet can always change. The same rule
+  applies to `POST …/content` (§3.2) when creating an exclusive tier. The units
+  are locked during the check, so a buyer claiming at the same moment can't
+  slip through.
 
 ### 3.4 `DELETE …/content/:bundleId` and `POST …/restore`
 
@@ -272,6 +281,94 @@ A unit that isn't yours, isn't claimed, or doesn't exist is
 
 ---
 
+## 4A. HitBox admin: choosing which SKUs are exclusive
+
+HitBox staff can pick the **specific SKUs** that open an existing exclusive
+tier, for example "out of these 100, unit #042 gets the signed video". It works
+unit by unit, on SKUs that are already minted.
+
+Base: `/api/v1/admin/rewards/drops/:dropId`. You need `content-unlock:manage`
+at global scope (HITBOX_SYSTEM_ADMIN, HITBOX_CONTENT_MANAGER).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `…/content` | The drop's tiers, with each one's serial list |
+| `GET` | `…/units` | The drop's minted SKUs: claim state, whether each can still be changed, and which exclusive tiers it opens |
+| `POST` | `…/content/:bundleId/units` | Put SKUs on an exclusive tier |
+| `POST` | `…/content/:bundleId/units/remove` | Take SKUs off an exclusive tier |
+
+### The rule: only while the SKU is unclaimed
+
+A SKU can be put on, or taken off, an exclusive tier **only while it is
+`UNCLAIMED` and has no owner**. Once a buyer owns it (claimed, in transfer,
+flagged, or sold but not yet tapped), whether it opens exclusive content is
+settled. Adding it would give an owner content nobody sold them, and removing
+it would take away something they may have bought it for.
+
+The check runs on **locked rows inside the write**. A claim taps the same SKU
+row, so it can't land between "it's unclaimed" and the change. One of the two
+waits for the other.
+
+### `GET …/units`
+
+| Query | Notes |
+|---|---|
+| `claimed` | `false` = only SKUs you can still change; `true` = only settled ones |
+| `variantId` | One variant only |
+| `serialFrom`, `serialTo` | Serial range |
+| `page`, `limit` | Default 1 / 50, max limit 100 |
+
+```json
+{
+  "data": [
+    {
+      "skuId": "5d1e…", "publicCode": "sku…", "skuCode": "TEE-000042", "serialNumber": 42,
+      "variantId": "v2…", "variant": { "variantCode": "TEE-RED-M", "label": "Red / M" },
+      "claimedStatus": "UNCLAIMED", "owned": false,
+      "selectable": true,
+      "exclusiveTiers": [ { "bundleId": "b9…", "name": "Signed video" } ]
+    }
+  ],
+  "meta": { "page": 1, "limit": 50, "total": 100, "totalPages": 2 }
+}
+```
+
+`selectable: false` means the SKU is claimed or owned, so grey it out.
+
+### `POST …/content/:bundleId/units` and `…/units/remove`
+
+```json
+{ "skuIds": ["5d1e…", "8a20…"] }
+```
+
+1 to 1,000 SKU ids. Both calls are **all-or-nothing** and **idempotent**: if
+any SKU is refused, nothing changes. Adding a SKU that's already listed, or
+removing one that isn't, is a no-op.
+
+```json
+{ "data": { "bundleId": "b9…", "name": "Signed video", "serialNumbers": [1, 42, 77], "changed": 1 } }
+```
+
+| Refusal | Code |
+|---|---|
+| A SKU is claimed or owned (`details.units[]` = `{ skuId, serialNumber, claimedStatus, owned }`) | `409 DROP_CONTENT_UNIT_CLAIMED` |
+| A SKU isn't a unit of this drop (`details.skuIds`) | `400 DROP_CONTENT_UNIT_NOT_IN_DROP` |
+| The tier is the regular one | `400 DROP_CONTENT_NOT_EXCLUSIVE` |
+| The tier is removed | `409 DROP_CONTENT_ARCHIVED` |
+| Removing would leave the tier with no units, or adding would pass 1,000 | `400 DROP_CONTENT_SERIALS_INVALID` |
+
+Tiers are still created and given their files by the artist (§3). Exclusivity
+is stored by serial number, so selecting a SKU adds that SKU's serial.
+
+Each change is audited: `content.drop-exclusive.units-add` and
+`content.drop-exclusive.units-remove` (WARNING), with before/after serial lists
+and the SKU ids.
+
+> The artist panel obeys the same rule (§3.3): its serial-list edits refuse
+> claimed or owned units the same way.
+
+---
+
 ## 5. Files: types, sizes, links
 
 These are the same rules as [collection rewards 5](collection-rewards.md#5-files-types-sizes-links).
@@ -334,6 +431,9 @@ Domain events (in-process bus):
 | `409` | `CONTENT_REWARD_FILE_DUPLICATE` | The file is already in this tier |
 | `409` | `ARTIST_PROFILE_LOCKED` | Your artist profile is deactivated or archived |
 | `400` | `DROP_CONTENT_SERIALS_INVALID` | Bad serial list (see 3.2) |
+| `409` | `DROP_CONTENT_UNIT_CLAIMED` | Admin: a SKU is claimed or owned, so its exclusivity can't change (see 4A) |
+| `400` | `DROP_CONTENT_UNIT_NOT_IN_DROP` | Admin: a SKU isn't a unit of this drop |
+| `400` | `DROP_CONTENT_NOT_EXCLUSIVE` | Admin: the tier is the regular one |
 | `400` | `CONTENT_REWARD_FILE_TYPE` | Not a video, music track, GIF or image, or too big |
 | `400` | `CONTENT_REWARD_FILE_INVALID` | The file is missing, wasn't uploaded for this drop, is deleted or infected, or hasn't finished uploading |
 | `400` | `CONTENT_REWARD_ORDER_MISMATCH` | The reorder list isn't exactly the tier's items |

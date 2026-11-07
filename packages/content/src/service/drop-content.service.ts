@@ -14,6 +14,7 @@ import type { ContentRepository } from '../repository/content.repository';
 import { serialsOf, tierOf } from '../repository/drop-content.repository';
 import type { DropContentRepository, DropContentRow, DropRef } from '../repository/drop-content.repository';
 import { itemCounts, itemViews } from './reward-mapping';
+import { assertNoSettledUnits } from './admin-drop-content.service';
 import { assertRoom, assertSameItems, assertUploadable, assertUsableAsset, duplicateFile, requireMedia } from './reward-files';
 
 interface DropContentServiceDeps {
@@ -99,6 +100,8 @@ export class DropContentService {
                 isActive: input.isActive ?? true,
                 serialNumbers,
                 now: this.now(),
+                // An exclusive tier may not hand content to units already owned.
+                guardUnits: assertNoSettledUnits,
             });
             return this.view(row);
         } catch (error) {
@@ -141,6 +144,8 @@ export class DropContentService {
             },
             serialNumbers,
             this.now(),
+            // Units already claimed or owned can't be added or taken off.
+            { dropId: drop.id, units: assertNoSettledUnits },
         );
         return this.view(updated);
     }

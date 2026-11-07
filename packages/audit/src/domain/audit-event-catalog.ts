@@ -309,6 +309,26 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
     // HitBox moderating a reward. A switch-off or removal locks it: the artist
     // can't bring it back, so each one is WARNING and carries the reason the
     // artist is shown.
+    // HitBox choosing which units open a drop's exclusive content. Allowed only
+    // while a unit is unclaimed — after that the buyer's expectation is fixed.
+    {
+        eventType: 'content.drop-exclusive.units-add',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "HitBox staff put specific unclaimed SKUs on a drop's exclusive tier " +
+            '(metadata: skuIds, serialNumbers).',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/content/drop-content.md'],
+    },
+    {
+        eventType: 'content.drop-exclusive.units-remove',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "HitBox staff took specific unclaimed SKUs off a drop's exclusive tier " +
+            '(metadata: skuIds, serialNumbers).',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/content/drop-content.md'],
+    },
     {
         eventType: 'content.reward.switch-off',
         personaGroup: HITBOX_ADMIN,
