@@ -1,6 +1,6 @@
 import rateLimit from 'express-rate-limit';
 import { RedisStore } from 'rate-limit-redis';
-import type { RequestHandler } from 'express';
+import type { Request, RequestHandler } from 'express';
 import { env } from '../config/env';
 import { AppError } from '../errors/app-error';
 import { createModuleLogger } from '../logger';
@@ -15,6 +15,12 @@ export interface RateLimiterOptions {
     max?: number;
     /** Bucket name, keeps separate limiters apart in Redis (e.g. 'api', 'auth'). */
     prefix?: string;
+    /**
+     * What a request is counted against. Defaults to the client IP. Pass one
+     * to count per signed-in user instead — only meaningful on a route that
+     * runs after authentication.
+     */
+    keyGenerator?: (req: Request) => string;
 }
 
 /**
@@ -41,6 +47,7 @@ export function createRateLimiter(options: RateLimiterOptions = {}): RequestHand
         limit: max,
         standardHeaders: true, // RateLimit-Limit / RateLimit-Remaining / RateLimit-Reset
         legacyHeaders: false,
+        ...(options.keyGenerator ? { keyGenerator: options.keyGenerator } : {}),
         ...(redis
             ? {
                 store: new RedisStore({

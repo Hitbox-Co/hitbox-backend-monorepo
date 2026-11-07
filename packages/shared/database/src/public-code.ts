@@ -196,6 +196,7 @@ export const PUBLIC_CODE_PREFIXES: Record<string, string> = {
     Vendor: 'vnd',
     SupplyBatch: 'sbt',
     NfcTag: 'nft',
+    NfcTagKey: 'ntk',
     // support
     SupportCase: 'spc',
     // tax

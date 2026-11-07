@@ -21,4 +21,12 @@ export interface IAccountLookup {
     findByClerkUserId(clerkUserId: string): Promise<AccountSnapshot | null>;
     /** True if a local account already exists for this email (registration guard). */
     emailExists(email: string): Promise<boolean>;
+    /**
+     * Creates the local account for a Clerk subject that holds a VALID session
+     * but has no row yet — the sign-up webhook has not arrived, or never will.
+     * Must be idempotent (the webhook may still deliver the same user later) and
+     * resolve only once the row exists. Optional so a test harness, or a
+     * deployment that relies on the webhook alone, can omit it.
+     */
+    provisionFromClerk?(payload: UserRegisteredPayload): Promise<AccountSnapshot | null>;
 }

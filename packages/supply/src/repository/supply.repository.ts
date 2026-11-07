@@ -126,6 +126,13 @@ export interface SealedTag {
     qcNotes: string | undefined;
     /** Set when the consignment has variant lines. */
     variantId: string | undefined;
+    /** The chip's keys, already wrapped by the KMS. Absent when the row sent none. */
+    keys?: {
+        key0Wrapped: Buffer;
+        key1Wrapped: Buffer;
+        key2Wrapped: Buffer;
+        kmsKeyRef: string;
+    } | undefined;
 }
 
 /** A drop's variant, as the allotment and line checks need it. */
@@ -534,7 +541,9 @@ export class SupplyRepository {
     async registerTags(input: {
         batchId: string;
         tags: SealedTag[];
-    }): Promise<{ created: number; batch: BatchRow }> {
+        /** Recorded on the key rows. No FK, like the other audit-style pointers. */
+        createdById?: string | null;
+    }): Promise<{ created: number; keysCreated: number; batch: BatchRow }> {
         return this.prisma.$transaction(async (tx) => {
             // The service checked status and quantities before hashing; two
             // manifests for one carton (or a manifest racing the accept) could
@@ -549,9 +558,10 @@ export class SupplyRepository {
             });
             let next = nextTagOrdinal(last?.nfcTagCode);
 
+            const ids = input.tags.map(() => randomUUID());
             await tx.nfcTag.createMany({
-                data: input.tags.map((tag) => ({
-                    id: randomUUID(),
+                data: input.tags.map((tag, index) => ({
+                    id: ids[index]!,
                     nfcTagCode: formatTagCode(next++),
                     supplyBatchId: input.batchId,
                     tagUidHash: tag.uidHash,
@@ -566,6 +576,28 @@ export class SupplyRepository {
                     lifecycleState: TagLifecycleState.UNPROVISIONED,
                 })),
             });
+
+            // The keys the vendor wrote onto each chip, already wrapped. Same
+            // transaction as the chips: a chip is never stored without the
+            // keys it was sent with, nor keys without their chip. The vendor
+            // has already written them, so they are personalised from the start.
+            const now = new Date();
+            const keyRows = input.tags.flatMap((tag, index) =>
+                tag.keys
+                    ? [{
+                        nfcTagId: ids[index]!,
+                        tagUidEncrypted: tag.uidEncrypted,
+                        tagUidHash: tag.uidHash,
+                        key0Wrapped: new Uint8Array(tag.keys.key0Wrapped),
+                        key1Wrapped: new Uint8Array(tag.keys.key1Wrapped),
+                        key2Wrapped: new Uint8Array(tag.keys.key2Wrapped),
+                        kmsKeyRef: tag.keys.kmsKeyRef,
+                        personalizedAt: now,
+                        createdById: input.createdById ?? null,
+                    }]
+                    : [],
+            );
+            if (keyRows.length > 0) await tx.nfcTagKey.createMany({ data: keyRows });
 
             // Same counters per variant line, when the consignment has lines.
             const perVariant = new Map<string, { received: number; accepted: number }>();
@@ -607,7 +639,7 @@ export class SupplyRepository {
                 select: batchSelect,
             });
 
-            return { created: input.tags.length, batch };
+            return { created: input.tags.length, keysCreated: keyRows.length, batch };
         });
     }
 

@@ -1,5 +1,7 @@
 # NFC Claim API (demo)
 
+> **Current flow:** see [Secure tap flow](#secure-tap-flow-current-tap-url--verify--claim) — `POST /claim` and `GET /verify?u=&e=&c=`. The tag-id routes below are deprecated.
+
 The authenticity flow behind HitBox collectibles. Every physical item ships
 with an NFC tag (`Sku.tagId`). A user taps the tag to **claim** first
 ownership. Re-tapping a claimed item just tells you **who owns it**.
@@ -25,6 +27,169 @@ ownership. Re-tapping a claimed item just tells you **who owns it**.
 > **Scope note:** peer-to-peer **transfer/trading is intentionally out of scope**
 > for the demo. The ledger still supports it (a `TRANSFER` row type exists) but
 > no transfer endpoint is exposed.
+
+---
+
+## Secure tap flow (current): tap URL → verify → claim
+
+> **This is the flow the app uses.** The tag-id routes further down
+> (`POST /claims/:tagId`, `POST /claims/:tagId/confirm`, `GET /verify/:tagId`) are
+> **deprecated**. They keep working, and answer with a `Deprecation: true` header,
+> until `CLAIMS_LEGACY_TAG_ROUTES=false` turns them into `410`.
+
+Every collectible carries an NXP NTAG 424 DNA chip with **its own** Key 00/01/02
+(table `NfcTagKey`, stored only wrapped by the KMS). Its UID is written into the
+URL once, as plain text, when the chip is programmed. On each tap the chip fills
+in fresh `e` and `c`:
+
+```
+https://hitboxcollectibles.com/verify?u=<UID, 14 hex>&e=<32 hex>&c=<16 hex>
+```
+
+| Param | What it is |
+|---|---|
+| `u` | The chip UID. A lookup hint only: anyone can edit it, so the UID the chip encrypted into `e` must equal it. |
+| `e` | Encrypted PICC data (AES-128-CBC, zero IV, the chip's **Key 01**): `0xC7 \| UID(7) \| counter(3, LE) \| padding`. |
+| `c` | SDM MAC (the chip's **Key 02**): 8 bytes of an AES-CMAC under a session key derived from Key 02, the UID and the counter. |
+
+The counter goes up on every tap, so **a URL is good for exactly one use**: call
+**either** claim **or** verify for one tap, never both (the second is a `REPLAY`).
+
+**The app never decrypts and never holds a key.** It reads the URL from the tag
+and sends `u`, `e`, `c` to the server.
+
+### What the server does, in this order
+
+| # | Step | Refused as (logged only — never sent to the caller) |
+|---|---|---|
+| 1 | format: `u` 14 hex, `e` 32 hex, `c` 16 hex | `BAD_FORMAT` |
+| 2 | find the chip by `ITagCipher.hash(u.toUpperCase())` | `UNKNOWN_TAG` |
+| 3 | chip lifecycle `BOUND` or `ACTIVE` | `TAG_NOT_ACTIVE` |
+| 4 | the chip's ACTIVE `NfcTagKey` row | `NO_KEYS` (never keyed, revoked, or the row names another UID) |
+| 5 | unwrap Key 01 / Key 02 (memory only, zeroed after) | *(HTTP 500, not logged as tamper)* |
+| 6 | decrypt `e` with Key 01, first byte `0xC7` | `BAD_PICC` |
+| 7 | UID inside `e` equals `u` (constant time) | `UID_MISMATCH` |
+| 8 | check `c` with Key 02 (constant time) | `BAD_CMAC` |
+| 9 | chip is embedded in a unit (`Sku.currentNfcTagId`) | `NO_ITEM` |
+| 10 | atomic `updateMany where lastTapCounter < counter` on the `NfcTagKey` row | `REPLAY` |
+
+The counter lives on `NfcTagKey.lastTapCounter` (new rows start at `-1`, so a
+first tap with counter 0 passes) and is consumed only at step 10, after
+everything else passed, so a forged URL can never burn a real chip's counter.
+Every attempt from step 1 on writes one `NfcVerification` row (result,
+`reasonCode`, counter, chip, unit, `nfcTagKeyId`, request id) — never `e`,
+`c`, the UID or a key.
+
+### Chip keys (admin, permission `nfc-tag-claim:manage:global`; responses with keys are `no-store`)
+
+| Route | Does |
+|---|---|
+| `POST /admin/supply/tags/:tagId/keys` | generate Key 00/01/02 for one chip; returns the keys, UID and URL **once** |
+| `POST /admin/supply/batches/:batchId/tag-keys` | body `{ limit? }` (default 500, max 1000); keys that many un-keyed chips, returns a CSV once (contains secrets, delete after programming) and how many remain |
+| `POST /admin/supply/tag-keys/:nfcTagKeyId/personalize` | record that the keys were written onto the chip |
+| `POST /admin/supply/tags/:tagId/keys/revoke` | body `{ reason }`; the chip then fails `NO_KEYS` until re-keyed (old rows are kept) |
+| `GET /admin/supply/tags/:tagId/keys` | the active key row's metadata, never key material |
+
+**Keys sent with the chip manifest.** When the vendor writes the keys onto the chips, the manifest (`POST /admin/supply/batches/:batchId/tags` and the vendor portal's `POST /vendor/batches/:batchId/tags`) takes optional `key0`, `key1`, `key2` per row (32 hex each, all three or none, all different). The server wraps them and creates the chip's ACTIVE `NfcTagKey` row in the same transaction as the chip, marked personalised. The response and the audit row carry only a count (`withKeys` / `keysRegistered`). With no key wrapper configured a manifest carrying keys is refused (503 `SUPPLY_KEY_WRAPPER_UNAVAILABLE`). Check a consignment afterwards with `apps/backend/scripts/check-chip-keys.ts <batchRef>` (read-only).
+
+Audit events: `supply.tag-keys.generate`, `supply.tag-keys.personalize`, `supply.tag-keys.revoke`.
+
+### `POST /claim` 🔒
+
+```json
+{ "u": "<14 hex>", "e": "<32 hex>", "c": "<16 hex>", "visibility": "PRIVATE" }
+```
+
+`visibility` is optional (`PUBLIC` | `PRIVATE`, default `PRIVATE`). The claimer is
+always the signed-in user. Unknown body fields are a `422`.
+
+- Tap does not authenticate → **HTTP 200**
+  `{ "data": { "verified": false, "outcome": "NOT_VERIFIED", "message": "…" } }`.
+  The message is the same whatever failed (forged, replayed, unknown, no keys).
+- Authenticated and unclaimed → claims it (the existing transaction: `Sku` →
+  `CLAIMED`, `SkuClaim`, MINT/CLAIM ledger rows, `SkuHistory`,
+  `BuyerCollection`, `claims.product.claimed`) and moves the chip and unit to
+  `ACTIVE`. `outcome: "CLAIMED"`.
+- Authenticated and already claimed → **changes nothing**. `outcome:
+  "ALREADY_CLAIMED"`, with `claimedByYou`.
+
+`outcome` is one of `CLAIMED`, `ALREADY_CLAIMED`,
+`CLAIMED_BY_OTHER_JUST_NOW` (lost a simultaneous race by milliseconds),
+`UNAVAILABLE` (authentic, but frozen or in transfer), or `NOT_VERIFIED`.
+
+```json
+{
+  "data": {
+    "verified": true,
+    "outcome": "CLAIMED",
+    "claimedByYou": true,
+    "message": "You claimed \"Demo Collectible\". You now own it.",
+    "owner": { "id": "…", "handle": "alice", "displayName": "alice" },
+    "sku": { "id": "…", "skuCode": "HB-DEMO-001-000007", "serialNumber": 7, "claimedStatus": "CLAIMED" },
+    "product": {
+      "id": "…", "groupCode": "HB-DEMO-001", "name": "Demo Collectible", "status": "ACTIVE",
+      "rarity": "RARE", "imageUrl": "https://…", "priceInDollars": "49.00", "currency": "USD"
+    },
+    "claimedAt": "2026-10-26T10:00:00.000Z",
+    "claim": { "id": "…", "claimCode": "HBPC123456", "claimedNo": 1 }
+  }
+}
+```
+
+### `GET /verify?u=&e=&c=` (public, no login)
+
+Authenticity check only. **Never claims.** Returns `{ verified, claimed,
+claimedStatus, sku, product, owner, claimedAt, verifiedAt }`, or the generic
+`{ verified: false, message }`.
+
+> **One tap = one use.** A URL spent on `GET /verify` is rejected as a replay if
+> it is then sent to `POST /claim`. The app calls **either** verify **or** claim
+> with a given tap, never both. In the Claim section it calls claim directly; to
+> claim after a verify the user taps again.
+
+### Owner privacy (both endpoints)
+
+Someone else's owner details (`owner`) are returned **only when that owner made
+the item `PUBLIC`**. If it is `PRIVATE` (or the owner has no live collection
+entry) `owner` is `null` and the message says "claimed by another collector".
+The owner always sees themselves (`claimedByYou: true`).
+
+### Rate limits
+
+On top of the global limiter: `GET /verify` 30 / min per IP; `POST /claim` 30 /
+min per IP **and** 15 / min per user. Over the limit → `429`.
+
+### Status codes
+
+| Code | Meaning |
+|---|---|
+| 200 | Any authenticated or unauthenticated tap (check `verified` / `outcome`) |
+| 401 | `POST /claim` without a session |
+| 422 | Malformed `u` / `e` / `c`, or an unknown body field (including the old `b`) |
+| 429 | Rate limited |
+| 503 | No verifier configured (no key wrapper or `NFC_TAG_UID_KEY`) |
+| 500 | The chip's keys could not be unwrapped (server fault) |
+
+### Before a tap verifies
+
+When a consignment is accepted and minted into units, each chip moves to
+`BOUND` — which is what lets a tap verify.
+
+### Environment
+
+| Variable | Purpose |
+|---|---|
+| `NFC_TAG_UID_KEY` | ≥32 chars. Hashes chip UIDs (`NfcTag.tagUidHash`). Do not change once chips are registered. |
+| `NFC_KMS_KEY_REF` | Names the KMS key that wraps chip keys. |
+| `NFC_LOCAL_WRAP_KEY` | **Development only.** ≥32 chars. Local stand-in for a KMS; refused when `NODE_ENV=production`. |
+| `CLAIMS_LEGACY_TAG_ROUTES` | `false` turns the deprecated tag-id routes into `410`. |
+
+---
+
+## Legacy tag-id flow (deprecated)
+
+The sections below describe the original flow, keyed by the raw chip UID in the
+path. It is kept for existing clients only.
 
 ---
 
@@ -113,7 +278,140 @@ message reads *"You already own …"*.)
    `productId`.
 
 **Errors:** `401 UNAUTHENTICATED` (no session), `404 CLAIMS_TAG_NOT_FOUND` (tag
-matches no SKU), `422 VALIDATION_ERROR` (bad body).
+matches no SKU), `422 VALIDATION_ERROR` (bad body), plus the claim-token
+errors in the next section.
+
+---
+
+## Claim integrity: the one-shot token (US-P018)
+
+The two-step flow is `POST /claims/:tagId` (validate) then
+`POST /claims/:tagId/confirm` (claim). Validate now mints a **single-use claim
+token**; confirm spends it.
+
+### Why
+
+Without it, a confirm request is replayable. Capture one, and it does nothing
+while the item stays claimed — but `revokeClaim()` puts a refunded unit back to
+`UNCLAIMED`, and at that moment the captured request works and the refunded
+buyer owns the item again. The token closes that: it is burned inside the claim
+transaction, before the item is touched, and it never returns to a usable
+state.
+
+It also gives the loser of a simultaneous tap something specific to say. Two
+people tapping at once used to get the same `ALREADY_CLAIMED` as someone
+tapping an item claimed weeks ago.
+
+### Validate — two new response fields
+
+```json
+{
+  "data": {
+    "screen": "CLAIMABLE",
+    "claimToken": "3Yk9r0Xh2tQ7bN4vL8pW1zA6sD5fG3jK0mC2xV9qR8E",
+    "claimTokenExpiresAt": "2026-09-29T14:02:00.000Z"
+  }
+}
+```
+
+| Field | Notes |
+|-------|-------|
+| `claimToken` | Raw token, returned **once**. Only the SHA-256 is stored. `null` on the `ALREADY_CLAIMED` and `ALREADY_CLAIMED_BY_YOU` screens — there is nothing to authorise. |
+| `claimTokenExpiresAt` | ISO 8601, 120 seconds out. After this, re-validate. |
+
+Re-validating the same item as the same user **supersedes** the previous token.
+Another user's live token for the same item is untouched — that is the whole
+reason this is a table (`ClaimToken`) and not the old `Sku.claimToken` column,
+which could only hold one.
+
+### Confirm — one new body field
+
+```json
+{ "visibility": "PUBLIC", "claimToken": "3Yk9r0Xh2tQ7bN4vL8pW1zA6sD5fG3jK0mC2xV9qR8E" }
+```
+
+| Field | Type | Required | Notes |
+|-------|------|:--------:|-------|
+| `claimToken` | `string` | See the flag below | The value from validate. Body is still `.strict()` — unknown fields are a `422`. |
+
+### New outcome — `CLAIMED_BY_OTHER_JUST_NOW` (`200`)
+
+```json
+{
+  "data": {
+    "outcome": "CLAIMED_BY_OTHER_JUST_NOW",
+    "claimedByYou": false,
+    "message": "This item was just claimed by someone else.",
+    "owner": { "id": "clx9user0007", "handle": "jameela", "displayName": "jameela" },
+    "claim": null
+  }
+}
+```
+
+Returned only when the item was `UNCLAIMED` at the start of the request and
+`CLAIMED` by the time the transaction ran — a genuine simultaneous tap. An item
+that was already someone else's before the caller tapped still returns
+`ALREADY_CLAIMED`, unchanged.
+
+The losing tap's token is burned to `LOST_TIEBREAK`. A lost tap still spends its
+token: leaving a reusable one behind would reopen the replay hole the moment the
+item was ever revoked.
+
+### Token errors
+
+| Situation | HTTP | Code |
+|-----------|:----:|------|
+| Already used — consumed, lost a tiebreak, or superseded | `409` | `CLAIMS_TOKEN_REUSED` |
+| Past its 120-second TTL | `410` | `CLAIMS_TOKEN_EXPIRED` |
+| Missing (flag on), malformed, wrong user, or wrong item | `400` | `CLAIMS_TOKEN_INVALID` |
+
+All three mean the same thing to a client: **call validate again** and confirm
+with the new token. The sub-reason (wrong user vs. wrong item vs. never issued)
+is logged, never returned — telling a caller which would let them probe whether
+a token exists and who holds it.
+
+### Rollout flag — `CLAIM_TOKEN_REQUIRED`
+
+Env var, `false` by default.
+
+| Flag | Confirm with no `claimToken` | Confirm with a `claimToken` |
+|------|------------------------------|------------------------------|
+| `false` (default) | Old behaviour, plus a log line with `metric: claims.token.missing` | Checked in full |
+| `true` | `400 CLAIMS_TOKEN_INVALID` | Checked in full |
+
+There is no mode in which a token that *was* sent is ignored. `CLAIMED_BY_OTHER_JUST_NOW`
+applies either way — the race fix is not gated on the rollout.
+
+Turn it on once app builds that predate the token are out of circulation.
+
+### What the token adds to the claim transaction
+
+Ahead of everything in the list above, and inside the same transaction:
+
+0. **Burn the token** — a conditional update matching `tokenHash` + `skuId` +
+   `userId` + `status = ISSUED` + not consumed + not expired. Zero rows matched
+   throws, which rolls the whole transaction back, so a replayed request
+   changes nothing on its way to being refused. Ordering matters: if the SKU
+   flip ran first, a replay would claim the item and only then be rejected.
+
+…and at the end, `ClaimToken.claimId` is set to the new claim, so a `CONSUMED`
+token without a claim never commits.
+
+A `claimCode` collision still retries. The rollback un-consumes the token too,
+so the retry re-enters the transaction with it back at `ISSUED`.
+
+### Analytics
+
+| Event | Payload | Why |
+|-------|---------|-----|
+| `claims.token.rejected` | `{ skuId, userId, reason, tokenId, at }` | A trickle is clients retrying; a spike on one item or one actor is someone replaying captured requests. Only visible in aggregate. |
+| `claims.tiebreak.lost` | `{ skuId, loserUserId, winnerUserId, tokenId, at }` | The only way to know how often two people genuinely tap at once. |
+
+Both also write a structured log line carrying a `metric` field, so a log query
+does not have to match on message text.
+
+The `ClaimToken` table is the audit record — status, `replayCount`,
+`lastReplayAt`, `requestId`. The raw token is never logged.
 
 ---
 
@@ -215,29 +513,48 @@ remains as an idempotent way to backfill one unit.
 
 | Code | HTTP | Raised when |
 |------|:----:|-------------|
-| `CLAIMS_TAG_NOT_FOUND` | 404 | No SKU is registered to the tag |
-| `CLAIMS_CODE_TAKEN`    | 409 | Couldn't allocate a unique claim code (retries exhausted) |
-| `UNAUTHENTICATED`      | 401 | Missing/invalid session on `POST /claim` |
-| `VALIDATION_ERROR`     | 422 | Path param or body failed schema validation |
+| `CLAIMS_TAG_NOT_FOUND`  | 404 | No SKU is registered to the tag |
+| `CLAIMS_CODE_TAKEN`     | 409 | Couldn't allocate a unique claim code (retries exhausted) |
+| `CLAIMS_TOKEN_REUSED`   | 409 | The claim token was already spent — consumed, lost a tiebreak, or superseded |
+| `CLAIMS_TOKEN_EXPIRED`  | 410 | The claim token passed its 120-second TTL |
+| `CLAIMS_TOKEN_INVALID`  | 400 | Missing (with `CLAIM_TOKEN_REQUIRED=true`), malformed, or issued to another user or item |
+| `UNAUTHENTICATED`       | 401 | Missing/invalid session on `POST /claims` |
+| `VALIDATION_ERROR`      | 422 | Path param or body failed schema validation |
 
 Note: "already claimed" is **not** an error — it's a normal `200` with
-`outcome: "ALREADY_CLAIMED"`.
+`outcome: "ALREADY_CLAIMED"`. Neither is losing a simultaneous tap: that is a
+`200` with `outcome: "CLAIMED_BY_OTHER_JUST_NOW"`.
+
+The three token errors all mean the same thing to a client: **call validate
+again** and confirm with the new token. Retrying the same request can only fail
+the same way.
 
 ---
 
 ## Quick curl walkthrough
 
 ```bash
-# Tap 1 — claim it (authenticated)
-curl -X POST http://localhost:4000/api/v1/claim/E2ETAG0000001 \
+# Step 1 — validate. Returns the screen to show AND a one-shot claim token.
+CLAIM_TOKEN=$(curl -sX POST http://localhost:4000/api/v1/claims/E2ETAG0000001 \
+  -H "Authorization: Bearer $TOKEN" | jq -r .data.claimToken)
+# → screen: "CLAIMABLE", claimToken: "3Yk9…", claimTokenExpiresAt: 120s out
+
+# Step 2 — confirm, spending the token.
+curl -X POST http://localhost:4000/api/v1/claims/E2ETAG0000001/confirm \
   -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"visibility":"PUBLIC"}'
+  -d "{\"visibility\":\"PUBLIC\",\"claimToken\":\"$CLAIM_TOKEN\"}"
 # → outcome: "CLAIMED", you are the owner
 
-# Tap 2 — someone else taps the same tag
-curl -X POST http://localhost:4000/api/v1/claim/E2ETAG0000001 \
+# Replay that exact confirm — the attack the token stops.
+curl -X POST http://localhost:4000/api/v1/claims/E2ETAG0000001/confirm \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d "{\"visibility\":\"PUBLIC\",\"claimToken\":\"$CLAIM_TOKEN\"}"
+# → 409 CLAIMS_TOKEN_REUSED, and no second claim row
+
+# Someone else taps the same tag — validate issues no token, nothing to claim.
+curl -X POST http://localhost:4000/api/v1/claims/E2ETAG0000001 \
   -H "Authorization: Bearer $OTHER_TOKEN"
-# → outcome: "ALREADY_CLAIMED", message: "… already claimed by <name>."
+# → screen: "ALREADY_CLAIMED", claimToken: null
 
 # Read-only status / provenance (no auth)
 curl http://localhost:4000/api/v1/verify/E2ETAG0000001

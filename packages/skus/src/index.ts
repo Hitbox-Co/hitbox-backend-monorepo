@@ -17,6 +17,23 @@
  *     domain/sku-access.ts.
  */
 
+export type { KeyWrapper } from './domain/interfaces/key-wrapper.interface';
+export {
+    aesCmac,
+    computeSdmMac,
+    decryptPicc,
+    generateAesKey,
+    verifySdmMac,
+} from './nfc/sun-crypto';
+export type { PiccData } from './nfc/sun-crypto';
+export { NFC_TAP_REASON, NfcVerifyService } from './nfc/nfc-verify.service';
+export type {
+    INfcTapVerifier,
+    NfcTapInput,
+    NfcTapReason,
+    TapVerification,
+} from './nfc/nfc-verify.service';
+
 export { createSkusModule } from './module';
 export type { SkusModule, SkusModuleDeps, SkusPermissionGuard } from './module';
 

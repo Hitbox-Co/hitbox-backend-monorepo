@@ -697,7 +697,7 @@ model AuthWebhookEvent {
 // CLAIMS MODULE SCHEMA  (packages/claims/prisma/claims.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: SkuClaim, BlockchainLedger, SkuHistory
+// Owns: SkuClaim, BlockchainLedger, SkuHistory, ClaimToken
 //
 // Provenance. Three append-only views of the same truth:
 //   SkuClaim         — the act of claiming (who tapped, when, which drop)
@@ -810,6 +810,73 @@ model SkuHistory {
   startedAt   DateTime
   endedAt     DateTime?
   isCurrent   Boolean
+}
+
+/// One-shot authorisation to claim one SKU, issued by the validate step and
+/// burned by confirm. This is what makes a replayed confirm request detectable:
+/// without it, "claim this tag" is a request anyone who captured it can send
+/// again, and after a revocation puts the unit back to UNCLAIMED it would
+/// succeed.
+///
+/// A row per issuance rather than a column on `Sku` (`Sku.claimToken`, now
+/// deprecated) because two people tapping the same item at once each need
+/// their own live token. One column holds one token, so the second tap would
+/// overwrite the first and the loser could not even be told *why* it lost.
+///
+/// Only the SHA-256 of the token is stored. The raw value exists in the
+/// validate response and in the confirm request and nowhere else — a database
+/// dump must not be a list of working claim authorisations.
+model ClaimToken {
+  id        String           @id @default(uuid(7)) @db.Uuid
+  /// SHA-256 hex of the raw token. Unique so one token can never be replayed
+  /// against a second item, and so the compare-and-swap in confirm has an
+  /// index to land on.
+  tokenHash String           @unique @db.Char(64)
+  skuId     String           @db.Uuid
+  sku       Sku              @relation(fields: [skuId], references: [id])
+  userId    String           @db.Uuid
+  user      User             @relation(fields: [userId], references: [id])
+  status    ClaimTokenStatus @default(ISSUED)
+
+  issuedAt   DateTime  @default(now())
+  expiresAt  DateTime
+  consumedAt DateTime?
+  /// The SkuClaim this token produced. A plain id, not a foreign key: the
+  /// token table is an audit record and must survive whatever happens to the
+  /// claim, same rule as the rest of the provenance side.
+  claimId    String?   @db.Uuid
+
+  /// How many times this token was presented after it stopped being valid.
+  /// A non-zero value on a CONSUMED token is a retry or a replay; on a
+  /// LOST_TIEBREAK token it is usually a client that did not re-validate.
+  replayCount  Int       @default(0)
+  lastReplayAt DateTime?
+  /// Correlates the issuing request with the confirm that used it.
+  requestId    String?
+
+  /// "Every token ever issued for this item", newest first — the audit read.
+  @@index([skuId, issuedAt])
+  /// Supersede this user's live tokens for this item when they re-validate.
+  @@index([userId, skuId, status])
+  /// Sweep stale ISSUED tokens, and count rejections by status over a window.
+  @@index([status, issuedAt])
+}
+
+/// Lifecycle of a claim token. Everything except ISSUED is terminal, which is
+/// what makes "already used" answerable: a token never returns to a usable
+/// state, so a replay is a status check rather than a guess.
+enum ClaimTokenStatus {
+  /// Live and usable until `expiresAt`.
+  ISSUED
+  /// Spent on a successful claim. `claimId` points at what it bought.
+  CONSUMED
+  /// Spent, but the simultaneous tap it raced lost. The token is burned
+  /// anyway — a lost tap must not leave a reusable authorisation behind.
+  LOST_TIEBREAK
+  /// Replaced because the same user validated the same item again.
+  SUPERSEDED
+  /// Presented after `expiresAt`, or swept by a later cleanup.
+  EXPIRED
 }
 
 /// Kind of ownership event on the provenance chain. Each SKU's ledger runs
@@ -3029,11 +3096,18 @@ model Sku {
   supplyBatch   SupplyBatch? @relation(fields: [supplyBatchId], references: [id])
 
   // ── One-shot claim token ──────────────────────────────────────────────────
-  /// Single-use token minted on tap and burned on claim. Unique so a token can
-  /// never be replayed against a second SKU. Stays on the item, not the chip:
-  /// it authorises a claim of *this unit*, and survives a chip replacement.
+  // Superseded by ClaimToken (packages/claims), which is a row per issuance.
+  // One column can only hold one live token, so two people tapping the same
+  // item at once overwrite each other's — the loser of that race could not be
+  // told why it lost, and the winner's token was whichever wrote last.
+  //
+  // Kept, not dropped: `claimTokenUsedAt` is still stamped by the claim
+  // transaction and reads as "this unit has been claimed at least once".
+  /// @deprecated — use ClaimToken (packages/claims/prisma/claims.prisma)
   claimToken         String?   @unique
+  /// @deprecated — use ClaimToken.issuedAt
   claimTokenIssuedAt DateTime?
+  /// @deprecated — use ClaimToken.consumedAt; still written by the claim tx
   claimTokenUsedAt   DateTime?
 
   // ── Trust / anti-fraud state ──────────────────────────────────────────────
@@ -3053,6 +3127,7 @@ model Sku {
 
   // ── Cross-module back-relations ───────────────────────────────────────────
   skuClaims             SkuClaim[]
+  claimTokens           ClaimToken[]
   blockchainLedgers     BlockchainLedger[]
   buyerCollections      BuyerCollection[]
   skuHistories          SkuHistory[]
@@ -3086,12 +3161,15 @@ model NfcVerification {
   skuId            String?            @db.Uuid
   sku              Sku?               @relation(fields: [skuId], references: [id])
   counter          Int?
-  result           VerificationResult
+  /// The per-tag key row used to check this tap. Plain column, no FK.
+  nfcTagKeyId      String?            @db.Uuid
+  result          VerificationResult
   reasonCode       String?            // internal only
   requestId        String
   createdAt        DateTime           @default(now())
 
   @@index([skuId, createdAt])
+  @@index([nfcTagId, createdAt])
 }
 
 /// Whether the item has been claimed by an owner. IN_TRANSFER blocks
@@ -3419,7 +3497,9 @@ model NfcTag {
   qcNotes         String?
   lifecycleState  TagLifecycleState @default(UNPROVISIONED)
   keyReference    String?           // KMS pointer — never a key
-  lastTapCounter  Int               @default(0)
+  /// Highest SDM counter seen from this chip. -1 = never tapped, so a first
+  /// tap that reports counter 0 still counts as an increase.
+  lastTapCounter  Int               @default(-1)
   tamperStatus    String?
   personalizedAt  DateTime?
   boundAt         DateTime?
@@ -3431,9 +3511,59 @@ model NfcTag {
   verifications   NfcVerification[]
   ledgerEntries   BlockchainLedger[]
   supportCases    SupportCase[]
+  /// Per-tag keys (Prisma-only relation, no column on this table).
+  keys            NfcTagKey[]
 
   @@index([skuId])
   @@index([variantId])
+}
+
+/// The secret keys of ONE physical tag (NTAG 424 DNA). Every tag has its own.
+/// Keys are stored ONLY wrapped by the KMS key named in `kmsKeyRef`; this
+/// table never holds a plaintext key and nothing may log one.
+///   Key 00  master key, only for re-keying the chip, never used to verify
+///   Key 01  decrypts `e` (PICC data: UID + counter)
+///   Key 02  checks `c` (SDM MAC)
+/// A tag may have several rows over time (re-keying); exactly one is ACTIVE.
+/// That is enforced by the partial unique index `NfcTagKey_one_active_per_tag`
+/// (UNIQUE ("nfcTagId") WHERE "status" = 'ACTIVE'), added by hand in the
+/// migration because Prisma cannot express it.
+model NfcTagKey {
+  id             String          @id @default(uuid(7)) @db.Uuid
+  /// Human-readable record id (`ntk…`). Written by the publicCode client extension.
+  publicCode     String?         @unique @db.VarChar(32)
+  nfcTagId       String          @db.Uuid
+  nfcTag         NfcTag          @relation(fields: [nfcTagId], references: [id])
+  /// The chip UID these keys belong to, kept with the keys so a key row says
+  /// which chip it is for. Same scheme as NfcTag: encrypted (never plaintext)
+  /// and a deterministic hash for lookup. Always written by the key service.
+  tagUidEncrypted String?
+  tagUidHash      String?
+  key0Wrapped    Bytes
+  key1Wrapped    Bytes
+  key2Wrapped    Bytes
+  /// Which KMS key wrapped the three above (ARN / key id).
+  kmsKeyRef      String
+  keyVersion     Int             @default(1)
+  status         NfcTagKeyStatus @default(ACTIVE)
+  /// Highest SDM read counter accepted with these keys. -1 = never tapped.
+  lastTapCounter Int             @default(-1)
+  lastTapAt      DateTime?
+  /// When the keys were written onto the chip. Null = generated, not written yet.
+  personalizedAt DateTime?
+  revokedAt      DateTime?
+  revokeReason   String?
+  /// No FK, same rule as other audit-style pointers in this schema.
+  createdById    String?         @db.Uuid
+  createdAt      DateTime        @default(now())
+
+  @@index([nfcTagId, status])
+  @@index([tagUidHash])
+}
+
+enum NfcTagKeyStatus {
+  ACTIVE
+  REVOKED
 }
 
 /// Vendor quality control on a chip, recorded before it is bound to anything.
@@ -4146,6 +4276,7 @@ model User {
   artists                  Artist?
   skus                     Sku[]
   skuClaims                SkuClaim[]
+  claimTokens              ClaimToken[]
   buyerCollections         BuyerCollection[]
   skuHistories             SkuHistory[]
   roleAssignment_user      RoleAssignment[]        @relation("User_user")

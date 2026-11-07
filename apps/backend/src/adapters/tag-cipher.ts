@@ -1,4 +1,4 @@
-import { createCipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
 import type { ITagCipher } from '@hitbox/supply';
 
 /**
@@ -58,6 +58,17 @@ export function createTagCipher(env: {
             return [iv, cipher.getAuthTag(), ciphertext]
                 .map((buffer) => buffer.toString('base64'))
                 .join('.');
+        },
+
+        /** Reverses `encrypt`. Throws on a wrong key or a tampered payload. */
+        decrypt(payload: string): string {
+            const [iv, tag, ciphertext] = payload
+                .split('.')
+                .map((part) => Buffer.from(part, 'base64'));
+            if (!iv || !tag || !ciphertext) throw new Error('Malformed tag cipher payload');
+            const decipher = createDecipheriv('aes-256-gcm', key, iv);
+            decipher.setAuthTag(tag);
+            return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8');
         },
     };
 }

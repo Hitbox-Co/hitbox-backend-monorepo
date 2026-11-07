@@ -1,5 +1,5 @@
 import { AccountStatus, UserRole } from '@hitbox/auth';
-import type { AccountSnapshot, IAccountLookup } from '@hitbox/auth';
+import type { AccountSnapshot, IAccountLookup, UserRegisteredPayload } from '@hitbox/auth';
 import type { UserRepository } from '../repository/user.repository';
 
 /**
@@ -10,7 +10,14 @@ import type { UserRepository } from '../repository/user.repository';
  * answers it. Auth never sees a `User` row.
  */
 export class UserAccountLookup implements IAccountLookup {
-    constructor(private readonly users: UserRepository) { }
+    constructor(
+        private readonly users: UserRepository,
+        /**
+         * The same projection the sign-up webhook drives. Optional: without it
+         * this adapter only looks accounts up and never creates one.
+         */
+        private readonly sync?: { syncFromClerk(payload: UserRegisteredPayload): Promise<void> },
+    ) { }
 
     async findByClerkUserId(clerkUserId: string): Promise<AccountSnapshot | null> {
         const user = await this.users.findByClerkId(clerkUserId);
@@ -41,6 +48,18 @@ export class UserAccountLookup implements IAccountLookup {
 
     emailExists(email: string): Promise<boolean> {
         return this.users.existsByEmail(email);
+    }
+
+    /**
+     * Runs the webhook's own creation path (`syncFromClerk`, an idempotent
+     * upsert that also announces the new account to everything that provisions
+     * per-user data), then reads the row back. A later webhook for the same user
+     * simply updates it.
+     */
+    async provisionFromClerk(payload: UserRegisteredPayload): Promise<AccountSnapshot | null> {
+        if (!this.sync) return null;
+        await this.sync.syncFromClerk(payload);
+        return this.findByClerkUserId(payload.clerkUserId);
     }
 }
 

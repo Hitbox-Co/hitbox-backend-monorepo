@@ -32,7 +32,7 @@ export function createUsersModule(deps: UsersModuleDeps): UsersModule {
     registerAuthEventSubscriptions({ eventBus: deps.eventBus, service, logger });
 
     return {
-        accountLookup: new UserAccountLookup(users),
+        accountLookup: new UserAccountLookup(users, service),
         service,
         createRouter(requireAuth) {
             const controller = new UserController(service);

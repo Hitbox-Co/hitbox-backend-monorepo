@@ -331,6 +331,14 @@ export interface SupplyBatchResponse {
  * `uid` is the raw chip UID. It is hashed and encrypted on the way in and is
  * never stored, logged or returned in the clear — see the tag cipher port.
  */
+/** One AES-128 chip key: 16 bytes as 32 hex. Separators are tolerated and stripped. */
+const chipKey = z
+    .string()
+    .trim()
+    .transform((value) => value.replace(/[\s:-]/g, '').toUpperCase())
+    .pipe(z.string().regex(/^[0-9A-F]{32}$/, 'A chip key must be 32 hex characters (16 bytes).'))
+    .optional();
+
 export const manifestRowSchema = z.object({
     /** Hex UID as the vendor prints it; separators are tolerated and stripped. */
     uid: z
@@ -348,8 +356,30 @@ export const manifestRowSchema = z.object({
      * has none.
      */
     variantId: z.string().uuid().optional(),
+    /**
+     * The chip's own NTAG 424 DNA keys, as the vendor wrote them onto it:
+     * Key 00 (master), Key 01 (decrypts `e`), Key 02 (checks `c`). All three
+     * or none. They are wrapped by the KMS on the way in and stored only
+     * wrapped (NfcTagKey); never stored, logged or returned in the clear.
+     */
+    key0: chipKey,
+    key1: chipKey,
+    key2: chipKey,
+}).superRefine((row, ctx) => {
+    const keys = [row.key0, row.key1, row.key2];
+    const given = keys.filter((key) => key !== undefined).length;
+    if (given !== 0 && given !== 3) {
+        ctx.addIssue({ code: 'custom', message: 'Send all three keys (key0, key1, key2) or none.', path: ['key0'] });
+    } else if (given === 3 && new Set(keys).size !== 3) {
+        ctx.addIssue({ code: 'custom', message: 'key0, key1 and key2 must all be different.', path: ['key0'] });
+    }
 });
 export type ManifestRow = z.infer<typeof manifestRowSchema>;
+
+/** True when a manifest row carries the chip's keys. */
+export function rowHasKeys(row: ManifestRow): row is ManifestRow & { key0: string; key1: string; key2: string } {
+    return row.key0 !== undefined && row.key1 !== undefined && row.key2 !== undefined;
+}
 
 export const registerTagsSchema = z.object({
     tags: z.array(manifestRowSchema).min(1).max(SUPPLY_MANIFEST_MAX),
@@ -367,6 +397,8 @@ export interface RegisterTagsResult {
     dryRun: boolean;
     /** Rows written (or that would be written, on a dry run). */
     registered: number;
+    /** Of those, rows that carried the chip's keys (stored wrapped). A count, never the keys. */
+    withKeys: number;
     /** Rows already present platform-wide, identified by position, never by UID. */
     duplicates: { row: number; reason: string }[];
     batch: {

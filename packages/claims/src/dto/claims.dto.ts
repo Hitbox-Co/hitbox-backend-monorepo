@@ -13,13 +13,25 @@ export type TagIdParam = z.infer<typeof tagIdParamSchema>;
 // ── Mutations ───────────────────────────────────────────────────────────
 
 /**
- * Claim carries no required body — the tag is in the path and the owner is the
- * authenticated caller. An optional visibility lets the buyer immediately
- * make the new collection entry public.
+ * Confirm body. The tag is in the path and the owner is the authenticated
+ * caller, so the only things here are the one-shot token from validate and an
+ * optional visibility that lets the buyer make the new collection entry public
+ * immediately.
+ *
+ * `claimToken` is optional in the schema, not in the flow: whether a missing
+ * token is accepted is the CLAIM_TOKEN_REQUIRED rollout decision, and the
+ * service makes it. Validating it as required here would turn the flag off
+ * into a 422 before the service ever saw the request.
+ *
+ * Still `.strict()` — an unknown field in a claim body is a client bug or a
+ * probe, and either is worth a 422.
  */
 export const claimBodySchema = z
     .object({
         visibility: z.enum(['PUBLIC', 'PRIVATE']).default('PRIVATE'),
+        /** base64url, 32 raw bytes → 43 chars. Bounded so a junk body is
+         *  rejected before it reaches a hash and an indexed lookup. */
+        claimToken: z.string().trim().min(16).max(256).optional(),
     })
     .strict();
 
@@ -92,16 +104,36 @@ export interface ValidateResult {
     };
     owner: OwnerView | null;
     claimedAt: string | null;
+    /**
+     * One-shot authorisation to claim this item, to be sent back on confirm.
+     * Non-null only on the `CLAIMABLE` screen — there is nothing to authorise
+     * on the other two, and minting a token for an item the caller cannot
+     * claim would hand out a credential for a claim that can never happen.
+     *
+     * This is the only place the raw token ever appears in a response.
+     */
+    claimToken: string | null;
+    /** ISO 8601. After this the token is refused and the app re-validates. */
+    claimTokenExpiresAt: string | null;
 }
 
 /**
  * POST /claims/:tagId/confirm — the single NFC claim result.
- * `outcome` is `CLAIMED` when this call claimed the product, or
- * `ALREADY_CLAIMED` when someone had already claimed it (then `owner` names
- * who). `claimedByYou` is true when the caller is the owner in either case.
+ *
+ * `outcome`:
+ *   - `CLAIMED` — this call claimed the item; `claim` carries the record.
+ *   - `CLAIMED_BY_OTHER_JUST_NOW` — this call lost a simultaneous race by
+ *     milliseconds. `owner` is whoever won, `claim` is null.
+ *   - `ALREADY_CLAIMED` — it belonged to someone before this request started.
+ *
+ * The last two differ only in *when*, and that is worth a distinct value: the
+ * app can say "someone just beat you to it" for a race, which is a different
+ * thing to tell a user than "this belongs to someone else".
+ *
+ * `claimedByYou` is true when the caller is the owner in any of the cases.
  */
 export interface ClaimFlowResult {
-    outcome: 'CLAIMED' | 'ALREADY_CLAIMED';
+    outcome: 'CLAIMED' | 'ALREADY_CLAIMED' | 'CLAIMED_BY_OTHER_JUST_NOW';
     claimedByYou: boolean;
     message: string;
     owner: OwnerView;
@@ -145,4 +177,101 @@ export interface LedgerEntryView {
     claimHistory: boolean;
     /** PeerToPeer Trading — Yes/No: is this owner eligible to trade P2P? */
     peerToPeerTrading: boolean;
+}
+
+// ── Tap-URL flow (u / e / c) ───────────────────────────────────────────────
+
+/**
+ * The values a tag's URL carries, format-checked only. Nothing here decrypts
+ * anything — the server does that after looking up the chip's keys.
+ *
+ *   u  the chip UID, 14 hex, written as plain text. A lookup hint only: the
+ *      UID inside `e` must match it.
+ *   e  32 hex (encrypted PICC data)
+ *   c  16 hex (SDM MAC)
+ */
+const tapFields = {
+    u: z
+        .string()
+        .trim()
+        .regex(/^[0-9a-fA-F]{14}$/, 'Invalid value.')
+        .transform((value) => value.toUpperCase()),
+    e: z.string().trim().regex(/^[0-9a-fA-F]{32}$/, 'Invalid value.'),
+    c: z.string().trim().regex(/^[0-9a-fA-F]{16}$/, 'Invalid value.'),
+};
+
+/** GET /verify?u=&e=&c= */
+export const verifyTapQuerySchema = z.object(tapFields);
+export type VerifyTapQuery = z.infer<typeof verifyTapQuerySchema>;
+
+/**
+ * POST /claim. The claimer is always the signed-in user — never a field here.
+ * `.strict()`: an unknown field in a claim body is a client bug or a probe.
+ */
+export const claimTapBodySchema = z
+    .object({
+        ...tapFields,
+        visibility: z.enum(['PUBLIC', 'PRIVATE']).default('PRIVATE'),
+    })
+    .strict();
+export type ClaimTapBody = z.infer<typeof claimTapBodySchema>;
+
+/** The product a tap resolved to — what the app shows without a second call. */
+export interface TapProductView {
+    id: string;
+    groupCode: string;
+    name: string;
+    status: DropStatus;
+    rarity: string | null;
+    imageUrl: string | null;
+    /** Base price in the default market; null when none is configured. */
+    priceInDollars: string | null;
+    currency: string | null;
+}
+
+/**
+ * A tap that did not authenticate. Deliberately says nothing about WHY: the
+ * real reason is in `NfcVerification.reasonCode`, for people, not for callers.
+ */
+export interface TapNotVerified {
+    verified: false;
+    message: string;
+}
+
+/** GET /verify?b=&e=&c= — authenticity + current state. Never claims. */
+export interface TapVerifyResult {
+    verified: true;
+    claimed: boolean;
+    claimedStatus: ClaimedStatus;
+    sku: { id: string; skuCode: string; serialNumber: number };
+    product: TapProductView;
+    /** Null when unclaimed, or when the owner keeps this item private. */
+    owner: OwnerView | null;
+    claimedAt: string | null;
+    verifiedAt: string;
+}
+
+/**
+ * POST /claim. `outcome`:
+ *   CLAIMED                    this tap claimed it
+ *   ALREADY_CLAIMED            it belonged to someone before this tap
+ *   CLAIMED_BY_OTHER_JUST_NOW  lost a simultaneous race by milliseconds
+ *   UNAVAILABLE                authentic, but frozen or in transfer right now
+ *
+ * `owner` is null when someone else owns it and keeps it private.
+ */
+export interface TapClaimResult {
+    verified: true;
+    outcome: 'CLAIMED' | 'ALREADY_CLAIMED' | 'CLAIMED_BY_OTHER_JUST_NOW' | 'UNAVAILABLE';
+    claimedByYou: boolean;
+    message: string;
+    owner: OwnerView | null;
+    sku: { id: string; skuCode: string; serialNumber: number; claimedStatus: ClaimedStatus };
+    product: TapProductView;
+    claimedAt: string | null;
+    claim: { id: string; claimCode: string; claimedNo: number } | null;
+}
+
+export interface TapClaimNotVerified extends TapNotVerified {
+    outcome: 'NOT_VERIFIED';
 }

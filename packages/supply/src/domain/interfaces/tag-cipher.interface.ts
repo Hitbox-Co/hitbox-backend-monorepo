@@ -20,6 +20,8 @@ export interface ITagCipher {
     hash(uid: string): string;
     /** The recoverable copy. Non-deterministic; never used as a lookup key. */
     encrypt(uid: string): string;
+    /** Reverses `encrypt`. Throws when the payload was not written under this key. */
+    decrypt(payload: string): string;
     /**
      * Which key produced these values, stored on the row as
      * `NfcTag.keyReference` — a pointer, never a key. Rotating the deployment

@@ -63,6 +63,23 @@ export const SUPPLY_ERROR_CODES = {
     ALLOTMENT_BELOW_ACCEPTED: 'SUPPLY_ALLOTMENT_BELOW_ACCEPTED',
     /** No identity provider / VENDOR role configured — invitations unavailable. */
     VENDOR_INVITATIONS_UNAVAILABLE: 'SUPPLY_VENDOR_INVITATIONS_UNAVAILABLE',
+
+    // ── NFC keys ────────────────────────────────────────────────────────────
+    /** No key wrapper / KMS key reference is configured — keys cannot be created. */
+    KEY_WRAPPER_UNAVAILABLE: 'SUPPLY_KEY_WRAPPER_UNAVAILABLE',
+
+    // ── Per-tag NFC keys ────────────────────────────────────────────────────
+    /** Refused: the chip already has ACTIVE keys; revoke them first to re-key. */
+    TAG_KEYS_EXIST: 'SUPPLY_TAG_KEYS_EXIST',
+    TAG_KEY_NOT_FOUND: 'SUPPLY_TAG_KEY_NOT_FOUND',
+    /** The chip has no ACTIVE keys to revoke. */
+    TAG_KEYS_NOT_ACTIVE: 'SUPPLY_TAG_KEYS_NOT_ACTIVE',
+    /** The keys were already recorded as written to the chip. */
+    TAG_KEYS_ALREADY_PERSONALIZED: 'SUPPLY_TAG_KEYS_ALREADY_PERSONALIZED',
+    /** The consignment has no chips that still need keys. */
+    NO_TAGS_NEED_KEYS: 'SUPPLY_NO_TAGS_NEED_KEYS',
+    /** No tag UID key is configured, so the chip UID cannot be read. */
+    TAG_UID_KEY_UNAVAILABLE: 'SUPPLY_TAG_UID_KEY_UNAVAILABLE',
 } as const;
 
 /**
@@ -160,6 +177,10 @@ export const SUPPLY_EVENTS = {
     VENDOR_DROP_ASSIGNED: 'supply.vendor.drop-assigned',
     VENDOR_DROP_UNASSIGNED: 'supply.vendor.drop-unassigned',
     VENDOR_ALLOTMENT_UPDATED: 'supply.vendor.allotment-updated',
+    /** Payloads carry ids and counts only — never a key, a UID or a URL. */
+    TAG_KEYS_GENERATED: 'supply.tag-keys.generated',
+    TAG_KEYS_PERSONALIZED: 'supply.tag-keys.personalized',
+    TAG_KEYS_REVOKED: 'supply.tag-keys.revoked',
 } as const;
 
 /**
@@ -181,4 +202,7 @@ export const SUPPLY_AUDIT_EVENTS = {
     VENDOR_DROP_ASSIGN: 'supply.vendor.drop.assign',
     VENDOR_DROP_UNASSIGN: 'supply.vendor.drop.unassign',
     VENDOR_DROP_ALLOTMENT: 'supply.vendor.drop.allotment',
+    TAG_KEYS_GENERATE: 'supply.tag-keys.generate',
+    TAG_KEYS_PERSONALIZE: 'supply.tag-keys.personalize',
+    TAG_KEYS_REVOKE: 'supply.tag-keys.revoke',
 } as const;
