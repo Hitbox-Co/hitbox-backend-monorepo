@@ -37,6 +37,7 @@ import type {
     PublishProductDto,
     ReplaceProductImagesDto,
     SetProductPricesDto,
+    SetRewardPointsDto,
     UpdateProductDto,
     UpdateProductImageDto,
     UpdateProductPriceDto,
@@ -130,6 +131,8 @@ export interface ProductResponse {
     complianceStatus: string;
     totalSupply: number;
     purchaseLimit: number | null;
+    /** Set by HitBox System Admin only; read-only for everyone else. */
+    rewardPoints: number;
     releaseStart: string | null;
     releaseEnd: string | null;
     publishedAt: string | null;
@@ -506,6 +509,39 @@ export class ProductService {
             ...relationUpdate('organization', organizationId),
         });
         await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, { productId: id });
+        return this.toResponse(product);
+    }
+
+    /**
+     * Sets a drop's reward points — System Admin only (the route is gated on
+     * `drop:configure` platform-wide). Audited with the before/after value;
+     * setting the value it already has writes and records nothing.
+     */
+    async setRewardPoints(input: {
+        id: string;
+        dto: SetRewardPointsDto;
+        actorId: string;
+        correlationId: string;
+    }): Promise<ProductResponse> {
+        const current = await this.requireById(input.id);
+        if (current.rewardPoints === input.dto.rewardPoints) return this.toResponse(current);
+
+        const product = await this.deps.products.update(input.id, { rewardPoints: input.dto.rewardPoints });
+        await this.deps.audit?.record({
+            eventType: PRODUCT_AUDIT_EVENTS.REWARD_POINTS_SET,
+            actorId: input.actorId,
+            organizationId: product.organizationId,
+            productId: input.id,
+            result: 'SUCCESS',
+            correlationId: input.correlationId,
+            before: { rewardPoints: current.rewardPoints },
+            after: { rewardPoints: product.rewardPoints },
+            ...(input.dto.reason ? { metadata: { reason: input.dto.reason } } : {}),
+        });
+        await this.deps.eventBus.publish(PRODUCT_EVENTS.PRODUCT_UPDATED, {
+            productId: input.id,
+            fields: ['rewardPoints'],
+        });
         return this.toResponse(product);
     }
 
@@ -1163,6 +1199,9 @@ export class ProductService {
             complianceStatus: product.complianceStatus,
             totalSupply: product.totalSupply,
             purchaseLimit: product.purchaseLimit,
+            // `?? 0`: drops cached in Redis by the build before this column
+            // existed have no value until their TTL runs out.
+            rewardPoints: product.rewardPoints ?? 0,
             releaseStart: toIso(product.releaseStart),
             releaseEnd: toIso(product.releaseEnd),
             publishedAt: toIso(product.publishedAt),

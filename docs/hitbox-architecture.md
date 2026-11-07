@@ -337,8 +337,10 @@ Current event catalog:
 | `products.product.created` | products | — (future: notifications, search index) | `{ productId, groupCode }` |
 | `products.product.updated` | products | — | `{ productId }` |
 | `products.product.archived` | products | — | `{ productId }` |
-| `claims.product.claimed` | claims | **finance** (accrue a royalty), **orders** (link `Order.claimId`), collections | `ProductClaimedPayload` |
-| `claims.claim.revoked` | claims | — | `ClaimRevokedPayload` |
+| `claims.product.claimed` | claims | **finance** (accrue a royalty), **orders** (link `Order.claimId`), collections, **content** (unlock a collection reward) | `ProductClaimedPayload` |
+| `claims.claim.revoked` | claims | **content** (end a reward whose set was broken) | `ClaimRevokedPayload` (now with `userId`, `productId`) |
+| `content.reward.moderated` | content | — (notifications: tell the artist) | `{ rewardId, collectionId, artistId, action, reason, actorId }`, see [content/admin-rewards-api.md](content/admin-rewards-api.md) |
+| `content.reward.unlocked` / `.access-lost` | content | — (notifications is the obvious next one) | `{ rewardId, collectionId, userId }` — [content/collection-rewards.md](content/collection-rewards.md) |
 | `finance.royalty.accrued` / `.reversed` | finance | — | see `@hitbox/finance` |
 | `finance.payout.scheduled` / `.paid` | finance | — (artist notification is the obvious next one) | see `@hitbox/finance` |
 | `payments.payment.succeeded` / `.failed` | payments | — | see `@hitbox/payments` |

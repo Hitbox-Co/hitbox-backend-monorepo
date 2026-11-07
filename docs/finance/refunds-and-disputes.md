@@ -131,12 +131,18 @@ that a failure leaves the least-bad state:
 | --- | --- | --- |
 | 1 | Gateway refund, or the operator's reference | Nothing has happened yet — safe to retry |
 | 2 | `RefundRequest` → `PROCESSED`, guarded | Two operators pressing execute produce one PROCESSED and one conflict |
-| 3 | `Order` → `REFUNDED` | — |
-| 4 | `FinanceLedgerEntry`: `REFUND`, keyed on the refund id | — |
-| 5 | **Claim revoked**, tag quarantined (`IClaimRevocation`) | Logged loudly, left for an operator |
+| 3 | **Claim revoked**, tag quarantined (`IClaimRevocation`). A damaged tag is quarantined even if the unit was never claimed | Logged loudly, left for an operator, and the unit is **not** released in step 4 |
+| 4 | `Order` → `REFUNDED`; the unit goes **back into stock** if it never shipped or the return was received (`unitReturned`) | — |
+| 5 | `FinanceLedgerEntry`: `REFUND`, keyed on the refund id | — |
 | 6 | **Royalty reversed** (`IRoyaltyReversal`) | Logged loudly, left for an operator |
 
-Steps 5 and 6 do not roll back steps 1–4, and that is intentional: the money has
+The tag step comes before the order step so a damaged unit is quarantined
+before it's released, and is never on sale in between. A lost dispute marks the
+order `REFUNDED` without releasing a shipped unit, because the item never came
+back. The full table is in
+[orders/order-payments-and-refunds-api.md 7](../orders/order-payments-and-refunds-api.md#the-unit-after-a-refund).
+
+Steps 3 and 6 do not roll back the money steps, and that is intentional: the money has
 already moved, and silently retrying a claim revocation against a unit somebody
 has since transferred would do more damage than an alert.
 

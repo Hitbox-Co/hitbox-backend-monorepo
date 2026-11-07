@@ -59,18 +59,23 @@ question a review asks, and every event answers it on its own row.
 The code catalog is the seed source and the fast path — not a second gate. A row inserted straight
 into the table still works: the recorder falls back to reading the table for keys it doesn't know.
 
-**66 events: 31 CRITICAL, 17 WARNING, 18 INFO** (as of the artist-administration
-events; `AUDIT_EVENT_CATALOG` is the authority — the command in 3 prints the current set).
+**81 events: 31 CRITICAL, 26 WARNING, 24 INFO** (as of the reward moderation events; `AUDIT_EVENT_CATALOG` is the authority — the command in 3 prints the current set).
 
 - **WARNING** — `permission.catalog.sync`, `organization.update`, `artist.collection.archive`,
   `artist.profile.compliance.attest`, `artist.profile.compliance.revoke`,
-  `artist.profile.deactivate`, `artist.profile.archive`,
+  `artist.profile.deactivate`, `artist.profile.archive`, `product.reward-points.set`,
+  `artist.collection.reward.remove`, `content.reward.switch-off`, `content.reward.remove`,
   `order.status.change`, `order.shipment.record`, `royalty.payout.schedule`, `release.approve`,
   `release.reject`, `release.reopen`, `supply.vendor.create`, `supply.vendor.update`,
-  `supply.batch.create`, `supply.batch.decide`
+  `supply.batch.create`, `supply.batch.decide`, `supply.vendor.member.invite`,
+  `supply.vendor.member.revoke`, `supply.vendor.drop.assign`, `supply.vendor.drop.allotment`,
+  `supply.vendor.drop.unassign`
 - **INFO** — `audit.read`, `artist.collection.create`, `artist.collection.update`,
   `artist.collection.restore`, `artist.collection.reorder`, `artist.collection.drops.add`,
-  `artist.collection.drops.remove`, `artist.profile.update`, `artist.profile.activate`,
+  `artist.collection.drops.remove`, `artist.collection.reward.save`,
+  `artist.collection.reward.item.add`, `artist.collection.reward.item.update`,
+  `artist.collection.reward.item.remove`, `content.reward.switch-on`, `content.reward.restore`,
+  `artist.profile.update`, `artist.profile.activate`,
   `artist.profile.restore`, `artist.profile.publish`, `artist.profile.unlist`,
   `royalty.accrue`, `product.create`,
   `product.update`, `release.submit`, `release.amend`, `content.unlock`
@@ -78,7 +83,11 @@ events; `AUDIT_EVENT_CATALOG` is the authority — the command in 3 prints the c
 **Artist collections** (`artist.collection.*`, persona group `artist`) record every change an
 artist makes to their collections — actor type `ARTIST`, resource `ArtistCollection` (`Artist`
 for a reorder), before/after snapshots. Written through the artist module's own audit port.
-See [artist-collection/README.md 6](../artist-collection/README.md#6-audit-trail).
+See [artist-collection/README.md 6](../artist-collection/README.md#6-audit-trail). Collection rewards
+(`artist.collection.reward.*`, resource `ContentBundle`) are in
+[content/collection-rewards.md 6](../content/collection-rewards.md#6-audit-trail-and-events). HitBox
+moderating a reward (`content.reward.*`, persona `hitbox_admin`) is in
+[content/admin-rewards-api.md 6](../content/admin-rewards-api.md#6-audit-trail-and-events).
 
 **Artist records** (`artist.profile.*`, persona group `hitbox_admin`) record every change HitBox
 staff make to an artist — edits, compliance attestation, activate/deactivate, archive/restore,

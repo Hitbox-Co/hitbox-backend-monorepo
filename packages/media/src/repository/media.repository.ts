@@ -15,6 +15,8 @@ export interface AssetRef {
     organizationId: string | null;
     /** Set for an artist-owned asset (avatar / cover). */
     artistId: string | null;
+    /** Set for a collection-owned asset (exclusive content, hero image). */
+    collectionId: string | null;
     virusScanStatus: VirusScanStatus;
     /** Return evidence must have been uploaded by the person attaching it. */
     uploadedById: string;
@@ -50,6 +52,7 @@ export class MediaRepository {
                 productId: true,
                 organizationId: true,
                 artistId: true,
+                collectionId: true,
                 virusScanStatus: true,
                 uploadedById: true,
                 fileName: true,

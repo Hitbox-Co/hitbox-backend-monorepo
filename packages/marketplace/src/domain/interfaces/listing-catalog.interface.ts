@@ -5,11 +5,10 @@ import type { MarketplaceCategory } from '../enums/marketplace-category.enum';
  * (description, provenance, all images) come from GET /products/:id when
  * the card is opened.
  *
- * `rewardPoints` and `badge` were removed when the catalog schema was
- * restructured: `Product.rewardPoints` and `Product.marketplaceStatus` no
- * longer exist, and nothing replaced them. They were dropped rather than
- * stubbed with `0`/`null`, so the card advertises only fields the database
- * can actually answer for.
+ * `badge` was removed when the catalog schema was restructured:
+ * `Product.marketplaceStatus` no longer exists, and nothing replaced it.
+ * `rewardPoints` is back as `Drop.rewardPoints` — set by HitBox System
+ * Admin, `0` when none were set.
  */
 export interface MarketplaceListingItem {
     id: string;
@@ -20,6 +19,8 @@ export interface MarketplaceListingItem {
     priceInDollars: string | null;
     /** ISO code of the market the price is quoted in; null when there is no price. */
     currency: string | null;
+    /** Reward points a buyer earns with this drop. */
+    rewardPoints: number;
 }
 
 /**

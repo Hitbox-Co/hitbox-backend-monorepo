@@ -21,6 +21,7 @@ import { ArtistCollectionService } from './collection/service/artist-collection.
 import {
     AdminArtistCollectionController,
     ArtistCollectionController,
+    ArtistRewardController,
 } from './collection/controller/artist-collection.controller';
 import {
     COLLECTION_READ_CAPABILITY,
@@ -35,6 +36,8 @@ import type { ArtistUserIdResolver } from './self/controller/artist-self.control
 import type { IArtistImageStorage } from './self/domain/artist-image-storage.interface';
 import type { IArtistAuditRecorder } from './domain/interfaces/audit-recorder.port';
 import type { IDropCollectionMembership } from './collection/domain/drop-membership.port';
+import type { ICollectionRewards } from './collection/domain/collection-rewards.port';
+import { ArtistRewardService } from './collection/service/artist-reward.service';
 import { ArtistSelfRepository } from './self/repository/artist-self.repository';
 import {
     ARTIST_ADMIN_READ_CAPABILITY,
@@ -87,6 +90,13 @@ export interface ArtistModuleDeps {
      * ARTIST_COLLECTION_DROPS_UNAVAILABLE and the rest still works.
      */
     drops?: IDropCollectionMembership | undefined;
+    /**
+     * Collection rewards — exclusive content a buyer unlocks by collecting
+     * every drop of a collection — provided by @hitbox/content
+     * (`contentModule.collectionRewards`). Optional: without it the reward
+     * routes answer ARTIST_COLLECTION_REWARDS_UNAVAILABLE.
+     */
+    rewards?: ICollectionRewards | undefined;
     /**
      * The audit hook. Every collection change is recorded through it
      * (`artist.collection.*`). Required to build the self-service and
@@ -178,6 +188,13 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
         insights: deps.insights,
         eventBus: deps.eventBus,
         logger,
+    });
+    const rewardService = new ArtistRewardService({
+        collections,
+        artists: selfRepository,
+        audit: deps.audit ?? { record: () => Promise.reject(new Error('artist module built without an audit recorder')) },
+        rewards: deps.rewards,
+        eventBus: deps.eventBus,
     });
     const selfService = new ArtistSelfService({
         artists: selfRepository,
@@ -282,6 +299,19 @@ export function createArtistModule(deps: ArtistModuleDeps): ArtistModule {
             router.get('/collections/:collectionId/available-drops', readCollections, collectionsController.availableDrops);
             router.post('/collections/:collectionId/drops', writeCollections, collectionsController.addDrops);
             router.delete('/collections/:collectionId/drops/:dropId', writeCollections, collectionsController.removeDrop);
+            // The collection reward: exclusive content (video, music, GIFs,
+            // images) a buyer unlocks by collecting every drop of the
+            // collection. docs/content/collection-rewards.md.
+            const rewardController = new ArtistRewardController(rewardService, resolveUserId);
+            router.get('/collections/:collectionId/reward', readCollections, rewardController.get);
+            router.put('/collections/:collectionId/reward', writeCollections, rewardController.save);
+            router.delete('/collections/:collectionId/reward', writeCollections, rewardController.remove);
+            router.post('/collections/:collectionId/reward/items/upload-url', writeCollections, rewardController.createItemUpload);
+            router.post('/collections/:collectionId/reward/items', writeCollections, rewardController.addItem);
+            // Before '/items/:itemId' so "order" is never read as an id.
+            router.put('/collections/:collectionId/reward/items/order', writeCollections, rewardController.reorderItems);
+            router.patch('/collections/:collectionId/reward/items/:itemId', writeCollections, rewardController.updateItem);
+            router.delete('/collections/:collectionId/reward/items/:itemId', writeCollections, rewardController.removeItem);
             router.post('/collections/:collectionId/hero/upload-url', writeCollections, collectionsController.createHeroUpload);
             router.put('/collections/:collectionId/hero', writeCollections, collectionsController.setHero);
             router.delete('/collections/:collectionId/hero', writeCollections, collectionsController.removeHero);

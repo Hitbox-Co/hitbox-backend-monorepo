@@ -85,6 +85,7 @@ export class MarketplaceListingAdapter implements IListingCatalog {
             artistName: row.artist?.name ?? row.collection?.artist.name ?? null,
             priceInDollars: price ? (price.isFree ? '0' : (price.amount?.toString() ?? null)) : null,
             currency: price?.market.currency ?? null,
+            rewardPoints: row.rewardPoints,
         };
     }
 }

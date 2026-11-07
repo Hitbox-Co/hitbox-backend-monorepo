@@ -13,6 +13,12 @@ import type { AssetRef } from './repository/media.repository';
 import { MediaService } from './service/media.service';
 import type { ScanPipelineMode } from './service/media.service';
 import { ReturnEvidenceService } from './service/return-evidence.service';
+import { ExclusiveContentService } from './service/exclusive-content.service';
+import type {
+    ExclusiveContentAsset,
+    ExclusiveContentLink,
+    ExclusiveContentUpload,
+} from './service/exclusive-content.service';
 import type {
     ReturnEvidenceAsset,
     ReturnEvidenceFile,
@@ -94,6 +100,24 @@ export interface MediaModule {
      * media applies the file rules and checks the bytes really arrived.
      */
     returnEvidence: IReturnEvidenceMedia;
+    /**
+     * Collection reward files (EXCLUSIVE_CONTENT). The provider side of the
+     * content module's `IRewardMedia` port: uploads to a private prefix,
+     * inspection, and short-lived signed links.
+     */
+    exclusiveContent: IExclusiveContentMedia;
+}
+
+export interface IExclusiveContentMedia {
+    createUpload(input: {
+        collectionId: string;
+        uploadedById: string;
+        fileName: string;
+        mimeType: string;
+        sizeBytes: number;
+    }): Promise<ExclusiveContentUpload>;
+    inspect(assetIds: string[]): Promise<ExclusiveContentAsset[]>;
+    links(assetIds: string[]): Promise<ExclusiveContentLink[]>;
 }
 
 export interface IReturnEvidenceMedia {
@@ -158,9 +182,20 @@ export function createMediaModule(deps: MediaModuleDeps): MediaModule {
         repository,
         storage: deps.storage,
     });
+    const exclusiveContent = new ExclusiveContentService({
+        media: service,
+        repository,
+        storage: deps.storage,
+    });
 
     return {
         assets: { findByIds: (ids) => repository.findManyByIds(ids) },
+
+        exclusiveContent: {
+            createUpload: (input) => exclusiveContent.createUpload(input),
+            inspect: (ids) => exclusiveContent.inspect(ids),
+            links: (ids) => exclusiveContent.links(ids),
+        },
 
         returnEvidence: {
             createUpload: (input) => returnEvidence.createUpload(input),

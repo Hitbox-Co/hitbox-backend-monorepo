@@ -9,6 +9,7 @@ import {
     publishProductSchema,
     replaceProductImagesSchema,
     setProductPricesSchema,
+    setRewardPointsSchema,
     updateProductImageSchema,
     updateProductPriceSchema,
     updateProductSchema,
@@ -104,6 +105,23 @@ export class ProductController {
                 actorId: correlated.authz?.userId ?? 'unknown',
                 // A fresh id still joins the audit row to itself; one that threw
                 // because the middleware was not mounted is a lost record.
+                correlationId: correlated.correlationId ?? randomUUID(),
+            }),
+        });
+    });
+
+    /** PUT /admin/products/:id/reward-points — System Admin only. */
+    setRewardPoints: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = setRewardPointsSchema.parse(req.body);
+        const correlated = req as typeof req & {
+            correlationId?: string;
+            authz?: { userId?: string };
+        };
+        res.json({
+            data: await this.service.setRewardPoints({
+                id: req.params.id as string,
+                dto,
+                actorId: correlated.authz?.userId ?? 'unknown',
                 correlationId: correlated.correlationId ?? randomUUID(),
             }),
         });

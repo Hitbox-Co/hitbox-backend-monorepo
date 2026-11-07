@@ -183,6 +183,8 @@ const HITBOX_SYSTEM_ADMIN: RoleDefinition = {
         'self-profile:manage:global',
         'buyer-profile:manage:global',
         'drop:manage:global',
+        // Reward points on a drop — System Admin only.
+        'drop:configure:global',
         'drop-type:manage:global',
         'release-approval:manage:global',
         'release-approval:override:global',

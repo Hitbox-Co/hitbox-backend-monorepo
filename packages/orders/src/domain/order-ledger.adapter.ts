@@ -66,7 +66,13 @@ export class OrderLedgerAdapter {
         return this.orders.markFailed(input);
     }
 
-    markRefunded(input: { orderId: string; refundedAt: Date; refundRequestId?: string; actorId?: string | null }): Promise<boolean> {
+    markRefunded(input: {
+        orderId: string;
+        refundedAt: Date;
+        refundRequestId?: string;
+        actorId?: string | null;
+        unitReturned?: boolean;
+    }): Promise<boolean> {
         return this.orders.markRefunded(input);
     }
 

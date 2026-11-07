@@ -13,6 +13,85 @@ import {
 import { imageUploadRequestSchema, setImageSchema } from '../../self/dto/artist-self.dto';
 import type { ArtistUserIdResolver } from '../../self/controller/artist-self.controller';
 import type { ArtistCollectionService } from '../service/artist-collection.service';
+import type { ArtistRewardService } from '../service/artist-reward.service';
+import {
+    addRewardItemSchema,
+    reorderRewardItemsSchema,
+    rewardUploadSchema,
+    saveRewardSchema,
+    updateRewardItemSchema,
+} from '../dto/collection-reward.dto';
+
+/** HTTP for /api/v1/artist/collections/:collectionId/reward. Parse, delegate, respond. */
+export class ArtistRewardController {
+    constructor(
+        private readonly service: ArtistRewardService,
+        private readonly resolveUserId: ArtistUserIdResolver,
+    ) { }
+
+    private userId(req: Request): string {
+        const id = this.resolveUserId(req);
+        if (!id) throw AppError.unauthorized('Sign in first.');
+        return id;
+    }
+
+    private collectionId(req: Request): string {
+        return req.params.collectionId as string;
+    }
+
+    /** GET …/reward — `data: null` when the collection has no reward yet. */
+    get: RequestHandler = asyncHandler(async (req, res) => {
+        res.json({ data: await this.service.get(this.userId(req), this.collectionId(req)) });
+    });
+
+    /** PUT …/reward */
+    save: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = saveRewardSchema.parse(req.body);
+        res.json({ data: await this.service.save(this.userId(req), this.collectionId(req), dto) });
+    });
+
+    /** DELETE …/reward */
+    remove: RequestHandler = asyncHandler(async (req, res) => {
+        res.json({ data: await this.service.remove(this.userId(req), this.collectionId(req)) });
+    });
+
+    /** POST …/reward/items/upload-url */
+    createItemUpload: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = rewardUploadSchema.parse(req.body);
+        res.status(201).json({
+            data: await this.service.createItemUpload(this.userId(req), this.collectionId(req), dto),
+        });
+    });
+
+    /** POST …/reward/items */
+    addItem: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = addRewardItemSchema.parse(req.body);
+        res.status(201).json({ data: await this.service.addItem(this.userId(req), this.collectionId(req), dto) });
+    });
+
+    /** PUT …/reward/items/order */
+    reorderItems: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = reorderRewardItemsSchema.parse(req.body);
+        res.json({ data: await this.service.reorderItems(this.userId(req), this.collectionId(req), dto) });
+    });
+
+    /** PATCH …/reward/items/:itemId */
+    updateItem: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = updateRewardItemSchema.parse(req.body);
+        res.json({
+            data: await this.service.updateItem(
+                this.userId(req), this.collectionId(req), req.params.itemId as string, dto,
+            ),
+        });
+    });
+
+    /** DELETE …/reward/items/:itemId */
+    removeItem: RequestHandler = asyncHandler(async (req, res) => {
+        res.json({
+            data: await this.service.removeItem(this.userId(req), this.collectionId(req), req.params.itemId as string),
+        });
+    });
+}
 
 /** HTTP for /api/v1/artist/collections. Parse, delegate, respond. */
 export class ArtistCollectionController {

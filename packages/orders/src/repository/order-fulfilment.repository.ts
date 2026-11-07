@@ -70,6 +70,26 @@ const liveHold = (now: Date): Prisma.InventoryReservationWhereInput => ({
     OR: [{ status: 'COMMITTED' }, { status: 'HELD', expiresAt: { gt: now } }],
 });
 
+/**
+ * A unit a packer may put in a parcel, by every rule a scan checks
+ * (`unshippableReason` plus "free"): live, unclaimed, not blocked, tag bound
+ * and BOUND, and on no order and no live hold. Used to list what to pick, so
+ * the list can never offer a unit the scan will then refuse.
+ */
+const packableWhere: Prisma.SkuWhereInput = {
+    isActive: true,
+    archivedAt: null,
+    claimedStatus: 'UNCLAIMED',
+    resaleBlocked: false,
+    tagId: { not: null },
+    tagLifecycleState: 'BOUND',
+};
+
+const freeWhere = (now: Date): Prisma.SkuWhereInput => ({
+    orders: { none: {} },
+    inventoryReservations: { none: liveHold(now) },
+});
+
 /** Orders waiting for a packer: paid, holding stock, no confirmed unit yet. */
 const waitingWhere = (organizationIds: string[] | null): Prisma.OrderWhereInput => ({
     status: { in: [...UNIT_ASSIGNABLE_STATUSES] },
@@ -96,6 +116,80 @@ export class OrderFulfilmentRepository {
             });
         }
         return Promise.resolve(null);
+    }
+
+    /**
+     * Who already has this unit, if anyone: the order it was sold on, or the
+     * order whose live hold is on it. Read outside the swap transaction to
+     * explain a refusal; the transaction re-checks and stays the authority.
+     */
+    async unitHolder(
+        skuId: string,
+        now: Date,
+    ): Promise<{ reason: 'SOLD' | 'HELD'; orderId: string | null; orderPublicCode: string | null; orderStatus: string | null } | null> {
+        const sold = await this.prisma.order.findFirst({
+            where: { skuId },
+            orderBy: { placedAt: 'desc' },
+            select: { id: true, publicCode: true, status: true },
+        });
+        if (sold) {
+            return { reason: 'SOLD', orderId: sold.id, orderPublicCode: sold.publicCode, orderStatus: sold.status };
+        }
+        const hold = await this.prisma.inventoryReservation.findFirst({
+            where: { skuId, ...liveHold(now) },
+            select: { order: { select: { id: true, publicCode: true, status: true } } },
+        });
+        if (!hold) return null;
+        return {
+            reason: 'HELD',
+            orderId: hold.order.id,
+            orderPublicCode: hold.order.publicCode,
+            orderStatus: hold.order.status,
+        };
+    }
+
+    /**
+     * Units that would pass a scan for this order: the right drop (and
+     * variant, when the order has one), packable, and free — or the unit
+     * already held for this order (its placeholder, or its confirmed unit).
+     */
+    async candidates(input: {
+        productId: string;
+        variantId: string | null;
+        heldSkuId: string;
+        search?: string | undefined;
+        skip: number;
+        take: number;
+        now: Date;
+    }): Promise<{ total: number; items: { id: string; skuCode: string; serialNumber: number; tagId: string | null; variantId: string | null }[] }> {
+        const serial = input.search && /^\d+$/.test(input.search) ? Number(input.search) : undefined;
+        const where: Prisma.SkuWhereInput = {
+            productId: input.productId,
+            ...(input.variantId !== null ? { variantId: input.variantId } : {}),
+            ...packableWhere,
+            AND: [
+                { OR: [{ id: input.heldSkuId }, freeWhere(input.now)] },
+                ...(input.search
+                    ? [{
+                        OR: [
+                            { skuCode: { contains: input.search, mode: 'insensitive' as const } },
+                            ...(serial !== undefined ? [{ serialNumber: serial }] : []),
+                        ],
+                    }]
+                    : []),
+            ],
+        };
+        const [total, items] = await Promise.all([
+            this.prisma.sku.count({ where }),
+            this.prisma.sku.findMany({
+                where,
+                select: { id: true, skuCode: true, serialNumber: true, tagId: true, variantId: true },
+                orderBy: { serialNumber: 'asc' },
+                skip: input.skip,
+                take: input.take,
+            }),
+        ]);
+        return { total, items };
     }
 
     async queue(

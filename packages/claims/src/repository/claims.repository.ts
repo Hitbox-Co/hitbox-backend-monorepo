@@ -293,7 +293,7 @@ export class ClaimsRepository {
         reason: string;
         resaleBlockedUntil: Date | null;
         now: Date;
-    }): Promise<{ claimId: string | null; ledgerEntryId: string } | null> {
+    }): Promise<{ claimId: string | null; userId: string | null; ledgerEntryId: string } | null> {
         const { sku, reason, resaleBlockedUntil, now } = params;
 
         return this.prisma.$transaction(async (tx) => {
@@ -313,7 +313,24 @@ export class ClaimsRepository {
                     updatedAt: now,
                 },
             });
-            if (released.count === 0) return null;
+            if (released.count === 0) {
+                // Never claimed (or already revoked): nothing to take back —
+                // but a returned tag that is damaged, missing or tampered with
+                // is still quarantined. Otherwise an unclaimed unit would go
+                // back on sale with a tag nobody trusts.
+                if (resaleBlockedUntil) {
+                    await tx.sku.updateMany({
+                        where: { id: sku.id, claimedStatus: 'UNCLAIMED' },
+                        data: {
+                            resaleBlocked: true,
+                            resaleBlockedReason: reason.slice(0, 500),
+                            tagLifecycleState: 'DISPUTED',
+                            updatedAt: now,
+                        },
+                    });
+                }
+                return null;
+            }
 
             const claim = params.claimId
                 ? await tx.skuClaim.findUnique({ where: { id: params.claimId } })
@@ -376,7 +393,7 @@ export class ClaimsRepository {
                 },
             });
 
-            return { claimId: claim?.id ?? null, ledgerEntryId: ledger.id };
+            return { claimId: claim?.id ?? null, userId: claim?.userId ?? null, ledgerEntryId: ledger.id };
         }, { maxWait: 10_000, timeout: 20_000 });
     }
 

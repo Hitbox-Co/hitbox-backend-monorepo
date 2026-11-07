@@ -663,18 +663,37 @@ All four actions return the updated refund (6.3).
 `process` is one operation with several consequences, all handled by the
 backend — the frontend just shows the result:
 
-1. **Money moves** — refund issued at Stripe by the adapter (or the supplied `gatewayRefundId` recorded). If this step fails, nothing below happens and the refund stays `APPROVED`.
-2. **The order becomes `REFUNDED`.**
-3. **Ownership is taken back if the buyer had claimed the item** — the claim is stamped revoked (`claimRevokedAt`, never deleted), the unit's owner is cleared, the ownership period is closed, the item leaves the buyer's collection, and a `FLAG` row is appended to the unit's provenance chain (the `CLAIM` row is never rewritten).
-4. **A damaged/missing/tampered tag blocks resale** for a period (`resaleBlockedUntil`) and puts the tag in `DISPUTED`.
-5. **Royalties are reversed** — the artist's royalty for that sale is reversed with an adjustment entry, so the artist isn't paid for a refunded sale.
+1. **Money moves**: the Stripe adapter issues the refund, or the supplied `gatewayRefundId` is recorded. If this step fails, nothing below happens and the refund stays `APPROVED`.
+2. **Ownership is taken back if the buyer had claimed the item.** The claim is stamped revoked (`claimRevokedAt`, never deleted), the unit's owner is cleared, the ownership period is closed, the item leaves the buyer's collection, and a `FLAG` row is added to the unit's provenance chain (the `CLAIM` row is never rewritten).
+3. **A damaged, missing or tampered tag blocks resale** for a period (`resaleBlockedUntil`) and puts the tag in `DISPUTED`. This applies **whether or not the buyer had claimed it**.
+4. **The order becomes `REFUNDED`**, and the unit goes **back into stock** if it's physically back (below).
+5. **Royalties are reversed**: the artist's royalty for that sale is reversed with an adjustment entry, so the artist isn't paid for a refunded sale.
 
-A unit that **shipped** is **not** put back on sale automatically: whether it
-can be sold again is decided from the returned item's condition, through the
-SKU inventory tools ([admin/sku-inventory-management.md](../admin/sku-inventory-management.md)).
-A unit that **never shipped** (refunded while `PAID` / `PROCESSING`) goes
-straight back on sale: its hold is released and the order's `skuId` is
-cleared.
+Steps 2 and 3 run **before** the unit is released, so a damaged unit is
+quarantined before it's free and is never on sale in between.
+
+### The unit after a refund
+
+| The refund | The unit |
+|---|---|
+| Refunded before it shipped (`PAID` / `PROCESSING`) | **Back in stock**: it never left the warehouse |
+| Shipped, and the **return was received** (`confirm-return`, 6.4), tag `INTACT` | **Back in stock** and sellable straight away: checkout can sell it, and packing offers and accepts it |
+| Shipped, return received, tag `DAMAGED` / `MISSING` / `TAMPERED` | Released from the order but **quarantined** (`resaleBlocked`, tag `DISPUTED`) until `resaleBlockedUntil`; neither checkout nor packing will use it. Lift the block with the SKU inventory tools ([admin/sku-inventory-management.md](../admin/sku-inventory-management.md)) once it's checked. |
+| Shipped, **no return** (`physicalReturnRequired: false`, e.g. lost in transit), or a **lost dispute** (8) | **Stays on the order**: the item is still with the buyer or the courier, so it isn't offered for sale |
+
+"Back in stock" means the order lets go of the unit: the order's `skuId` is
+cleared and its stock hold is `RELEASED`. The released hold row, and the
+`REFUNDED` status-history entry (`metadata.releasedSkuId`), keep the record
+of which unit it was.
+
+If revoking the claim or quarantining the tag fails, the refund still
+completes, but the unit is **not** released. It's logged for an operator
+rather than put on sale with its tag unsettled.
+
+**Refunds made before this rule** left returned units attached to their
+orders. Release them once with
+`pnpm --filter ./apps/backend jobs:release-refunded-units`. It does a dry run
+first; add `--apply` to make the change.
 
 **Cancelling a paid order is a refund.** `PATCH …/status CANCELLED` refuses
 `PAID` / `PROCESSING` orders (`ORDERS_CANCEL_REQUIRES_REFUND`). Raise a refund
@@ -815,6 +834,7 @@ POST /api/v1/admin/payments/refunds/cf2e…/process
 {}
 → status PROCESSED, gatewayRefundId "re_…"; order → REFUNDED,
   money.refunded "29.00", money.refundable "0.00", canRequestRefund false (ORDER_NOT_REFUNDABLE)
+  The shirt came back with its tag INTACT, so its unit is back in stock (7).
 ```
 
 ### A return refused for a photo that never uploaded

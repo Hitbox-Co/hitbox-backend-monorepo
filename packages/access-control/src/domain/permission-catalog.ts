@@ -262,6 +262,10 @@ const DEFINITIONS: Record<string, string> = {
     'drop:read:global': 'View any drop, including unpublished.',
     'drop:manage:organization': "Create, edit and retire your organization's drops.",
     'drop:manage:global': 'Create, edit and retire any drop on the platform.',
+    // Platform-controlled drop settings — today a drop's reward points. NOT
+    // implied by drop:manage (MANAGE covers CRUD only), so a Drop Manager or an
+    // artist who edits the drop still cannot change them.
+    'drop:configure:global': "Set a drop's reward points.",
 
     // ── Drop types (variant configuration) ──────────────────────────────────
     'drop-type:manage:global':

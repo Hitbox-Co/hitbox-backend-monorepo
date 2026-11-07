@@ -22,9 +22,13 @@ export const MEDIA_CAPABILITY = 'assets-documents-upload' as const;
 export const ALLOWED_MIME_TYPES: Record<AssetType, string[]> = {
     [AssetType.DROP_IMAGE]: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
     [AssetType.PROFILE_IMAGE]: ['image/jpeg', 'image/png', 'image/webp', 'image/gif'],
+    // Collection rewards: video, music, GIFs and images (posters). The video
+    // and audio formats are the ones browsers and phones play natively.
     [AssetType.EXCLUSIVE_CONTENT]: [
         'image/jpeg', 'image/png', 'image/webp', 'image/gif',
-        'video/mp4', 'audio/mpeg', 'application/pdf',
+        'video/mp4', 'video/webm', 'video/quicktime',
+        'audio/mpeg', 'audio/mp4', 'audio/aac', 'audio/wav', 'audio/x-wav', 'audio/ogg', 'audio/flac',
+        'application/pdf',
     ],
     [AssetType.LEGAL_DOCUMENT]: ['application/pdf'],
     [AssetType.SUPPLY_SPREADSHEET]: [
@@ -64,6 +68,13 @@ export const DOWNLOAD_URL_TTL_SECONDS = 60;
  * URL copied out of the page stops working within minutes.
  */
 export const EVIDENCE_VIEW_URL_TTL_SECONDS = 300;
+
+/**
+ * GET lifetime for a collection reward's files. An hour: a video or a track
+ * is streamed with range requests for as long as it plays, and every one is
+ * checked against the signature — a five-minute URL stops a film halfway.
+ */
+export const EXCLUSIVE_VIEW_URL_TTL_SECONDS = 3600;
 
 export const MEDIA_DEFAULT_LIMIT = 20;
 export const MEDIA_MAX_LIMIT = 100;

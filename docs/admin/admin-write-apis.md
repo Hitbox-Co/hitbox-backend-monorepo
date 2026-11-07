@@ -442,6 +442,11 @@ Body as documented in [api-reference.md](../api-reference.md) — `name`,
 `releaseEnd`, `status`, `isAgeSpecific`, `minimumAge`, `oddsDisclosureRef`,
 `groupCode` (4-digit suffix).
 
+`rewardPoints` isn't part of this body. A drop starts at `0`, and only a
+System Admin changes it, with `PUT /admin/products/:id/reward-points`
+(`drop:configure:global`, which a Drop Manager doesn't hold). See
+[drop-reward-points.md](drop-reward-points.md).
+
 → `201 { "data": ProductResponse }`. The 12-digit `groupCode` is generated
 server-side: 8 random digits + your 4-digit suffix, retried on collision.
 

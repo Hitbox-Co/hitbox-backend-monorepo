@@ -63,7 +63,8 @@ export interface CollectionStatsDto {
  *     edition rather than a denormalized counter that could drift.
  *   - `claimedStatus` moved from the product to the SKU, which is where
  *     custody actually lives.
- *   - `genre` and `rewardPoints` are gone; neither has a replacement column.
+ *   - `genre` is gone and has no replacement column. `rewardPoints` is back,
+ *     from `Drop.rewardPoints` (set by HitBox System Admin).
  */
 export interface CollectionItemDto {
     id: string;
@@ -82,6 +83,7 @@ export interface CollectionItemDto {
         imageUrl: string | null;
         /** Free-form since the restructure; `ProductRarity` no longer exists. */
         rarity: string | null;
+        rewardPoints: number;
     };
 }
 
@@ -106,6 +108,7 @@ export function toCollectionItem(
             name: sku.drop.name,
             imageUrl: storageRef ? (mediaUrls?.publicUrl(storageRef) ?? null) : null,
             rarity: sku.drop.rarity,
+            rewardPoints: sku.drop.rewardPoints,
         },
     };
 }

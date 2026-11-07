@@ -55,6 +55,11 @@ model Drop {
   /// Max units one buyer may purchase; null = unlimited.
   purchaseLimit     Int?
   totalSupply       Int
+  /// Reward points a buyer earns with this drop. Set by HitBox System Admin
+  /// only (`drop:configure:global`, PUT /admin/products/:id/reward-points) —
+  /// not part of the drop form, so neither a Drop Manager nor the artist can
+  /// change it. Shown read-only everywhere a drop is shown. Never negative.
+  rewardPoints      Int               @default(0)
   releaseStart      DateTime?
   releaseEnd        DateTime?
   status            DropStatus

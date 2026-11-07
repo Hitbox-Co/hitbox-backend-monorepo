@@ -90,6 +90,17 @@ export const PRODUCT_WRITE_CAPABILITY = 'drop:manage' as const;
  */
 export const DROP_TYPE_MANAGE_CAPABILITY = 'drop-type:manage' as const;
 
+/**
+ * Setting a drop's reward points. `drop:configure` at global scope, held by
+ * HitBox System Admin alone: `drop:manage` (Drop Managers, Brand Admins,
+ * artists) does not imply CONFIGURE, so editing a drop never reaches its
+ * points. Reading them needs nothing extra — they are on every drop response.
+ */
+export const DROP_POINTS_CAPABILITY = 'drop:configure' as const;
+
+/** Upper bound on a drop's reward points — a typo guard, not a business rule. */
+export const REWARD_POINTS_MAX = 1_000_000;
+
 export const PRODUCT_EVENTS = {
     PRODUCT_CREATED: 'products.product.created',
     PRODUCT_UPDATED: 'products.product.updated',
@@ -116,6 +127,8 @@ export const VARIANT_EDITABLE_STATUSES = ['DRAFT', 'REJECTED'] as const;
 /** Audit event key for publication. Registered in the audit catalog. */
 export const PRODUCT_AUDIT_EVENTS = {
     PUBLISH: 'product.publish',
+    /** A System Admin set a drop's reward points. */
+    REWARD_POINTS_SET: 'product.reward-points.set',
 } as const;
 
 /**

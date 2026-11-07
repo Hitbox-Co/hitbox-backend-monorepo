@@ -57,13 +57,22 @@ export interface IOrderLedger {
     /** Payment failed or was abandoned: order → CANCELLED, hold released. */
     markFailed(input: { orderId: string; reason: string }): Promise<boolean>;
 
-    /** Refund completed: order → REFUNDED. */
+    /**
+     * Refund completed: order → REFUNDED.
+     *
+     * The order's unit goes back into stock when it is physically back with
+     * HitBox: it never shipped, or `unitReturned` says the return was
+     * received. Otherwise (a lost dispute, a refund with no return) the item
+     * is still with the buyer and stays on the order.
+     */
     markRefunded(input: {
         orderId: string;
         refundedAt: Date;
         /** Recorded on the order's status history. */
         refundRequestId?: string;
         actorId?: string | null;
+        /** The shipped item came back (return confirmed) — release it to stock. */
+        unitReturned?: boolean;
     }): Promise<boolean>;
 
     /** The money facts a refund or a chargeback needs. */

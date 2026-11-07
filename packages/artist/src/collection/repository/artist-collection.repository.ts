@@ -145,7 +145,8 @@ export class ArtistCollectionRepository {
             take: 100,
             select: {
                 id: true, publicCode: true, name: true, groupCode: true,
-                totalSupply: true, publishedAt: true, releaseStart: true, releaseEnd: true,
+                totalSupply: true, rewardPoints: true,
+                publishedAt: true, releaseStart: true, releaseEnd: true,
             },
         });
     }

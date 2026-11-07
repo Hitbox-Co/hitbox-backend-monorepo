@@ -384,50 +384,61 @@ export class OrderWriteRepository {
     }
 
     /**
-     * Refunded.
+     * Refunded — and the unit goes back into stock when it is back with us.
      *
-     * A unit that **shipped** keeps its reservation: it went to the buyer
-     * and came back, and whether it may be sold again is the refund
-     * workflow's call from the returned tag's condition — not something to
-     * infer from the money having moved.
+     * Released when the unit **never shipped** (refunded while PAID /
+     * PROCESSING — it never left the warehouse) or when the caller says the
+     * shipped unit **was returned** (`unitReturned`: the refund's return was
+     * received). Releasing means the order lets go of it (`skuId` cleared —
+     * checkout and packing treat any order pointing at a unit as a sale) and
+     * its hold is RELEASED. The released reservation row, and the status
+     * history's `releasedSkuId`, keep the record of which unit it was.
      *
-     * A unit that **never shipped** (refunded while PAID / PROCESSING) never
-     * left the warehouse, so it goes straight back on sale: its hold is
-     * released and the order lets go of it (`skuId` cleared — checkout treats
-     * any order pointing at a unit as a sale). The released reservation row
-     * keeps the record of which unit it was.
+     * Not released: a shipped unit with no confirmed return (a lost dispute,
+     * a refund without a return) — the item is still with the buyer, so
+     * offering it for sale would sell something that isn't on the shelf.
+     *
+     * Whether a released unit is *sellable* is still the unit's own state: a
+     * return with a damaged, missing or tampered tag is quarantined by claims
+     * (`resaleBlocked`) before this runs, and checkout and packing skip it.
      */
     async markRefunded(input: {
         orderId: string;
         refundedAt: Date;
         refundRequestId?: string;
         actorId?: string | null;
+        unitReturned?: boolean;
     }): Promise<boolean> {
         return this.prisma.$transaction(async (tx) => {
             const order = await tx.order.findFirst({
                 where: { id: input.orderId, status: { in: ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'] } },
-                select: { status: true, shippedAt: true },
+                select: { status: true, shippedAt: true, skuId: true },
             });
             if (!order) return false;
 
             const neverShipped =
                 (order.status === 'PAID' || order.status === 'PROCESSING') && order.shippedAt === null;
+            const restock = neverShipped || input.unitReturned === true;
             const updated = await tx.order.updateMany({
                 where: { id: input.orderId, status: order.status },
                 data: {
                     status: 'REFUNDED',
                     updatedAt: input.refundedAt,
-                    ...(neverShipped ? { skuId: null } : {}),
+                    ...(restock ? { skuId: null } : {}),
                 },
             });
             if (updated.count === 0) return false;
+            const metadata = {
+                ...(input.refundRequestId ? { refundRequestId: input.refundRequestId } : {}),
+                ...(restock && order.skuId ? { releasedSkuId: order.skuId } : {}),
+            };
             await recordStatusChange(tx, {
                 orderId: input.orderId, from: order.status, to: 'REFUNDED', source: 'REFUND',
                 actorId: input.actorId ?? null, at: input.refundedAt,
-                ...(input.refundRequestId ? { metadata: { refundRequestId: input.refundRequestId } } : {}),
+                ...(Object.keys(metadata).length > 0 ? { metadata } : {}),
             });
 
-            if (neverShipped) {
+            if (restock) {
                 await tx.inventoryReservation.updateMany({
                     where: { orderId: input.orderId, status: { in: ['HELD', 'COMMITTED'] } },
                     data: { status: 'RELEASED' },

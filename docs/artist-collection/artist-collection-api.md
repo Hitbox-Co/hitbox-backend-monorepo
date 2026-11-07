@@ -26,6 +26,7 @@ it is always the signed-in artist.
 | 10 | `GET /artist/collections/:collectionId/available-drops` | The **Add drops** picker: my active drops not already in this collection |
 | 11 | `POST /artist/collections/:collectionId/drops` | Add drops (or move them from another of my collections) |
 | 12 | `DELETE /artist/collections/:collectionId/drops/:dropId` | Take a drop out of this collection |
+| 13 | `/artist/collections/:collectionId/reward…` | The collection's **reward**: exclusive content a buyer unlocks by collecting every drop. Eight routes, documented in [content/collection-rewards.md](../content/collection-rewards.md) §3. |
 
 ---
 
@@ -122,6 +123,7 @@ else's id is `404`.
         "name": "Kaze Genesis — Single Card",
         "groupCode": "1001-0001",
         "totalSupply": 500,
+        "rewardPoints": 150,
         "publishedAt": "2026-09-10T12:00:00.000Z",
         "releaseStart": "2026-09-10T12:00:00.000Z",
         "releaseEnd": null
@@ -240,6 +242,10 @@ with no storage configured, step 1 returns `400 ARTIST_IMAGES_UNAVAILABLE`.
 
 ## 10–12. Drops in a collection
 
+> **Reward points.** Every drop shows `rewardPoints`, here and in 3. They're
+> set by HitBox System Admin; the artist sees them but can't change them
+> ([admin/drop-reward-points.md](../admin/drop-reward-points.md)).
+
 An artist files **their own** drops into **their own** collections. Three
 rules hold everywhere:
 
@@ -278,6 +284,7 @@ The collection must be live (not deleted) for all three.
       "name": "Kaze Genesis — Single Card",
       "groupCode": "1001-0001",
       "totalSupply": 500,
+      "rewardPoints": 150,
       "publishedAt": "2026-09-10T12:00:00.000Z",
       "currentCollection": null
     },

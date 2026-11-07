@@ -550,7 +550,7 @@ Current caps (`packages/media/src/constants/media.constant.ts`):
 | Asset type | Cap |
 |---|---|
 | `DROP_IMAGE`, `PROFILE_IMAGE` | 15 MB |
-| `EXCLUSIVE_CONTENT` | 500 MB |
+| `EXCLUSIVE_CONTENT` | 500 MB (collection rewards cap each kind lower: video 500 MB, music 100 MB, GIF 50 MB, image 25 MB, see [content/collection-rewards.md](../content/collection-rewards.md) §5) |
 | `LEGAL_DOCUMENT`, `SUPPLY_SPREADSHEET`, `OTHER` | 25 MB |
 
 **`sizeBytes` is required, and that is a consequence of dropping the worker.**

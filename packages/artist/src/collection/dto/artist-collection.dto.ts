@@ -218,6 +218,8 @@ export interface ArtistDropView {
     name: string;
     groupCode: string;
     totalSupply: number;
+    /** Set by HitBox System Admin; the artist sees it but cannot change it. */
+    rewardPoints: number;
     publishedAt: string | null;
     releaseStart: string | null;
     releaseEnd: string | null;
@@ -265,6 +267,8 @@ export interface AvailableDropView {
     name: string;
     groupCode: string;
     totalSupply: number;
+    /** Read-only — set by HitBox System Admin. */
+    rewardPoints: number;
     publishedAt: string | null;
     /**
      * Another of your collections it is in now — only with

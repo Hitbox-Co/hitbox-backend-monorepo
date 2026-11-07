@@ -7,6 +7,7 @@
     "dev": "tsx watch src/index.ts",
     "start": "tsx src/index.ts",
     "jobs:checkout-sweep": "tsx scripts/checkout-sweep.ts",
+    "jobs:release-refunded-units": "tsx scripts/release-refunded-units.ts",
     "build": "tsc"
   },
   "keywords": [],
@@ -20,6 +21,7 @@
     "@hitbox/auth": "workspace:*",
     "@hitbox/claims": "workspace:*",
     "@hitbox/collections": "workspace:*",
+    "@hitbox/content": "workspace:*",
     "@hitbox/dashboard": "workspace:*",
     "@hitbox/database": "workspace:*",
     "@hitbox/discover": "workspace:*",
