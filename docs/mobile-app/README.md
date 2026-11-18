@@ -19,6 +19,8 @@ and the folders under [../](../).
 | [collections-api.md](collections-api.md) | `/collections` | My Collection tab: owned items, stats |
 | [claims-nfc-api.md](claims-nfc-api.md) | `/claims`, `/claim`, `/verify`, `/ledger` | Scan tab: NFC tap → verify → claim ownership |
 | [rewards-api.md](rewards-api.md) | `/rewards` | Exclusive content unlocked by owning drops |
+| [wishlist-api.md](wishlist-api.md) | `/wishlist` | The heart on every card, and the Wishlist screen |
+| [cart-api.md](cart-api.md) | `/cart` | Add to cart, the Cart screen (each item checked out on its own) |
 | [orders-api.md](orders-api.md) | `/orders` | Checkout, order history, shipments (starts with the full purchase flow) |
 | [payments-api.md](payments-api.md) | buyer payment routes | Paying for an order, refund requests |
 | [invoices-api.md](invoices-api.md) | buyer invoice routes | Receipts / tax invoices |

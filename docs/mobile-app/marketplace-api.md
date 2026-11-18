@@ -34,8 +34,9 @@ Both endpoints are **public**. Sending the Clerk session
 | Valid token | `true` / `false` |
 | Expired or invalid token, unknown or suspended account | `null`: served as a guest, **never a 401** |
 
-Toggling the heart is not part of this module. See [auth-api.md](auth-api.md)
-for how tokens work.
+To toggle the heart, use `POST /wishlist` (on) and
+`DELETE /wishlist/products/:productId` (off). See [wishlist-api.md](wishlist-api.md).
+For how tokens work, see [auth-api.md](auth-api.md).
 
 ---
 
