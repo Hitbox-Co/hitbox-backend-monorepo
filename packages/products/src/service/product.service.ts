@@ -12,6 +12,7 @@ import {
     PRODUCTS_ERROR_CODES,
 } from '../constants/products.constant';
 import type { IMediaUrlResolver } from '../domain/interfaces/media-url-resolver.interface';
+import { isPubliclyViewable } from '../domain/drop-visibility';
 import type {
     ISkuMinting,
     SkuMintOutcome,
@@ -197,21 +198,6 @@ function generateUniqueSegment(): string {
         digits += String(randomInt(0, 10));
     }
     return digits;
-}
-
-/**
- * Whether the public detail routes may show a drop. Wider than the feeds'
- * PUBLIC_PRODUCT_WHERE (ACTIVE only) on purpose: a buyer who owns a unit of a
- * drop that has since ENDED still opens its detail from their collection, and
- * a PUBLISHED drop can be previewed before its release window opens. Drafts,
- * anything still in review or rejected, archived drops and drops behind the
- * `isActive` kill switch are never public — they 404 like a missing id, so
- * the response does not reveal that an unreleased drop exists.
- */
-const PUBLIC_DETAIL_STATUSES: ReadonlySet<string> = new Set(['PUBLISHED', 'ACTIVE', 'ENDED']);
-
-function isPubliclyViewable(product: { status: string; isActive: boolean; archivedAt: Date | null }): boolean {
-    return product.isActive && product.archivedAt === null && PUBLIC_DETAIL_STATUSES.has(product.status);
 }
 
 export class ProductService {

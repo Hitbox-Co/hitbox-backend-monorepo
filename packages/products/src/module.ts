@@ -17,6 +17,7 @@ import { CollectionMembershipAdapter } from './domain/collection-membership.adap
 import { ProductController } from './controller/product.controller';
 import { MarketplaceListingAdapter } from './domain/marketplace-listing.adapter';
 import { ProductDiscoveryAdapter } from './domain/product-discovery.adapter';
+import { DropCardLookupAdapter } from './domain/drop-card-lookup.adapter';
 import type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
 import type { IMediaAssets } from './domain/interfaces/media-assets.interface';
 import type { IMarketLookup } from './domain/interfaces/market-lookup.interface';
@@ -112,6 +113,8 @@ export interface ProductsModule {
     discovery: IProductDiscovery;
     /** Injected into createMarketplaceModule — marketplace's port, products' adapter. */
     listings: IListingCatalog;
+    /** Cards with state for a known set of drops — social's wishlist and orders' cart ports. */
+    cards: DropCardLookupAdapter;
     /**
      * Variant rules for other modules: skus asks before minting, releases
      * asks at submit. Satisfies their ports structurally.
@@ -157,6 +160,7 @@ export function createProductsModule(deps: ProductsModuleDeps): ProductsModule {
         service,
         discovery: new ProductDiscoveryAdapter(products, deps.mediaUrls),
         listings: new MarketplaceListingAdapter(products, deps.mediaUrls),
+        cards: new DropCardLookupAdapter(products, deps.mediaUrls),
         collectionMembership: new CollectionMembershipAdapter(products, deps.eventBus),
         variantPolicy: new VariantPolicyAdapter(variants),
 

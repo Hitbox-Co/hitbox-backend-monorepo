@@ -80,6 +80,23 @@ const dropCardSelect = {
 } satisfies Prisma.DropSelect;
 
 export type DropCardRow = Prisma.DropGetPayload<{ select: typeof dropCardSelect }>;
+
+/** A card plus what wishlist and cart need to say whether it can be bought. */
+const dropCardStateSelect = {
+    ...dropCardSelect,
+    status: true,
+    isActive: true,
+    archivedAt: true,
+    releaseStart: true,
+    releaseEnd: true,
+    dropVariants: {
+        where: { archivedAt: null },
+        orderBy: { position: 'asc' },
+        select: { id: true, label: true, isActive: true },
+    },
+} satisfies Prisma.DropSelect;
+
+export type DropCardStateRow = Prisma.DropGetPayload<{ select: typeof dropCardStateSelect }>;
 export type ProductDiscoverRow = DropCardRow;
 export type ProductListingRow = DropCardRow;
 
@@ -353,6 +370,19 @@ export class ProductRepository {
         const result: Result = { items, total };
         await this.cache.setList('discover-creators', params, result);
         return result;
+    }
+
+    /**
+     * Cards for a known set of drops — a user's wishlist or cart. No public
+     * filter: a wishlisted drop that has since ended must still render, with
+     * its state. Not cached; the set is per-user and small.
+     */
+    findCardsByIds(ids: string[]): Promise<DropCardStateRow[]> {
+        if (ids.length === 0) return Promise.resolve([]);
+        return this.prisma.drop.findMany({
+            where: { id: { in: ids } },
+            select: dropCardStateSelect,
+        });
     }
 
     /**

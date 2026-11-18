@@ -33,6 +33,10 @@ import { OrderRepository } from './repository/order.repository';
 import { OrderWriteRepository } from './repository/order-write.repository';
 import { OrderService } from './service/order.service';
 import { CheckoutSweepService } from './service/checkout-sweep.service';
+import { CartController } from './controller/cart.controller';
+import type { ICartCatalog } from './domain/interfaces/cart-catalog.interface';
+import { CartRepository } from './repository/cart.repository';
+import { CartService } from './service/cart.service';
 import type { CheckoutSweepResult } from './service/checkout-sweep.service';
 
 /** Structural guard — the shape of `requirePermission`, not an import. */
@@ -64,6 +68,11 @@ export interface OrdersModuleDeps {
      * Enforced by payments, which bootstrap gives the same number. Default 10.
      */
     returnWindowDays?: number;
+    /**
+     * Implemented by the products module (`productsModule.cards`). Needed only
+     * by the cart router; omit it and `createCartRouter` throws.
+     */
+    cartCatalog?: ICartCatalog;
 }
 
 /** The claim event orders links back to the order. Matches @hitbox/claims. */
@@ -79,6 +88,8 @@ export interface OrdersModule {
     createRouter(requireAuth: RequestHandler): Router;
     /** Mounted at `/orders`: the buyer's own orders (docs/orders/buyer-orders-api.md). */
     createBuyerRouter(requireAuth: RequestHandler): Router;
+    /** Mounted at `/cart`: the mobile cart (docs/mobile-app/cart-api.md). */
+    createCartRouter(requireAuth: RequestHandler): Router;
     /**
      * Payments' `IOrderLedger`: place an order, settle it, cancel it, refund
      * it, sweep expired stock holds. Checkout lives in payments because the
@@ -276,6 +287,27 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
                 controller.changeStatus,
             );
 
+            return router;
+        },
+
+        createCartRouter(requireAuth) {
+            if (!deps.cartCatalog) {
+                throw new Error('createCartRouter needs deps.cartCatalog (productsModule.cards).');
+            }
+            const cart = new CartService({
+                cart: new CartRepository(deps.prisma),
+                catalog: deps.cartCatalog,
+                logger,
+            });
+            const controller = new CartController(cart, deps.resolveBuyer);
+            const router = Router();
+            // Only the caller's own rows are read or written, so a signed-in
+            // account is the whole check — no capability, unlike /orders.
+            router.use(requireAuth);
+            router.get('/', controller.get);
+            router.post('/', controller.add);
+            router.delete('/', controller.clear);
+            router.delete('/:itemId', controller.remove);
             return router;
         },
 

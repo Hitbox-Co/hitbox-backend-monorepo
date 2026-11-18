@@ -6,6 +6,8 @@ export interface ApiRouters {
     products: Router;
     discover: Router;
     marketplace: Router;
+    wishlist: Router;
+    cart: Router;
     collections: Router;
     // NFC two-step claim (validate + confirm) + verify + ledger (claims module).
     claims: Router;
@@ -127,6 +129,8 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/products', routers.products);
     api.use('/discover', routers.discover);
     api.use('/marketplace', routers.marketplace);
+    api.use('/wishlist', routers.wishlist);
+    api.use('/cart', routers.cart);
     api.use('/collections', routers.collections);
     api.use('/claims', routers.claims);
     api.use('/claim', routers.claim);

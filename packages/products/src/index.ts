@@ -1,5 +1,8 @@
 // Module factory
 export { createProductsModule } from './module';
+export { DropCardLookupAdapter } from './domain/drop-card-lookup.adapter';
+export type { DropCardWithState } from './domain/drop-card-lookup.adapter';
+export type { UnavailableReason } from './domain/drop-visibility';
 export { CollectionMembershipAdapter } from './domain/collection-membership.adapter';
 export type { CollectionMembershipDrop } from './domain/collection-membership.adapter';
 export type { ProductsModule, ProductsModuleDeps } from './module';

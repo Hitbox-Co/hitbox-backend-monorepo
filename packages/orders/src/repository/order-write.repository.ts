@@ -301,7 +301,7 @@ export class OrderWriteRepository {
                 async (tx) => {
                     const order = await tx.order.findFirst({
                         where: { id: input.orderId, status: 'PENDING_PAYMENT' },
-                        select: { id: true },
+                        select: { id: true, buyerId: true, productId: true, variantId: true },
                     });
                     if (!order) return false;
 
@@ -342,6 +342,11 @@ export class OrderWriteRepository {
                     });
                     // Cancelled between our read and this write: undo the commit.
                     if (updated.count === 0) throw new SettlementLost();
+                    // Bought: it leaves the buyer's cart (docs/mobile-app/cart-api.md).
+                    // Same transaction, so a paid item is never still "in the cart".
+                    await tx.cartItem.deleteMany({
+                        where: { userId: order.buyerId, productId: order.productId, variantId: order.variantId },
+                    });
                     await recordStatusChange(tx, {
                         orderId: input.orderId, from: 'PENDING_PAYMENT', to: 'PAID', source: 'PAYMENT',
                         at: input.settledAt,

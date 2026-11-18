@@ -15,6 +15,7 @@ import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
 import { createMarketplaceModule } from '@hitbox/marketplace';
+import { createSocialModule } from '@hitbox/social';
 import { createCollectionsModule } from '@hitbox/collections';
 import { createArtistModule } from '@hitbox/artist';
 import { createContentModule } from '@hitbox/content';
@@ -406,6 +407,8 @@ export function bootstrap(): Bootstrapped {
         resolveBuyer: (req: Request) => req.auth?.accountId as string,
         // Same number payments enforces, so the screens never disagree with it.
         returnWindowDays: env.RETURN_WINDOW_DAYS,
+        // The mobile cart's cards and availability (docs/mobile-app/cart-api.md).
+        cartCatalog: productsModule.cards,
     });
 
     /**
@@ -461,6 +464,12 @@ export function bootstrap(): Bootstrapped {
     const discoverModule = createDiscoverModule({
         catalog: productsModule.discovery,
         optionalAuth: authModule.optionalAuth,
+    });
+
+    // Wishlist (WishlistItem is social's table); cards come from products.
+    const socialModule = createSocialModule({
+        prisma,
+        catalog: productsModule.cards,
     });
 
     const marketplaceModule = createMarketplaceModule({
@@ -846,6 +855,8 @@ export function bootstrap(): Bootstrapped {
         products: productsModule.createRouter(authModule.requireAuth),
         discover: discoverModule.router,
         marketplace: marketplaceModule.router,
+        wishlist: socialModule.createWishlistRouter(authModule.requireAuth),
+        cart: ordersModule.createCartRouter(authModule.requireAuth),
         collections: collectionsModule.createRouter(authModule.requireAuth),
         claims: claimsRouters.claims,
         claim: claimsRouters.claim,
