@@ -18,9 +18,17 @@ export type {
     MarketplaceListingItem,
     MarketplaceListingsQuery,
     MarketplaceListingsResult,
+    MarketplacePrice,
     MarketplaceSort,
 } from './domain/interfaces/listing-catalog.interface';
 
 // DTOs
-export { marketplaceListingsQuerySchema } from './dto/marketplace.dto';
-export type { MarketplaceFeedDto, MarketplaceListingsQueryDto } from './dto/marketplace.dto';
+export { marketplaceFeedQuerySchema, marketplaceListingsQuerySchema } from './dto/marketplace.dto';
+export type {
+    MarketplaceFeedDto,
+    MarketplaceFeedQueryDto,
+    MarketplaceListingsQueryDto,
+} from './dto/marketplace.dto';
+
+// Service
+export type { MarketplaceFeedQuery } from './service/marketplace.service';

@@ -465,6 +465,7 @@ export function bootstrap(): Bootstrapped {
 
     const marketplaceModule = createMarketplaceModule({
         catalog: productsModule.listings,
+        optionalAuth: authModule.optionalAuth,
     });
 
     /**
