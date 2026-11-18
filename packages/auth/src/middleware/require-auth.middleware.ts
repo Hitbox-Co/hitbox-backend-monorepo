@@ -174,3 +174,27 @@ export function createRequireAuth(deps: RequireAuthDeps): RequestHandler {
         }
     };
 }
+
+/**
+ * For public routes that personalise when they can (e.g. the Discover feed's
+ * wishlist hearts). No token → guest. A token that `requireAuth` rejects with
+ * a 401/403 — expired, unknown account, suspended — is also served as a guest
+ * rather than failing a screen anyone may open. Anything else (a 5xx from the
+ * account lookup) still propagates.
+ */
+export function createOptionalAuth(requireAuth: RequestHandler): RequestHandler {
+    return (req, res, next) => {
+        if (!extractToken(req)) {
+            next();
+            return;
+        }
+        void requireAuth(req, res, (error?: unknown) => {
+            if (error instanceof AppError && (error.statusCode === 401 || error.statusCode === 403)) {
+                delete req.auth;
+                next();
+                return;
+            }
+            next(error as Error | undefined);
+        });
+    };
+}

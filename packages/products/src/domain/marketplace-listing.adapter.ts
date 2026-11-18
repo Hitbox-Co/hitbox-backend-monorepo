@@ -10,28 +10,18 @@ import type {
 import type { IMediaUrlResolver } from './interfaces/media-url-resolver.interface';
 import type { ProductListingRow, ProductRepository } from '../repository/product.repository';
 import { PUBLIC_PRODUCT_WHERE } from '../repository/product.repository';
+import { STORAGE_CATEGORIES_BY_TAB } from './storage-categories';
 
 /**
  * Products-side implementation of marketplace's IListingCatalog port.
  * Maps the screen-level category tabs onto storage concerns only this
  * module knows about.
  *
- * `Product.category` is a free-form `String?` since the catalog restructure —
- * the `ProductCategory` enum it used to map onto no longer exists. The tab
- * mapping is therefore string-valued, and the values below are the contract
- * with whoever populates `category`. A product whose category is not in any
- * list is reachable only from the "All Items" tab, which is why OTHER is a
- * fallback list rather than a catch-all.
+ * The tab → `Drop.category` mapping is shared with discover — see
+ * `storage-categories.ts`.
  */
 
-const categoryToStorageCategories: Record<MarketplaceCategory, string[]> = {
-    [MarketplaceCategory.CARDS]: ['TRADING_CARD', 'CARD_PACK'],
-    [MarketplaceCategory.FIGURES]: ['FIGURE'],
-    [MarketplaceCategory.APPAREL]: ['JERSEY', 'ACCESSORY'],
-    [MarketplaceCategory.POSTERS]: ['POSTER'],
-    [MarketplaceCategory.DIGITAL]: ['DIGITAL_ASSET'],
-    [MarketplaceCategory.OTHER]: ['BOOK', 'AUTOGRAPH', 'GAME_BOX', 'OTHER'],
-};
+const categoryToStorageCategories: Record<MarketplaceCategory, string[]> = STORAGE_CATEGORIES_BY_TAB;
 
 const sortToOrderBy: Record<MarketplaceSort, Prisma.DropOrderByWithRelationInput> = {
     newest: { createdAt: 'desc' },

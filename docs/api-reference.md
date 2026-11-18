@@ -232,70 +232,17 @@ Public profile (no email/role/contact; soft-deleted users are 404).
 
 ## Discover Module — `/api/v1/discover`
 
-Read-side feed for the mobile **Discover** screen. Public (no auth). Items are deliberately **lightweight cards** — id, title, one image — not full product details; the client fetches `GET /products/:id` when a card is opened.
+Read-side feed for the mobile **Discover** screen. Public; a session token is
+optional and only adds `isWishlisted` to cards.
 
-```jsonc
-// DiscoverProductItem — the only shape this module returns
-{
-  "id": "cmro…",
-  "name": "Pierce The Veil — Signature Series",
-  "imageUrl": "https://…",        // first product image, null if none
-  "rewardPoints": 150             // set by HitBox System Admin; 0 when none
-}
-```
-
-> **`rewardPoints` is back** as `Drop.rewardPoints`. Only HitBox System
-> Admin sets it; see [admin/drop-reward-points.md](admin/drop-reward-points.md).
-
-Sections used to map onto `Product.marketplaceStatus`, a curation column the
-restructure removed. With nothing editorial left in the schema, each section is
-now just an ordering over data that exists:
-
-| `section` value | Ordering |
+| Endpoint | Purpose |
 |---|---|
-| `trending` | minted SKU count desc |
-| `new_releases` | `createdAt` desc |
-| `top_creators` | minted SKU count desc |
+| `GET /api/v1/discover?category=` | whole screen: `featured`, `trending`, `creators`, `newReleases` |
+| `GET /api/v1/discover/products?section=&category=&search=&page=&limit=` | "View all" / search |
+| `GET /api/v1/discover/creators?page=&limit=` | "Meet the creators" → Explore |
 
-> `trending` and `top_creators` therefore return the **same order** today. That
-> is deliberate rather than clever: separating them again needs a real signal —
-> a curation column, or sales/view counters — not a different arbitrary sort.
-> `unitsSold`, which drove the old ordering, no longer exists.
-
-### `GET /api/v1/discover`
-
-The whole Discover screen in **one round-trip** — featured carousel + every section, queried in parallel.
-
-```json
-{
-  "data": {
-    "featured":    [ DiscoverProductItem × ≤5 ],
-    "trending":    [ DiscoverProductItem × ≤10 ],
-    "newReleases": [ DiscoverProductItem × ≤10 ],
-    "topCreators": [ DiscoverProductItem × ≤10 ]
-  }
-}
-```
-
-> `featured` currently reuses the trending section (top 5) — it becomes its own curation once products grow a featured flag.
-
-### `GET /api/v1/discover/products`
-
-Paginated list backing **"See All"** and the **search bar**.
-
-| Param | Type / values | Default |
-|---|---|---|
-| `section` | `trending` `new_releases` `top_creators` | — (all `ACTIVE` products, newest first) |
-| `search` | 1–100 chars, case-insensitive name match | — |
-| `page` | int ≥ 1 | `1` |
-| `limit` | int 1–50 | `20` |
-
-```json
-{
-  "data": [ DiscoverProductItem, … ],
-  "meta": { "page": 1, "limit": 20, "total": 57, "totalPages": 3 }
-}
-```
+Full shapes, field-to-design mapping and ordering rules:
+**[mobile-app/discover-api.md](mobile-app/discover-api.md)**.
 
 ---
 

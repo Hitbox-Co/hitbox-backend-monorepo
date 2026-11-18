@@ -460,6 +460,7 @@ export function bootstrap(): Bootstrapped {
 
     const discoverModule = createDiscoverModule({
         catalog: productsModule.discovery,
+        optionalAuth: authModule.optionalAuth,
     });
 
     const marketplaceModule = createMarketplaceModule({
