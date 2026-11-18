@@ -21,7 +21,7 @@ Base path: `/api/v1/discover`. Code: `packages/discover` (routes, DTOs, the
 ## Authentication
 
 All three endpoints are **public**. Sending the usual Clerk session
-(`Authorization: Bearer <token>` or the `__session` cookie) is optional and only
+(`Authorization: Bearer <token>`) is optional and only
 adds personalisation:
 
 | Request | `isWishlisted` on every card |
@@ -171,8 +171,8 @@ A paginated creator list. It backs "Explore" next to **Meet the creators**.
 ### Errors
 
 A bad query parameter, such as an unknown `section` or `category` or `limit=500`,
-returns the shared **400 validation error**. Discover defines no error codes of
-its own. See the shared codes in [../api-reference.md](../api-reference.md).
+returns **422 `VALIDATION_ERROR`**. Discover defines no error codes of its own.
+See the shared error format in [README.md](README.md#errors).
 
 ---
 
