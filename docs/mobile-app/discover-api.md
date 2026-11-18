@@ -32,9 +32,9 @@ adds personalisation:
 
 `GET /discover/creators` has nothing per-user and ignores the token.
 
-Toggling the heart is not part of this module (no wishlist write API exists
-yet). The heart's state comes from `WishlistItem`: a drop counts as wishlisted
-if the user wishlisted it with any variant.
+The heart's state comes from `WishlistItem`: a drop counts as wishlisted if the
+user wishlisted it with any variant. To toggle it, use `POST /wishlist` (on) and
+`DELETE /wishlist/products/:productId` (off). See [wishlist-api.md](wishlist-api.md).
 
 ---
 
