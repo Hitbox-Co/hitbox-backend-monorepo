@@ -3,14 +3,14 @@ import { DiscoverSection } from '@hitbox/discover';
 import type {
     DiscoverCreatorsQuery,
     DiscoverCreatorsResult,
-    DiscoverProductItem,
     DiscoverProductsQuery,
     DiscoverProductsResult,
     IProductDiscovery,
 } from '@hitbox/discover';
 import type { IMediaUrlResolver } from './interfaces/media-url-resolver.interface';
-import type { ProductDiscoverRow, ProductRepository } from '../repository/product.repository';
+import type { ProductRepository } from '../repository/product.repository';
 import { PUBLIC_PRODUCT_WHERE } from '../repository/product.repository';
+import { toDropCard } from './drop-card';
 import { STORAGE_CATEGORIES_BY_TAB } from './storage-categories';
 
 /**
@@ -76,7 +76,7 @@ export class ProductDiscoveryAdapter implements IProductDiscovery {
             ? await this.products.findWishlistedProductIds(query.viewerId, items.map((row) => row.id))
             : null;
 
-        return { items: items.map((row) => this.toItem(row, wishlisted)), total };
+        return { items: items.map((row) => toDropCard(row, this.mediaUrls, wishlisted)), total };
     }
 
     async findCreators(query: DiscoverCreatorsQuery): Promise<DiscoverCreatorsResult> {
@@ -84,29 +84,5 @@ export class ProductDiscoveryAdapter implements IProductDiscovery {
             skip: (query.page - 1) * query.limit,
             take: query.limit,
         });
-    }
-
-    private toItem(row: ProductDiscoverRow, wishlisted: Set<string> | null): DiscoverProductItem {
-        const ref = row.dropImages[0]?.asset.storageRef;
-        // At most one row: the base price (variantId null) of the default
-        // market, guaranteed unique by @@unique([productId, variantId, marketId]).
-        const price = row.dropPrices[0];
-        const amount = price ? (price.isFree ? '0' : price.amount?.toString()) : undefined;
-        return {
-            id: row.id,
-            name: row.name,
-            description: row.description,
-            imageUrl: ref ? (this.mediaUrls?.publicUrl(ref) ?? null) : null,
-            rarity: row.rarity,
-            category: row.category,
-            artist: row.artist ?? row.collection?.artist ?? null,
-            price: price && amount !== undefined
-                ? { amount, currency: price.market.currency, isFree: price.isFree }
-                : null,
-            totalSupply: row.totalSupply,
-            mintedCount: row._count.skus,
-            rewardPoints: row.rewardPoints,
-            isWishlisted: wishlisted ? wishlisted.has(row.id) : null,
-        };
     }
 }

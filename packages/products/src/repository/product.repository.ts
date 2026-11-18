@@ -59,8 +59,12 @@ export type ProductWithRelations = Prisma.DropGetPayload<{ include: typeof listI
 
 const discoverArtistSelect = { id: true, name: true, slug: true } satisfies Prisma.ArtistSelect;
 
-/** Everything a Discover card renders: image, rarity, artist, price, edition, points. */
-const discoverSelect = {
+/**
+ * Everything a drop card renders — image, rarity, artist, price, edition,
+ * points. One projection for both the Discover and the Marketplace feeds, so
+ * the two screens' cards cannot drift apart.
+ */
+const dropCardSelect = {
     id: true,
     name: true,
     description: true,
@@ -75,7 +79,9 @@ const discoverSelect = {
     _count: { select: { skus: true } },
 } satisfies Prisma.DropSelect;
 
-export type ProductDiscoverRow = Prisma.DropGetPayload<{ select: typeof discoverSelect }>;
+export type DropCardRow = Prisma.DropGetPayload<{ select: typeof dropCardSelect }>;
+export type ProductDiscoverRow = DropCardRow;
+export type ProductListingRow = DropCardRow;
 
 /** A creator is listed while public and active, with at least one public drop. */
 const discoverCreatorWhere = (publicDrop: Prisma.DropWhereInput): Prisma.ArtistWhereInput => ({
@@ -93,18 +99,6 @@ export interface DiscoverCreatorRow {
     coverUrl: string | null;
     dropCount: number;
 }
-
-const marketplaceSelect = {
-    id: true,
-    name: true,
-    rewardPoints: true,
-    dropImages: { ...imageArgs, take: 1 },
-    dropPrices: basePriceArgs,
-    collection: { select: { artist: { select: { name: true } } } },
-    artist: { select: { name: true } },
-} satisfies Prisma.DropSelect;
-
-export type ProductListingRow = Prisma.DropGetPayload<{ select: typeof marketplaceSelect }>;
 
 /** One gallery placement, with the asset it points at. */
 const productImageSelect = {
@@ -308,7 +302,7 @@ export class ProductRepository {
         const [items, total] = await this.prisma.$transaction([
             this.prisma.drop.findMany({
                 where: params.where,
-                select: discoverSelect,
+                select: dropCardSelect,
                 orderBy: params.orderBy,
                 skip: params.skip,
                 take: params.take,
@@ -375,10 +369,10 @@ export class ProductRepository {
         return new Set(rows.map((row) => row.productId));
     }
 
-    /** Listing card projection for the marketplace feed — price + artist name. */
+    /** Card projection for the marketplace feed — the same card as discover. */
     async findForMarketplace(params: {
         where: Prisma.DropWhereInput;
-        orderBy: Prisma.DropOrderByWithRelationInput;
+        orderBy: Prisma.DropOrderByWithRelationInput | Prisma.DropOrderByWithRelationInput[];
         skip: number;
         take: number;
     }): Promise<{ items: ProductListingRow[]; total: number }> {
@@ -389,7 +383,7 @@ export class ProductRepository {
         const [items, total] = await this.prisma.$transaction([
             this.prisma.drop.findMany({
                 where: params.where,
-                select: marketplaceSelect,
+                select: dropCardSelect,
                 orderBy: params.orderBy,
                 skip: params.skip,
                 take: params.take,

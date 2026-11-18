@@ -2,14 +2,14 @@ import { DropStatus, Prisma } from '@hitbox/database';
 import { MarketplaceCategory } from '@hitbox/marketplace';
 import type {
     IListingCatalog,
-    MarketplaceListingItem,
     MarketplaceListingsQuery,
     MarketplaceListingsResult,
     MarketplaceSort,
 } from '@hitbox/marketplace';
 import type { IMediaUrlResolver } from './interfaces/media-url-resolver.interface';
-import type { ProductListingRow, ProductRepository } from '../repository/product.repository';
+import type { ProductRepository } from '../repository/product.repository';
 import { PUBLIC_PRODUCT_WHERE } from '../repository/product.repository';
+import { toDropCard } from './drop-card';
 import { STORAGE_CATEGORIES_BY_TAB } from './storage-categories';
 
 /**
@@ -23,9 +23,10 @@ import { STORAGE_CATEGORIES_BY_TAB } from './storage-categories';
 
 const categoryToStorageCategories: Record<MarketplaceCategory, string[]> = STORAGE_CATEGORIES_BY_TAB;
 
-const sortToOrderBy: Record<MarketplaceSort, Prisma.DropOrderByWithRelationInput> = {
-    newest: { createdAt: 'desc' },
-    popular: { skus: { _count: 'desc' } },
+const sortToOrderBy: Record<MarketplaceSort, Prisma.DropOrderByWithRelationInput[]> = {
+    newest: [{ createdAt: 'desc' }],
+    // Ties broken by newest, so a page boundary never reshuffles equal counts.
+    popular: [{ skus: { _count: 'desc' } }, { createdAt: 'desc' }],
 };
 
 export class MarketplaceListingAdapter implements IListingCatalog {
@@ -60,22 +61,12 @@ export class MarketplaceListingAdapter implements IListingCatalog {
             take: query.limit,
         });
 
-        return { items: items.map((row) => this.toItem(row)), total };
-    }
+        // Rows are cached across users; the wishlist overlay is per-viewer and
+        // is therefore looked up after, never stored with them.
+        const wishlisted = query.viewerId
+            ? await this.products.findWishlistedProductIds(query.viewerId, items.map((row) => row.id))
+            : null;
 
-    private toItem(row: ProductListingRow): MarketplaceListingItem {
-        const ref = row.dropImages[0]?.asset.storageRef;
-        // At most one row: the base price (variantId null) of the default
-        // market, guaranteed unique by @@unique([productId, variantId, marketId]).
-        const price = row.dropPrices[0];
-        return {
-            id: row.id,
-            name: row.name,
-            imageUrl: ref ? (this.mediaUrls?.publicUrl(ref) ?? null) : null,
-            artistName: row.artist?.name ?? row.collection?.artist.name ?? null,
-            priceInDollars: price ? (price.isFree ? '0' : (price.amount?.toString() ?? null)) : null,
-            currency: price?.market.currency ?? null,
-            rewardPoints: row.rewardPoints,
-        };
+        return { items: items.map((row) => toDropCard(row, this.mediaUrls, wishlisted)), total };
     }
 }

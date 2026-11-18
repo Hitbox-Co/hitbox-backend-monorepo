@@ -257,8 +257,33 @@ describe('f · two simultaneous taps', () => {
         expect(loser.message).toBe('This item was just claimed by someone else.');
         expect(loser.claimedByYou).toBe(false);
         expect(loser.claim).toBeNull();
-        // The winner is named, so the app can show whose it is.
-        expect(loser.owner.id).toBe(winner.owner.id);
+        // The winner kept the item PRIVATE, so the loser is not told who won.
+        expect(winner.owner.id).not.toBe('');
+        expect(loser.owner).toEqual({ id: '', handle: null, displayName: null });
+    });
+
+    // Sequential rather than simultaneous: the fake's $transaction is not
+    // atomic, so in a race the loser can read the SKU flip before the winner's
+    // shelf row exists. A real transaction commits both together.
+    it.each([
+        ['PUBLIC', true],
+        ['PRIVATE', false],
+    ] as const)('names an existing owner who keeps the item %s: %s', async (visibility, named) => {
+        const h = harness();
+        const aliceToken = await validatedToken(h, ALICE);
+        await h.service.claim(TAG_A, ALICE, { visibility, claimToken: aliceToken });
+
+        const bobToken = await validatedToken(h, BOB).catch(() => undefined);
+        const late = await h.service.claim(TAG_A, BOB, { visibility: 'PRIVATE', claimToken: bobToken });
+
+        expect(late.outcome).toBe(CLAIM_OUTCOME.ALREADY_CLAIMED);
+        expect(late.claimedByYou).toBe(false);
+        if (named) {
+            expect(late.owner.id).toBe(ALICE);
+        } else {
+            expect(late.owner).toEqual({ id: '', handle: null, displayName: null });
+            expect(late.message).toContain('another collector');
+        }
     });
 
     it('burns the loser token to LOST_TIEBREAK', async () => {
@@ -466,5 +491,24 @@ describe('an item claimed long ago', () => {
         expect(result.outcome).toBe(CLAIM_OUTCOME.ALREADY_CLAIMED);
         expect(result.message).toContain('already claimed by');
         expect(h.claims()).toHaveLength(1);
+    });
+});
+
+describe('GET /ledger/:tagId — owner privacy', () => {
+    it.each([
+        ['PUBLIC', false],
+        ['PRIVATE', true],
+    ] as const)('an owner who keeps the item %s is hidden: %s', async (visibility, hidden) => {
+        const h = harness();
+        const token = await validatedToken(h, ALICE);
+        await h.service.claim(TAG_A, ALICE, { visibility, claimToken: token });
+
+        const rows = await h.service.ledger(TAG_A);
+        const claimRow = rows.find((row) => row.claimHistory);
+        expect(claimRow).toBeDefined();
+        if (hidden) expect(claimRow!.ownerId).toBeNull();
+        else expect(claimRow!.ownerId).not.toBeNull();
+        // Rows that name no collector (the HitBox origin) are never hidden.
+        rows.filter((row) => !row.claimHistory).forEach((row) => expect(row.ownerId).not.toBeNull());
     });
 });

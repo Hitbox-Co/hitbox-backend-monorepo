@@ -165,8 +165,13 @@ export interface LedgerEntryView {
     productId: string;
     /** Tag # — the NFC tag id. */
     tag: string | null;
-    /** Owner Id — "HitBox" for the origin record, else the owner's name. */
-    ownerId: string;
+    /**
+     * Owner Id — "HitBox" for the origin record, else the owner's name. Null
+     * when that owner does not show this item PUBLIC (or no longer owns it).
+     * The hash was computed over the real label, so a hidden row cannot be
+     * re-hashed by a client.
+     */
+    ownerId: string | null;
     /** DateTime of Creation (ISO 8601). */
     dateTime: string;
     /** Hash # — SHA-256(Product ID + Tag Id + Owner Id + DateTime). */
