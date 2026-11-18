@@ -569,6 +569,26 @@ export class OrderWriteRepository {
         return hold ? { reservationId: hold.id, skuId: hold.skuId, expiresAt: hold.expiresAt } : null;
     }
 
+    /** The newest unpaid order of this buyer for this drop/variant that still holds a unit. */
+    async findOpenCheckout(input: {
+        buyerId: string;
+        productId: string;
+        variantId: string | null;
+    }): Promise<string | null> {
+        const order = await this.prisma.order.findFirst({
+            where: {
+                buyerId: input.buyerId,
+                productId: input.productId,
+                variantId: input.variantId,
+                status: 'PENDING_PAYMENT',
+                inventoryReservations: { some: { status: 'HELD', expiresAt: { gt: new Date() } } },
+            },
+            orderBy: { placedAt: 'desc' },
+            select: { id: true },
+        });
+        return order?.id ?? null;
+    }
+
     /** The sweeper: every hold past its expiry goes back on sale. */
     async releaseExpiredReservations(now: Date): Promise<number> {
         const result = await this.prisma.inventoryReservation.updateMany({
