@@ -36,6 +36,7 @@
     "@hitbox/products": "workspace:*",
     "@hitbox/releases": "workspace:*",
     "@hitbox/shared": "workspace:*",
+    "@hitbox/social": "workspace:*",
     "@hitbox/skus": "workspace:*",
     "@hitbox/supply": "workspace:*",
     "@hitbox/tax": "workspace:*",

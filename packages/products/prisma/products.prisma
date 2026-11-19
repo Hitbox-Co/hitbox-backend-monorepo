@@ -92,6 +92,7 @@ model Drop {
   orders           Order[]
   royaltyRules     RoyaltyRule[]
   wishlistItems    WishlistItem[]
+  cartItems        CartItem[]
   /// Per-product GST/sales-tax rates and HSN codes — see packages/tax.
   taxConfigurations TaxConfiguration[]
   /// Monthly COGS variance reviews for this drop — see packages/finance.
@@ -144,6 +145,7 @@ model DropVariant {
   skus          Sku[]
   orders        Order[]
   wishlistItems WishlistItem[]
+  cartItems     CartItem[]
   /// Vendor supply, per variant — see packages/supply.
   vendorAllotments VendorVariantAllotment[]
   supplyBatchLines SupplyBatchLine[]

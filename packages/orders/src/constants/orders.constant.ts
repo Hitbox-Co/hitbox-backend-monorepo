@@ -15,6 +15,14 @@ export const ORDERS_ERROR_CODES = {
     /** No active price row exists for the buyer's market. */
     NO_PRICE: 'ORDERS_NO_PRICE',
 
+    // ── Cart (docs/mobile-app/cart-api.md) ──────────────────────────────────
+    /** No cart item with that id belongs to the caller. */
+    CART_ITEM_NOT_FOUND: 'ORDERS_CART_ITEM_NOT_FOUND',
+    /** The variant does not belong to the drop, or is archived. */
+    VARIANT_NOT_FOUND: 'ORDERS_VARIANT_NOT_FOUND',
+    /** The cart already holds CART_MAX_ITEMS rows. */
+    CART_FULL: 'ORDERS_CART_FULL',
+
     // ── Unit assignment (docs/orders/order-unit-assignment-api.md) ──────────
     /** The scanned tag / code / serial matches no unit. */
     UNIT_NOT_FOUND: 'ORDERS_UNIT_NOT_FOUND',
@@ -68,3 +76,6 @@ export const ORDER_EVENTS = {
 
 /** Order statuses in which a unit may be scanned and assigned. */
 export const UNIT_ASSIGNABLE_STATUSES = ['PAID', 'PROCESSING'] as const;
+
+/** A cart is a short list of intentions, not a warehouse — bounded so one read stays one query. */
+export const CART_MAX_ITEMS = 50;

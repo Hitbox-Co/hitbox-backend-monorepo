@@ -10,28 +10,42 @@ import type { MarketplaceCategory } from '../enums/marketplace-category.enum';
  * `rewardPoints` is back as `Drop.rewardPoints` — set by HitBox System
  * Admin, `0` when none were set.
  */
-export interface MarketplaceListingItem {
-    id: string;
-    name: string;
-    imageUrl: string | null;
-    artistName: string | null;
-    /** Decimal string in `currency`, or null when no price is set for the default market. */
-    priceInDollars: string | null;
-    /** ISO code of the market the price is quoted in; null when there is no price. */
-    currency: string | null;
-    /** Reward points a buyer earns with this drop. */
-    rewardPoints: number;
+/** The base price of the default market. Null on the card when none is set. */
+export interface MarketplacePrice {
+    /** Decimal string with two places ("480.00"); "0" when the drop is free. */
+    amount: string;
+    currency: string;
+    isFree: boolean;
 }
 
 /**
- * `price_asc`/`price_desc` were removed with the catalog restructure: price
- * moved from a `Product` column to the market-scoped `ProductPrice` table,
- * and a query cannot be ordered by a field on a to-many relation. Restoring
- * them needs a denormalized base-price column on `Product` or a raw-SQL join.
- *
- * `popular` was backed by `Product.unitsSold`, which no longer exists — it is
- * now minted SKU count, a proxy for edition size rather than for sales.
+ * One listing card — every field the Marketplace grid renders. The same
+ * shape as a Discover card (the products module builds both from one
+ * projection), declared here so this module depends on neither discover nor
+ * the database. Full details come from `GET /products/:id` on tap.
  */
+export interface MarketplaceListingItem {
+    id: string;
+    name: string;
+    description: string | null;
+    imageUrl: string | null;
+    /** Free-form `Drop.rarity` as stored ("UNCOMMON", "RARE", …). */
+    rarity: string | null;
+    /** Free-form `Drop.category` as stored ("FIGURE", "TRADING_CARD", …). */
+    category: string | null;
+    /** The drop's artist, falling back to its collection's artist. */
+    artist: { id: string; name: string; slug: string } | null;
+    price: MarketplacePrice | null;
+    /** Edition size — "Edition of 150". */
+    totalSupply: number;
+    /** SKUs minted so far — "009 / 60" is `mintedCount / totalSupply`. */
+    mintedCount: number;
+    /** `Drop.rewardPoints` — set by HitBox System Admin; 0 when none. */
+    rewardPoints: number;
+    /** Whether the viewer has wishlisted it; null when the request is anonymous. */
+    isWishlisted: boolean | null;
+}
+
 export type MarketplaceSort = 'newest' | 'popular';
 
 export interface MarketplaceListingsQuery {
@@ -46,6 +60,8 @@ export interface MarketplaceListingsQuery {
     featuredOnly?: boolean;
     page: number;
     limit: number;
+    /** The signed-in account, for `isWishlisted`. Absent for guests. */
+    viewerId?: string;
 }
 
 export interface MarketplaceListingsResult {

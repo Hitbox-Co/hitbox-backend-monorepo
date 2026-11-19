@@ -57,26 +57,65 @@ const listInclude = {
 
 export type ProductWithRelations = Prisma.DropGetPayload<{ include: typeof listInclude }>;
 
-const discoverSelect = {
+const discoverArtistSelect = { id: true, name: true, slug: true } satisfies Prisma.ArtistSelect;
+
+/**
+ * Everything a drop card renders — image, rarity, artist, price, edition,
+ * points. One projection for both the Discover and the Marketplace feeds, so
+ * the two screens' cards cannot drift apart.
+ */
+const dropCardSelect = {
     id: true,
     name: true,
-    rewardPoints: true,
-    dropImages: { ...imageArgs, take: 1 },
-} satisfies Prisma.DropSelect;
-
-export type ProductDiscoverRow = Prisma.DropGetPayload<{ select: typeof discoverSelect }>;
-
-const marketplaceSelect = {
-    id: true,
-    name: true,
+    description: true,
+    rarity: true,
+    category: true,
+    totalSupply: true,
     rewardPoints: true,
     dropImages: { ...imageArgs, take: 1 },
     dropPrices: basePriceArgs,
-    collection: { select: { artist: { select: { name: true } } } },
-    artist: { select: { name: true } },
+    artist: { select: discoverArtistSelect },
+    collection: { select: { artist: { select: discoverArtistSelect } } },
+    _count: { select: { skus: true } },
 } satisfies Prisma.DropSelect;
 
-export type ProductListingRow = Prisma.DropGetPayload<{ select: typeof marketplaceSelect }>;
+export type DropCardRow = Prisma.DropGetPayload<{ select: typeof dropCardSelect }>;
+
+/** A card plus what wishlist and cart need to say whether it can be bought. */
+const dropCardStateSelect = {
+    ...dropCardSelect,
+    status: true,
+    isActive: true,
+    archivedAt: true,
+    releaseStart: true,
+    releaseEnd: true,
+    dropVariants: {
+        where: { archivedAt: null },
+        orderBy: { position: 'asc' },
+        select: { id: true, label: true, isActive: true },
+    },
+} satisfies Prisma.DropSelect;
+
+export type DropCardStateRow = Prisma.DropGetPayload<{ select: typeof dropCardStateSelect }>;
+export type ProductDiscoverRow = DropCardRow;
+export type ProductListingRow = DropCardRow;
+
+/** A creator is listed while public and active, with at least one public drop. */
+const discoverCreatorWhere = (publicDrop: Prisma.DropWhereInput): Prisma.ArtistWhereInput => ({
+    isPublic: true,
+    isActive: true,
+    archivedAt: null,
+    drops: { some: publicDrop },
+});
+
+export interface DiscoverCreatorRow {
+    id: string;
+    name: string;
+    slug: string;
+    avatarUrl: string | null;
+    coverUrl: string | null;
+    dropCount: number;
+}
 
 /** One gallery placement, with the asset it points at. */
 const productImageSelect = {
@@ -269,7 +308,7 @@ export class ProductRepository {
     /** Minimal card projection for the discover feed — no joins beyond one image. */
     async findForDiscover(params: {
         where: Prisma.DropWhereInput;
-        orderBy: Prisma.DropOrderByWithRelationInput;
+        orderBy: Prisma.DropOrderByWithRelationInput | Prisma.DropOrderByWithRelationInput[];
         skip: number;
         take: number;
     }): Promise<{ items: ProductDiscoverRow[]; total: number }> {
@@ -280,7 +319,7 @@ export class ProductRepository {
         const [items, total] = await this.prisma.$transaction([
             this.prisma.drop.findMany({
                 where: params.where,
-                select: discoverSelect,
+                select: dropCardSelect,
                 orderBy: params.orderBy,
                 skip: params.skip,
                 take: params.take,
@@ -293,10 +332,77 @@ export class ProductRepository {
         return result;
     }
 
-    /** Listing card projection for the marketplace feed — price + artist name. */
+    /**
+     * "Meet the creators": artists ordered by how many drops they have.
+     * Prisma cannot filter a relation count inside `orderBy`, so the sort
+     * counts every drop while `dropCount` counts public ones only. Reads the artist module's table directly — the same documented
+     * shortcut as the collection-ownership check below — because the count is
+     * a products concern.
+     */
+    async findCreatorsForDiscover(params: {
+        skip: number;
+        take: number;
+    }): Promise<{ items: DiscoverCreatorRow[]; total: number }> {
+        type Result = { items: DiscoverCreatorRow[]; total: number };
+        const cached = await this.cache.getList<Result>('discover-creators', params);
+        if (cached) return cached;
+
+        const where = discoverCreatorWhere(PUBLIC_PRODUCT_WHERE);
+        const [rows, total] = await this.prisma.$transaction([
+            this.prisma.artist.findMany({
+                where,
+                select: {
+                    id: true,
+                    name: true,
+                    slug: true,
+                    avatarUrl: true,
+                    coverUrl: true,
+                    _count: { select: { drops: { where: PUBLIC_PRODUCT_WHERE } } },
+                },
+                orderBy: [{ drops: { _count: 'desc' } }, { name: 'asc' }],
+                skip: params.skip,
+                take: params.take,
+            }),
+            this.prisma.artist.count({ where }),
+        ]);
+
+        const items = rows.map(({ _count, ...artist }) => ({ ...artist, dropCount: _count.drops }));
+        const result: Result = { items, total };
+        await this.cache.setList('discover-creators', params, result);
+        return result;
+    }
+
+    /**
+     * Cards for a known set of drops — a user's wishlist or cart. No public
+     * filter: a wishlisted drop that has since ended must still render, with
+     * its state. Not cached; the set is per-user and small.
+     */
+    findCardsByIds(ids: string[]): Promise<DropCardStateRow[]> {
+        if (ids.length === 0) return Promise.resolve([]);
+        return this.prisma.drop.findMany({
+            where: { id: { in: ids } },
+            select: dropCardStateSelect,
+        });
+    }
+
+    /**
+     * Which of `productIds` the user has wishlisted (any variant). Never
+     * cached — it is per-user and changes on every tap of the heart.
+     */
+    async findWishlistedProductIds(userId: string, productIds: string[]): Promise<Set<string>> {
+        if (productIds.length === 0) return new Set();
+        const rows = await this.prisma.wishlistItem.findMany({
+            where: { userId, productId: { in: productIds } },
+            select: { productId: true },
+            distinct: ['productId'],
+        });
+        return new Set(rows.map((row) => row.productId));
+    }
+
+    /** Card projection for the marketplace feed — the same card as discover. */
     async findForMarketplace(params: {
         where: Prisma.DropWhereInput;
-        orderBy: Prisma.DropOrderByWithRelationInput;
+        orderBy: Prisma.DropOrderByWithRelationInput | Prisma.DropOrderByWithRelationInput[];
         skip: number;
         take: number;
     }): Promise<{ items: ProductListingRow[]; total: number }> {
@@ -307,7 +413,7 @@ export class ProductRepository {
         const [items, total] = await this.prisma.$transaction([
             this.prisma.drop.findMany({
                 where: params.where,
-                select: marketplaceSelect,
+                select: dropCardSelect,
                 orderBy: params.orderBy,
                 skip: params.skip,
                 take: params.take,

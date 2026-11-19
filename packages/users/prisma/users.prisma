@@ -55,6 +55,7 @@ model User {
   notifications            Notification[]
   notificationPreferences  NotificationPreference[]
   wishlistItems            WishlistItem[]
+  cartItems                CartItem[]
   follows                  Follow[]
   resaleListings           ResaleListing[]
   supportCase_reporter     SupportCase[]           @relation("User_reporter")

@@ -7,7 +7,7 @@ import { AUTH_MODULE, CLERK_WEBHOOK_PATH } from './constants/auth.constant';
 import { AuthController } from './controller/auth.controller';
 import { ClerkInvitationsAdapter } from './domain/clerk-invitations.adapter';
 import type { IAccountLookup } from './domain/interfaces/account-lookup.interface';
-import { createRequireAuth } from './middleware/require-auth.middleware';
+import { createOptionalAuth, createRequireAuth } from './middleware/require-auth.middleware';
 import { WebhookEventRepository } from './repository/webhook-event.repository';
 import { AuthWebhookService } from './service/auth-webhook.service';
 import { RegistrationService } from './service/registration.service';
@@ -23,6 +23,8 @@ export interface AuthModule {
     router: Router;
     /** Mountable on any route in any module that needs an authenticated user. */
     requireAuth: RequestHandler;
+    /** Attaches `req.auth` when a valid session is sent; never rejects. For public routes. */
+    optionalAuth: RequestHandler;
     /**
      * Access-control's `IIdentityInvitations` port: email someone a sign-up
      * link so a system admin can provision a colleague who has no account yet.
@@ -67,6 +69,7 @@ export function createAuthModule(deps: AuthModuleDeps): AuthModule {
     return {
         router,
         requireAuth,
+        optionalAuth: createOptionalAuth(requireAuth),
         invitations: new ClerkInvitationsAdapter({
             secretKey: clerkSecretKey,
             redirectUrl: env.ADMIN_INVITATION_REDIRECT_URL,

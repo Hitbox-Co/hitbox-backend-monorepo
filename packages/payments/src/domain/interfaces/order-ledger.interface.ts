@@ -96,6 +96,17 @@ export interface IOrderLedger {
      */
     findLiveHold(orderId: string): Promise<{ reservationId: string; skuId: string; expiresAt: Date } | null>;
 
+    /**
+     * The buyer's unpaid order for this drop (and variant) whose hold is still
+     * live, if any — so a retried checkout lands on the same order instead of
+     * holding a second unit. Null when there is none.
+     */
+    findOpenCheckout(input: {
+        buyerId: string;
+        productId: string;
+        variantId: string | null;
+    }): Promise<string | null>;
+
     /** Releases every hold that has passed its expiry. Returns how many. */
     releaseExpiredReservations(now: Date): Promise<number>;
 }

@@ -58,3 +58,31 @@ describe('CheckoutService.resume', () => {
         expect(gateway.createCharge).not.toHaveBeenCalled();
     });
 });
+
+/** A retried POST /checkout must not place a second order or hold a second unit. */
+describe('CheckoutService.checkout — repeated checkout', () => {
+    function buildCheckout(openOrderId: string | null) {
+        const { service, gateway, payments } = build();
+        const orders = (service as unknown as { deps: { orders: Record<string, unknown> } }).deps.orders;
+        orders.findOpenCheckout = jest.fn(async () => openOrderId);
+        orders.placeOrder = jest.fn(async () => {
+            throw new Error('placeOrder must not be reached in this test');
+        });
+        return { service, gateway, payments, orders };
+    }
+    const dto = { productId: 'p1', quantity: 1, termsAccepted: true, gateway: 'STRIPE' } as never;
+
+    it('hands back the open order instead of placing a new one', async () => {
+        const { service, orders } = buildCheckout('o1');
+        const view = await service.checkout(dto, 'buyer-1');
+        expect(orders.findOpenCheckout).toHaveBeenCalledWith({ buyerId: 'buyer-1', productId: 'p1', variantId: null });
+        expect(orders.placeOrder).not.toHaveBeenCalled();
+        expect(view).toMatchObject({ orderId: 'o1', clientToken: 'pi_1_secret' });
+    });
+
+    it('places a new order when there is no open one', async () => {
+        const { service, orders } = buildCheckout(null);
+        await expect(service.checkout(dto, 'buyer-1')).rejects.toThrow('placeOrder must not be reached');
+        expect(orders.placeOrder).toHaveBeenCalledTimes(1);
+    });
+});

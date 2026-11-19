@@ -112,7 +112,8 @@ export class ClaimsService {
             claimed: sku.claimedStatus === 'CLAIMED',
             claimedStatus: sku.claimedStatus,
             status: sku.drop.status,
-            owner: this.ownerView(sku.owner),
+            // Anonymous: a private owner stays private.
+            owner: await this.visibleOwner(sku, null),
             ledgerLength: ledger.length,
             verifiedAt: new Date().toISOString(),
         };
@@ -122,7 +123,20 @@ export class ClaimsService {
     async ledger(tagId: string): Promise<LedgerEntryView[]> {
         const sku = await this.requireSku(tagId);
         const rows = await this.deps.claims.getLedger(sku.id);
-        return rows.map((row) => this.ledgerView(row));
+
+        // Owner privacy: a row names a collector only while that collector
+        // shows this item PUBLIC on their shelf. Past owners (their shelf row
+        // is archived) and private owners read as null. Rows that name no user
+        // — the "HitBox" origin record — are unaffected.
+        const userIds = [
+            ...new Set(rows.map((row) => readLedgerPayload(row.payload).toUserId).filter((id): id is string => !!id)),
+        ];
+        const visibilities = await Promise.all(
+            userIds.map(async (id) => [id, await this.deps.claims.findCollectionVisibility(id, sku.id)] as const),
+        );
+        const publicOwners = new Set(visibilities.filter(([, v]) => v === 'PUBLIC').map(([id]) => id));
+
+        return rows.map((row) => this.ledgerView(row, publicOwners));
     }
 
     /**
@@ -187,7 +201,7 @@ export class ClaimsService {
                 status: sku.drop.status,
                 imageUrl: this.imageUrlOf(sku),
             },
-            owner: this.ownerView(sku.owner),
+            owner: await this.visibleOwner(sku, userId),
             claimedAt: this.claimedAtOf(sku),
             claimToken: token?.token ?? null,
             claimTokenExpiresAt: token?.expiresAt.toISOString() ?? null,
@@ -229,7 +243,7 @@ export class ClaimsService {
     async claim(tagId: string, userId: string, body: ClaimBodyDto): Promise<ClaimFlowResult> {
         const sku = await this.requireSku(tagId);
         const tokenHash = this.resolveTokenHash(sku.id, userId, body.claimToken);
-        return this.runClaim({
+        const flow = await this.runClaim({
             sku,
             userId,
             visibility: body.visibility,
@@ -237,6 +251,26 @@ export class ClaimsService {
             nfcTagId: null,
             refetch: () => this.deps.claims.findSkuByTagId(tagId),
         });
+        return this.withOwnerPrivacy(sku, flow);
+    }
+
+    /**
+     * The deprecated confirm's version of the rule `tapResult` applies: when
+     * someone else holds the item and keeps it PRIVATE, the response carries
+     * the empty owner and says "another collector" instead of their name.
+     */
+    private async withOwnerPrivacy(sku: SkuForTag, flow: ClaimFlowResult): Promise<ClaimFlowResult> {
+        if (flow.claimedByYou || flow.outcome === CLAIM_OUTCOME.CLAIMED || !flow.owner.id) return flow;
+        const visibility = await this.deps.claims.findCollectionVisibility(flow.owner.id, sku.id);
+        if (visibility === 'PUBLIC') return flow;
+        return {
+            ...flow,
+            owner: { id: '', handle: null, displayName: null },
+            message:
+                flow.outcome === CLAIM_OUTCOME.ALREADY_CLAIMED
+                    ? `"${sku.drop.name}" is already claimed by another collector.`
+                    : flow.message,
+        };
     }
 
     /**
@@ -858,17 +892,18 @@ export class ClaimsService {
         return { id: owner.id, handle: owner.handle, displayName: displayNameOf(owner) };
     }
 
-    private ledgerView(row: LedgerRowFull): LedgerEntryView {
+    private ledgerView(row: LedgerRowFull, publicOwners: ReadonlySet<string>): LedgerEntryView {
         // Participants and the owner label live in `payload` now — the current
         // BlockchainLedger has no user foreign keys.
         const payload = readLedgerPayload(row.payload);
         const isClaim = payload.claimId !== undefined;
+        const hidden = payload.toUserId !== undefined && !publicOwners.has(payload.toUserId);
         return {
             sequenceNo: row.sequenceNo,
             txType: row.txType,
             productId: row.sku.drop.groupCode,
             tag: row.sku.tagId,
-            ownerId: payload.ownerLabel,
+            ownerId: hidden ? null : payload.ownerLabel,
             dateTime: row.createdAt.toISOString(),
             hash: row.currentHash,
             previousHash: row.previousHash,

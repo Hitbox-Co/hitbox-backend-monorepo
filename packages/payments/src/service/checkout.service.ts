@@ -43,6 +43,24 @@ export class CheckoutService {
     constructor(private readonly deps: CheckoutServiceDeps) { }
 
     async checkout(dto: CheckoutDto, buyerId: string): Promise<CheckoutView> {
+        // 0. A retry of a checkout whose response was lost (timeout, app
+        //    killed, double tap) must not place a second order and hold a
+        //    second unit. If this buyer already has an unpaid order for this
+        //    drop with a live hold, hand that one back — same order, same
+        //    charge. Once the hold lapses, a new checkout starts fresh.
+        const openOrderId = await this.deps.orders.findOpenCheckout({
+            buyerId,
+            productId: dto.productId,
+            variantId: dto.variantId ?? null,
+        });
+        if (openOrderId) {
+            this.deps.logger.info(
+                { orderId: openOrderId, buyerId },
+                'checkout repeated while an order is open — resuming it',
+            );
+            return this.resume(openOrderId, buyerId);
+        }
+
         // 1. Order + stock hold, in one transaction inside the orders module.
         //    It throws OUT_OF_STOCK / NOT_PURCHASABLE / NO_PRICE itself — those
         //    are the buyer's answers, and orders is what knows them.

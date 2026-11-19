@@ -12,6 +12,7 @@ import {
     PRODUCTS_ERROR_CODES,
 } from '../constants/products.constant';
 import type { IMediaUrlResolver } from '../domain/interfaces/media-url-resolver.interface';
+import { isPubliclyViewable } from '../domain/drop-visibility';
 import type {
     ISkuMinting,
     SkuMintOutcome,
@@ -215,8 +216,13 @@ export class ProductService {
         };
     }
 
+    /** Public detail (`GET /products/:id`). Unreleased or withdrawn drops are a 404. */
     async getById(id: string): Promise<ProductResponse> {
-        return this.toResponse(await this.requireById(id));
+        const product = await this.deps.products.findById(id);
+        if (!product || !isPubliclyViewable(product)) {
+            throw AppError.notFound('Product not found', PRODUCTS_ERROR_CODES.PRODUCT_NOT_FOUND);
+        }
+        return this.toResponse(product);
     }
 
     /**
@@ -274,7 +280,7 @@ export class ProductService {
      */
     async getByGroupCode(groupCode: string): Promise<ProductResponse> {
         const product = await this.deps.products.findByGroupCode(groupCode);
-        if (!product) {
+        if (!product || !isPubliclyViewable(product)) {
             throw AppError.notFound('Product not found', PRODUCTS_ERROR_CODES.PRODUCT_NOT_FOUND);
         }
         return this.toResponse(product);
