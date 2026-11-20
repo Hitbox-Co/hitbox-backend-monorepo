@@ -9,7 +9,7 @@ user's profile.
 | `GET` | `/collections/me/stats` | required | Stats block: item count, collections started, progress |
 | `GET` | `/collections/me` | required | My shelf, private items included |
 | `PATCH` | `/collections/me/:skuId` | required | Make one of my items `PUBLIC` or `PRIVATE` |
-| `GET` | `/collections/user/:userId` | public | Another user's showcase (`PUBLIC` items only) |
+| `GET` | `/collections/user/:userId` | optional | Another collector's showcase: `PUBLIC` items, and only if their profile is `PUBLIC` |
 
 Base path: `/api/v1/collections`. Code: `packages/collections`.
 
@@ -26,8 +26,9 @@ NFC claim. See [claims-nfc-api.md](claims-nfc-api.md).
 Authorization: Bearer <clerk-session-token>
 ```
 
-`GET /collections/user/:userId` is public and ignores the token. Auth error
-codes (401/403) are listed in [auth-api.md](auth-api.md).
+`GET /collections/user/:userId` is public. A token is optional: when it belongs
+to the shelf's owner, they get their whole shelf. An invalid token is treated as
+a guest. Auth error codes (401/403) are listed in [auth-api.md](auth-api.md).
 
 ---
 
@@ -145,8 +146,17 @@ Response: the updated item.
 
 ### `GET /api/v1/collections/user/:userId`
 
-Another user's showcase. Only `PUBLIC` items are returned. `:userId` is the
-account id (`id` from the users API).
+Another collector's showcase. `:userId` is the account id (`id` from
+[users-api.md](users-api.md)).
+
+| Who is asking | Result |
+|---|---|
+| Anyone, the owner's **profile is `PUBLIC`** | 200: the items they marked `PUBLIC` |
+| Anyone, the owner's **profile is `PRIVATE`** | **403 `COLLECTIONS_PROFILE_PRIVATE`**: no items at all |
+| The owner themselves (valid token) | 200: their whole shelf, like `/collections/me` |
+
+Check `isPrivate` on the profile (`GET /users/:id`) first, and skip this call for
+private profiles. The item count is still shown there, in `stats.claimedItems`.
 
 | Param | Type / values | Default |
 |---|---|---|
@@ -161,9 +171,13 @@ account id (`id` from the users API).
 }
 ```
 
-An unknown user id returns an empty list, not a 404.
-
 ### Errors
+
+| Status | Code | When |
+|---|---|---|
+| 403 | `COLLECTIONS_PROFILE_PRIVATE` | `/user/:userId`: the collector's profile is private |
+| 404 | `COLLECTIONS_USER_NOT_FOUND` | `/user/:userId`: no such collector (a malformed id included), or deactivated/deleted |
+| 404 | `COLLECTIONS_ITEM_NOT_FOUND` | `PATCH /me/:skuId`: not on your shelf |
 
 Bad query values (`limit=500`, `visibility=FRIENDS`) return
 **422 `VALIDATION_ERROR`** with field details. Shared codes (`RATE_LIMITED`,
@@ -186,11 +200,17 @@ Bad query values (`limit=500`, `visibility=FRIENDS`) return
 | Value | Who sees the item |
 |---|---|
 | `PRIVATE` (default) | Only the owner, in `/collections/me` |
-| `PUBLIC` | Everyone, in `/collections/user/:userId` |
+| `PUBLIC` | Everyone, in `/collections/user/:userId`, **while the owner's profile is `PUBLIC`** |
+
+This per-item setting sits under the **profile** setting
+([users-api.md](users-api.md#public-and-private-profiles)). A private profile
+hides every item, whatever each item says. Switching the profile back to public
+restores the per-item choices.
 
 Visibility also controls whether **other people** see you as the owner when
-they scan your item. A `PRIVATE` item shows "claimed by another collector"
-instead of your name. See [Owner privacy](claims-nfc-api.md#owner-privacy).
+they scan your item. You are named only when the item **and** your profile are
+`PUBLIC`. Otherwise it says "claimed by another collector". See
+[Owner privacy](claims-nfc-api.md#owner-privacy).
 
 ### Removed items
 
@@ -221,9 +241,9 @@ with its old `visibility` and `acquiredAt`.
 
 - **Progress can pass the real count.** `owned` counts units, so two copies of
   the same drop count twice. `percentage` is capped at 100.
-- **Malformed ids are not validated.** `:skuId` and `:userId` are passed to the
-  database as-is. A value that is not a UUID gives a **500**, not a 404/422.
-  Send the ids exactly as the API returned them.
+- **Malformed `:skuId` is not validated.** It is passed to the database as-is,
+  so a value that is not a UUID gives a **500**, not a 404/422. (`:userId` is
+  validated: a malformed one is a 404.)
 - **`PATCH` also works on an archived row.** It does not check `archivedAt`,
   so it can change the visibility of an item that no longer shows on the shelf.
 - **No genre filter.** It was removed with the schema; there is no replacement.

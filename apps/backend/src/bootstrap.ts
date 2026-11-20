@@ -78,7 +78,28 @@ export interface Bootstrapped {
  * then every module's router is built with auth's requireAuth middleware.
  */
 export function bootstrap(): Bootstrapped {
-    const usersModule = createUsersModule({ prisma, eventBus });
+    // Profile stats come from collections (items, progress) and social
+    // (follows), both built further down. Deferred like the audit recorder:
+    // only called at request time, long after bootstrap has finished.
+    const usersModule = createUsersModule({
+        prisma,
+        eventBus,
+        stats: {
+            getStats: async (userId) => {
+                const [shelf, follows] = await Promise.all([
+                    collectionsModule.service.getStats(userId),
+                    socialModule.follows.counts(userId),
+                ]);
+                return {
+                    claimedItems: shelf.totalClaimedItems,
+                    artistCollections: shelf.totalArtistCollections,
+                    collectionProgress: shelf.collectionProgress,
+                    ...follows,
+                };
+            },
+            isFollowing: (viewerId, userId) => socialModule.follows.isFollowingUser(viewerId, userId),
+        },
+    });
 
     const authModule = createAuthModule({
         prisma,
@@ -851,13 +872,14 @@ export function bootstrap(): Bootstrapped {
 
     const apiRouter = buildRoutes({
         auth: authModule.router,
-        users: usersModule.createRouter(authModule.requireAuth),
+        users: usersModule.createRouter(authModule.requireAuth, authModule.optionalAuth),
         products: productsModule.createRouter(authModule.requireAuth),
         discover: discoverModule.router,
         marketplace: marketplaceModule.router,
         wishlist: socialModule.createWishlistRouter(authModule.requireAuth),
+        follows: socialModule.createFollowsRouter(authModule.requireAuth, authModule.optionalAuth),
         cart: ordersModule.createCartRouter(authModule.requireAuth),
-        collections: collectionsModule.createRouter(authModule.requireAuth),
+        collections: collectionsModule.createRouter(authModule.requireAuth, authModule.optionalAuth),
         claims: claimsRouters.claims,
         claim: claimsRouters.claim,
         verify: claimsRouters.verify,

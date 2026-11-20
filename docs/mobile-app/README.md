@@ -12,7 +12,8 @@ and the folders under [../](../).
 | File | Base path | App area |
 |---|---|---|
 | [auth-api.md](auth-api.md) | `/health`, `/auth`, `/authz` | Sign-up check, session, "who am I", own permissions |
-| [users-api.md](users-api.md) | `/users` | Profile: view and edit your own, view others |
+| [users-api.md](users-api.md) | `/users` | Profiles: my profile and stats, edit, the public/private switch, other collectors' profiles |
+| [follows-api.md](follows-api.md) | `/follows` | Follow collectors and artists; followers and following lists |
 | [discover-api.md](discover-api.md) | `/discover` | Discover tab: hero, trending, creators, latest drops, search |
 | [marketplace-api.md](marketplace-api.md) | `/marketplace` | Marketplace tab: search, category chips, Featured Listings, See All |
 | [products-api.md](products-api.md) | `/products` | Drop detail screen (opened from any card) |

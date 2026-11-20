@@ -20,14 +20,22 @@ model Follow {
   /// the uuid above stays the key. Written by the publicCode client extension.
   publicCode String? @unique @db.VarChar(32)
   followerId             String   @db.Uuid
-  follower               User     @relation(fields: [followerId], references: [id])
+  follower               User     @relation("Follow_follower", fields: [followerId], references: [id])
   artistId               String?  @db.Uuid
   artist                 Artist?  @relation(fields: [artistId], references: [id])
   followedOrganizationId String?  @db.Uuid
+  /// A collector following another collector. Exactly one of artistId,
+  /// followedOrganizationId and followedUserId is set (CHECK in the migration),
+  /// and a user never follows themselves.
+  followedUserId         String?  @db.Uuid
+  followedUser           User?    @relation("Follow_followedUser", fields: [followedUserId], references: [id], onDelete: Cascade)
   createdAt              DateTime
 
   @@unique([followerId, artistId])
   @@unique([followerId, followedOrganizationId])
+  @@unique([followerId, followedUserId])
+  @@index([followedUserId])
+  @@index([artistId])
 }
 
 /// A saved product, optionally narrowed to a variant. Unique per

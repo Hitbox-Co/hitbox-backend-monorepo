@@ -11,4 +11,13 @@ export const SOCIAL_ERROR_CODES = {
     VARIANT_NOT_FOUND: 'SOCIAL_VARIANT_NOT_FOUND',
     /** No wishlist item with that id belongs to the caller. */
     WISHLIST_ITEM_NOT_FOUND: 'SOCIAL_WISHLIST_ITEM_NOT_FOUND',
+    /** The collector does not exist, is deactivated or deleted. */
+    USER_NOT_FOUND: 'SOCIAL_USER_NOT_FOUND',
+    /** The artist does not exist or has no public profile. */
+    ARTIST_NOT_FOUND: 'SOCIAL_ARTIST_NOT_FOUND',
+    /** A user tried to follow themselves. */
+    CANNOT_FOLLOW_SELF: 'SOCIAL_CANNOT_FOLLOW_SELF',
 } as const;
+
+export const FOLLOW_DEFAULT_PAGE_SIZE = 20;
+export const FOLLOW_MAX_PAGE_SIZE = 50;

@@ -36,7 +36,30 @@ export class CollectionService {
     }
 
     /** Someone else's showcase — PUBLIC items only. */
-    async listPublicByUser(userId: string, query: ListCollectionQueryDto): Promise<PaginatedItems> {
+    /**
+     * `GET /collections/user/:userId` — someone else's shelf.
+     *
+     * Two privacy levels apply. A PRIVATE **profile** hides the whole shelf
+     * (403 `COLLECTIONS_PROFILE_PRIVATE`, so the app can say "This profile is
+     * private"); a PUBLIC profile shows only the items marked PUBLIC. The
+     * owner looking at their own id sees every item, as on `/me`.
+     */
+    async listPublicByUser(
+        userId: string,
+        query: ListCollectionQueryDto,
+        viewerId: string | null = null,
+    ): Promise<PaginatedItems> {
+        const owner = await this.deps.collections.findOwner(userId);
+        if (!owner) {
+            throw AppError.notFound('User not found.', COLLECTIONS_ERROR_CODES.USER_NOT_FOUND);
+        }
+        if (viewerId === owner.id) return this.listMine(userId, query);
+        if (owner.profileVisibility !== 'PUBLIC') {
+            throw AppError.forbidden(
+                "This collector's profile is private.",
+                COLLECTIONS_ERROR_CODES.PROFILE_PRIVATE,
+            );
+        }
         const { items, total } = await this.deps.collections.findManyByUser(userId, query, {
             publicOnly: true,
         });
