@@ -30,6 +30,8 @@ import {
     buildBuyerTaxAccess,
     buildTaxAccess,
     createTaxModule,
+    createTaxQuoter,
+    TaxConfigurationRepository,
     S3DocumentStorage,
     supplierProfilesFromEnv,
 } from '@hitbox/tax';
@@ -811,6 +813,12 @@ export function bootstrap(): Bootstrapped {
         // which case a buyer cannot place a physical return (photos required).
         returnEvidence: mediaModule?.returnEvidence,
         gateway: paymentGateway,
+        // Checkout and the quote share one address ownership check (users) and
+        // the invoice's own tax arithmetic (tax). The quoter is built from the
+        // tax repository alone: the full tax module subscribes to payments'
+        // events and is constructed after it.
+        addresses: usersModule.addresses,
+        tax: createTaxQuoter({ configurations: new TaxConfigurationRepository(prisma) }),
         webhookSigningSecret: env.STRIPE_WEBHOOK_SECRET,
         webhookToleranceSeconds: env.PAYMENT_WEBHOOK_TOLERANCE_SECONDS,
         holdSeconds: env.INVENTORY_HOLD_SECONDS,
@@ -891,6 +899,7 @@ export function bootstrap(): Bootstrapped {
             ? mediaModule.createRouter(authModule.requireAuth)
             : mediaUnavailableRouter(),
         adminMarkets: marketsModule.createRouter(authModule.requireAuth),
+        markets: marketsModule.createPublicRouter(),
         adminOrders: ordersModule.createRouter(authModule.requireAuth),
         orders: ordersModule.createBuyerRouter(authModule.requireAuth),
         adminReleases: releasesModule.createRouter(authModule.requireAuth),

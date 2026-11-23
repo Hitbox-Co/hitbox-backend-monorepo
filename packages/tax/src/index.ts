@@ -11,6 +11,11 @@ export type {
 export { buildBuyerTaxAccess, buildTaxAccess, TaxScope } from './domain/tax-access';
 export type { TaxAccess, TaxPrincipal } from './domain/tax-access';
 
+// Pre-order tax estimate (checkout quote) — the invoice's own arithmetic.
+export { TaxQuoteService, createTaxQuoter } from './service/tax-quote.service';
+export type { TaxEstimate, TaxEstimateInput } from './service/tax-quote.service';
+export { TaxConfigurationRepository } from './repository/tax-configuration.repository';
+
 // Ports the composition root connects.
 export type {
     IInvoiceableOrderSource,

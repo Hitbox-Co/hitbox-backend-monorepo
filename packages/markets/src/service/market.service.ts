@@ -9,6 +9,13 @@ import type {
 } from '../dto/market.dto';
 import type { MarketRepository, MarketRow } from '../repository/market.repository';
 
+/** One market as the public sees it. */
+export interface PublicMarket {
+    id: string;
+    currency: string;
+    countryCodes: string[];
+}
+
 export interface MarketServiceDeps {
     markets: MarketRepository;
     logger: Logger;
@@ -51,6 +58,20 @@ export class MarketService {
             total,
             items: items.map(toResponse),
         };
+    }
+
+    /**
+     * The public list: only what a buyer's app needs to pick a `marketId`.
+     * Deliberately not the admin shape, which carries usage counts and
+     * archive state. The default market comes first.
+     */
+    async listPublic(): Promise<PublicMarket[]> {
+        const rows = await this.deps.markets.listSellable();
+        return rows.map((row) => ({
+            id: row.id,
+            currency: row.currency,
+            countryCodes: row.marketCountrys.map((country) => country.countryCode),
+        }));
     }
 
     async getById(id: string): Promise<MarketResponse> {

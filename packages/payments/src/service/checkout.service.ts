@@ -10,9 +10,15 @@ import {
 import type { IPaymentGateway } from '../domain/interfaces/payment-gateway.interface';
 import { gatewayFailure } from '../domain/gateway-error';
 import type { IOrderLedger } from '../domain/interfaces/order-ledger.interface';
+import type { IAddressBook, ITaxEstimator } from '../domain/interfaces/checkout-support.interface';
 import type { GatewayConfigRepository } from '../repository/gateway-config.repository';
 import type { PaymentRepository } from '../repository/payment.repository';
-import type { CheckoutDto, CheckoutView } from '../dto/payments.dto';
+import type {
+    CheckoutDto,
+    CheckoutQuoteDto,
+    CheckoutQuoteView,
+    CheckoutView,
+} from '../dto/payments.dto';
 
 export interface CheckoutServiceDeps {
     orders: IOrderLedger;
@@ -23,7 +29,20 @@ export interface CheckoutServiceDeps {
     eventBus: IEventBus;
     logger: Logger;
     holdSeconds: number;
+    /**
+     * The buyer's address book (users). Without it, address ids go to the order
+     * as given and are only checked for ownership there; production wires it.
+     */
+    addresses?: IAddressBook | undefined;
+    /**
+     * Tax arithmetic (tax). Without it the quote shows no tax and checkout never
+     * asks for a billing address; production wires it.
+     */
+    tax?: ITaxEstimator | undefined;
 }
+
+/** Hitbox charges no shipping today; the quote says so explicitly. */
+const NO_SHIPPING = '0.00';
 
 /**
  * Checkout: the moment an order, a stock hold and a charge attempt come into
@@ -61,6 +80,14 @@ export class CheckoutService {
             return this.resume(openOrderId, buyerId);
         }
 
+        // 0b. Addresses. The same check the quote runs: an id that is not the
+        //     buyer's is ignored, an archived one is refused. A taxed sale with
+        //     no billing address is refused here, *before* any stock is held,
+        //     because the billing country is what picks the tax on the invoice
+        //     and the currency fallback is only a guess.
+        const addresses = await this.resolveAddresses(dto, buyerId);
+        await this.requireBillingWhenTaxed(dto, addresses.billingId !== null);
+
         // 1. Order + stock hold, in one transaction inside the orders module.
         //    It throws OUT_OF_STOCK / NOT_PURCHASABLE / NO_PRICE itself — those
         //    are the buyer's answers, and orders is what knows them.
@@ -72,8 +99,8 @@ export class CheckoutService {
             quantity: dto.quantity,
             holdSeconds: this.deps.holdSeconds,
             termsAccepted: dto.termsAccepted,
-            shippingAddressId: dto.shippingAddressId ?? null,
-            billingAddressId: dto.billingAddressId ?? null,
+            shippingAddressId: addresses.shippingId,
+            billingAddressId: addresses.billingId,
         });
 
         // 2. Which gateway credentials apply to this sale.
@@ -188,6 +215,113 @@ export class CheckoutService {
             clientToken,
             gatewayRef,
         };
+    }
+
+    /**
+     * What the buyer will be charged, before they pay. No side effects: no
+     * order, no stock hold, no Stripe call.
+     *
+     * Prices are tax-inclusive, so `totalAmount` is the sticker price (plus
+     * shipping, which is zero) and the tax is the part of it that is tax. The
+     * split comes from the tax module's own invoice arithmetic, and checkout
+     * charges `order.amount`, which is the same `unitPrice`: so the quote, the
+     * charge and the invoice total are the same number by construction.
+     */
+    async quote(dto: CheckoutQuoteDto, buyerId: string): Promise<CheckoutQuoteView> {
+        const addresses = await this.resolveAddresses(dto, buyerId);
+        const sale = await this.deps.orders.quoteSale({
+            productId: dto.productId,
+            variantId: dto.variantId ?? null,
+            marketId: dto.marketId ?? null,
+        });
+
+        const estimate = this.deps.tax
+            ? await this.deps.tax.estimate({
+                productId: sale.productId,
+                countryCode: addresses.billing?.countryCode ?? null,
+                stateCode: addresses.billing?.state ?? null,
+                currency: sale.currency,
+                unitPrice: sale.unitPrice,
+            })
+            : null;
+
+        const billingAddressRequired =
+            addresses.billing === null && (await this.isTaxedWithoutAddress(sale));
+
+        return {
+            productId: sale.productId,
+            variantId: sale.variantId,
+            marketId: sale.marketId,
+            currency: sale.currency,
+            unitPrice: sale.unitPrice,
+            subtotal: estimate?.subtotal ?? sale.unitPrice,
+            taxType: estimate?.taxType ?? null,
+            taxRate: estimate?.taxRate ?? '0.000',
+            taxAmount: estimate?.taxAmount ?? '0.00',
+            shippingAmount: NO_SHIPPING,
+            totalAmount: new Prisma.Decimal(sale.unitPrice).plus(NO_SHIPPING).toFixed(2),
+            availability: sale.availability,
+            unavailableReason: sale.unavailableReason,
+            billingAddressRequired,
+        };
+    }
+
+    /** Runs the ownership check once and keeps only the ids that survive it. */
+    private async resolveAddresses(
+        dto: { shippingAddressId?: string | undefined; billingAddressId?: string | undefined },
+        buyerId: string,
+    ): Promise<{
+        shippingId: string | null;
+        billingId: string | null;
+        billing: { id: string; countryCode: string; state: string | null } | null;
+    }> {
+        if (!this.deps.addresses) {
+            return {
+                shippingId: dto.shippingAddressId ?? null,
+                billingId: dto.billingAddressId ?? null,
+                billing: null,
+            };
+        }
+        const { shipping, billing } = await this.deps.addresses.resolveForCheckout(buyerId, {
+            shippingAddressId: dto.shippingAddressId ?? null,
+            billingAddressId: dto.billingAddressId ?? null,
+        });
+        return { shippingId: shipping?.id ?? null, billingId: billing?.id ?? null, billing };
+    }
+
+    /**
+     * Refuses a checkout that would be taxed but names no billing country.
+     * Only fires on a drop that is actually buyable: sold-out and closed drops
+     * fall through so the buyer gets the real reason from `placeOrder`.
+     */
+    private async requireBillingWhenTaxed(
+        dto: CheckoutDto,
+        hasBilling: boolean,
+    ): Promise<void> {
+        if (hasBilling || !this.deps.tax) return;
+        const sale = await this.deps.orders.quoteSale({
+            productId: dto.productId,
+            variantId: dto.variantId ?? null,
+            marketId: dto.marketId ?? null,
+        });
+        if (sale.availability !== 'IN_STOCK') return;
+        if (!(await this.isTaxedWithoutAddress(sale))) return;
+
+        throw AppError.badRequest(
+            'Add a billing address: the tax on this purchase depends on where you are billed.',
+            PAYMENTS_ERROR_CODES.BILLING_ADDRESS_REQUIRED,
+            { currency: sale.currency },
+        );
+    }
+
+    /** Would this sale be taxed in the currency's fallback country? Free drops never are. */
+    private async isTaxedWithoutAddress(sale: {
+        productId: string;
+        currency: string;
+        unitPrice: string;
+    }): Promise<boolean> {
+        if (!this.deps.tax || !new Prisma.Decimal(sale.unitPrice).gt(0)) return false;
+        return this.deps.tax.taxedByDefault({ productId: sale.productId, currency: sale.currency });
     }
 
     /**

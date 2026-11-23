@@ -60,23 +60,123 @@ export interface PlaceOrderResult {
     expiresAt: Date;
 }
 
+export interface QuoteSaleResult {
+    productId: string;
+    variantId: string | null;
+    marketId: string | null;
+    currency: string;
+    unitPrice: Prisma.Decimal;
+    availability: 'IN_STOCK' | 'SOLD_OUT' | 'NOT_ON_SALE';
+    unavailableReason: 'NOT_PUBLISHED' | 'NOT_OPEN_YET' | 'CLOSED' | 'SOLD_OUT' | null;
+}
+
+/** Why a drop cannot be bought right now, or null when its window is open. */
+function saleWindowProblem(
+    product: PurchasableProduct,
+    now: Date,
+): {
+    reason: 'NOT_PUBLISHED' | 'NOT_OPEN_YET' | 'CLOSED';
+    message: string;
+    details: Record<string, unknown>;
+} | null {
+    if (!['PUBLISHED', 'ACTIVE'].includes(product.status)) {
+        return {
+            reason: 'NOT_PUBLISHED',
+            message: `This drop is not on sale (${product.status}).`,
+            details: { status: product.status },
+        };
+    }
+    if (product.releaseStart && product.releaseStart > now) {
+        return {
+            reason: 'NOT_OPEN_YET',
+            message: 'This drop has not opened yet.',
+            details: { releaseStart: product.releaseStart.toISOString() },
+        };
+    }
+    if (product.releaseEnd && product.releaseEnd <= now) {
+        return {
+            reason: 'CLOSED',
+            message: 'This drop has closed.',
+            details: { releaseEnd: product.releaseEnd.toISOString() },
+        };
+    }
+    return null;
+}
+
+/**
+ * A unit nobody else holds: active, unclaimed, not allocated to an order, and
+ * not held by a live reservation. Shared by checkout (which then takes the
+ * hold) and the quote (which only looks).
+ */
+function availableSkuWhere(
+    params: { productId: string; variantId: string | null },
+    now: Date,
+): Prisma.SkuWhereInput {
+    return {
+        productId: params.productId,
+        ...(params.variantId ? { variantId: params.variantId } : {}),
+        isActive: true,
+        archivedAt: null,
+        claimedStatus: 'UNCLAIMED',
+        resaleBlocked: false,
+        orders: { none: {} },
+        inventoryReservations: {
+            none: {
+                OR: [{ status: 'COMMITTED' }, { status: 'HELD', expiresAt: { gt: now } }],
+            },
+        },
+    };
+}
+
 export class OrderWriteRepository {
     constructor(private readonly prisma: PrismaClient) { }
 
     /**
-     * Creates the order and holds one serialized unit for it, atomically.
+     * What a buyer would be quoted right now, with no side effects: no hold,
+     * no order row. Uses the same product, window, price and stock rules as
+     * `placeOrder` (the same helpers), so a quote and the checkout that follows
+     * it cannot disagree about whether something is for sale or what it costs.
      *
-     * The interesting part is unit selection. A SKU is available when it is
-     * active, unclaimed, not already assigned to an order, and not held by a
-     * live reservation. That last condition is the race: two buyers hitting
-     * checkout on the last unit of 500 will both *read* it as free. The
-     * conditional `updateMany` on the reservation (create-then-verify below)
-     * is what makes exactly one of them win, rather than a `SELECT … FOR
-     * UPDATE` that would serialise every checkout on the drop.
+     * Differences from checkout, on purpose: a drop that is closed or not yet
+     * open, and a sold-out drop, are *answers* here (`availability`), not
+     * errors, so the screen can show the price next to "Sold out". An unknown
+     * drop (404) and a drop with no price in the market (400) still throw:
+     * there is nothing to quote.
      */
-    async placeOrder(params: PlaceOrderParams): Promise<PlaceOrderResult> {
+    async quote(params: {
+        productId: string;
+        variantId: string | null;
+        marketId: string | null;
+        now: Date;
+    }): Promise<QuoteSaleResult> {
+        const product = await this.loadSellableProduct(params.productId);
+        const price = await this.findCurrentPrice(params);
+
+        const base = {
+            productId: product.id,
+            variantId: params.variantId,
+            marketId: price.marketId,
+            currency: price.market.currency as string,
+            unitPrice: price.amount ?? new Prisma.Decimal(0),
+        };
+
+        const closed = saleWindowProblem(product, params.now);
+        if (closed) {
+            return { ...base, availability: 'NOT_ON_SALE', unavailableReason: closed.reason };
+        }
+        const sku = await this.prisma.sku.findFirst({
+            where: availableSkuWhere(params, params.now),
+            select: { id: true },
+        });
+        return sku
+            ? { ...base, availability: 'IN_STOCK', unavailableReason: null }
+            : { ...base, availability: 'SOLD_OUT', unavailableReason: 'SOLD_OUT' };
+    }
+
+    /** The drop, or a 404 when it is missing, switched off or archived. */
+    private async loadSellableProduct(productId: string): Promise<PurchasableProduct> {
         const product = (await this.prisma.drop.findUnique({
-            where: { id: params.productId },
+            where: { id: productId },
             select: {
                 id: true,
                 name: true,
@@ -92,37 +192,23 @@ export class OrderWriteRepository {
         if (!product || !product.isActive || product.archivedAt !== null) {
             throw AppError.notFound('Drop not found.', ORDERS_ERROR_CODES.NOT_FOUND);
         }
-        if (!['PUBLISHED', 'ACTIVE'].includes(product.status)) {
-            throw AppError.badRequest(
-                `This drop is not on sale (${product.status}).`,
-                ORDERS_ERROR_CODES.NOT_PURCHASABLE,
-                { status: product.status },
-            );
-        }
-        if (product.releaseStart && product.releaseStart > params.now) {
-            throw AppError.badRequest(
-                'This drop has not opened yet.',
-                ORDERS_ERROR_CODES.NOT_PURCHASABLE,
-                { releaseStart: product.releaseStart.toISOString() },
-            );
-        }
-        if (product.releaseEnd && product.releaseEnd <= params.now) {
-            throw AppError.badRequest(
-                'This drop has closed.',
-                ORDERS_ERROR_CODES.NOT_PURCHASABLE,
-                { releaseEnd: product.releaseEnd.toISOString() },
-            );
-        }
+        return product;
+    }
 
-        // Regional pricing: fixed per market, never converted. A market the
-        // drop has no price row for is not a market it is sold in, and
-        // falling back to another market's number would charge someone in the
-        // wrong currency.
-        // Prices are versioned as of v3.1, so "the price" is the row whose
-        // effective window contains `now` — newest first, because two rows can
-        // legitimately share a window boundary. Before versioning this was the
-        // only row the three-column unique allowed; the condition below is what
-        // preserves that meaning now that history is kept alongside it.
+    /**
+     * The price row in force for this drop (and variant, and market when one is
+     * given). Regional pricing is fixed per market, never converted: a market
+     * the drop has no price row for is not a market it is sold in, and falling
+     * back to another market's number would charge someone in the wrong
+     * currency. Prices are versioned (v3.1), so "the price" is the row whose
+     * effective window contains `now`, newest first.
+     */
+    private async findCurrentPrice(params: {
+        productId: string;
+        variantId: string | null;
+        marketId: string | null;
+        now: Date;
+    }) {
         const price = await this.prisma.dropPrice.findFirst({
             where: {
                 dropId: params.productId,
@@ -149,6 +235,31 @@ export class OrderWriteRepository {
                 { marketId: params.marketId },
             );
         }
+        return price;
+    }
+
+    /**
+     * Creates the order and holds one serialized unit for it, atomically.
+     *
+     * The interesting part is unit selection. A SKU is available when it is
+     * active, unclaimed, not already assigned to an order, and not held by a
+     * live reservation. That last condition is the race: two buyers hitting
+     * checkout on the last unit of 500 will both *read* it as free. The
+     * conditional `updateMany` on the reservation (create-then-verify below)
+     * is what makes exactly one of them win, rather than a `SELECT … FOR
+     * UPDATE` that would serialise every checkout on the drop.
+     */
+    async placeOrder(params: PlaceOrderParams): Promise<PlaceOrderResult> {
+        const product = await this.loadSellableProduct(params.productId);
+        const closed = saleWindowProblem(product, params.now);
+        if (closed) {
+            throw AppError.badRequest(
+                closed.message,
+                ORDERS_ERROR_CODES.NOT_PURCHASABLE,
+                closed.details,
+            );
+        }
+        const price = await this.findCurrentPrice(params);
 
         const unitPrice = price.amount ?? new Prisma.Decimal(0);
         const amount = unitPrice.times(params.quantity);
@@ -160,23 +271,7 @@ export class OrderWriteRepository {
             // checkout. Ordered by serial so the lowest available number goes
             // out first, which is what buyers expect of a numbered edition.
             const sku = await tx.sku.findFirst({
-                where: {
-                    productId: params.productId,
-                    ...(params.variantId ? { variantId: params.variantId } : {}),
-                    isActive: true,
-                    archivedAt: null,
-                    claimedStatus: 'UNCLAIMED',
-                    resaleBlocked: false,
-                    orders: { none: {} },
-                    inventoryReservations: {
-                        none: {
-                            OR: [
-                                { status: 'COMMITTED' },
-                                { status: 'HELD', expiresAt: { gt: params.now } },
-                            ],
-                        },
-                    },
-                },
+                where: availableSkuWhere(params, params.now),
                 select: { id: true },
                 orderBy: { serialNumber: 'asc' },
             });
@@ -780,7 +875,10 @@ export class OrderWriteRepository {
 
         for (const entry of wanted) {
             const address = await tx.address.findFirst({
-                where: { id: entry.id, userId: input.buyerId },
+                // Same rule the users module applies before checkout (ignore an
+                // id that is not the buyer's, never copy an archived one); kept
+                // here too so a race with an archive cannot snapshot a dead entry.
+                where: { id: entry.id, userId: input.buyerId, isActive: true, archivedAt: null },
             });
             if (!address) continue;
 

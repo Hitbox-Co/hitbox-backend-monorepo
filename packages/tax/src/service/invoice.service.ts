@@ -11,7 +11,8 @@ import {
 import { invoiceDocumentKey } from '../domain/document-storage-key';
 import { fiscalYearOf } from '../domain/fiscal-calendar';
 import { formatInvoiceNumber } from '../domain/invoice-number';
-import { calculateInvoice, resolveTaxConfiguration } from '../domain/tax-calculation';
+import { calculateInclusiveInvoice, resolveTaxConfiguration } from '../domain/tax-calculation';
+import { jurisdictionFor } from '../domain/jurisdiction';
 import type { TaxAccess } from '../domain/tax-access';
 import { TaxScope, requireTaxManage } from '../domain/tax-access';
 import {
@@ -143,7 +144,9 @@ export class InvoiceService {
             );
         }
 
-        const totals = calculateInvoice([
+        // The order price already contains the tax: the invoice splits it, it does
+        // not add to it, so the total is exactly what the buyer was charged.
+        const totals = calculateInclusiveInvoice([
             {
                 description: order.productName,
                 productId: order.productId,
@@ -177,6 +180,7 @@ export class InvoiceService {
                         subtotal: totals.subtotal,
                         taxAmount: totals.taxAmount,
                         totalAmount: totals.totalAmount,
+                        pricesIncludeTax: true,
                         taxType: configuration.taxType as 'GST' | 'SALES_TAX' | 'EXEMPT',
                         taxRate: totals.uniformTaxRate ?? configuration.taxRate,
                         hsnCode: totals.uniformHsnCode,
@@ -548,6 +552,7 @@ export class InvoiceService {
             subtotal: invoice.subtotal.toString(),
             taxAmount: invoice.taxAmount.toString(),
             totalAmount: invoice.totalAmount.toString(),
+            pricesIncludeTax: invoice.pricesIncludeTax,
             supplier: {
                 name: invoice.supplierName,
                 address: invoice.supplierAddress,
@@ -609,9 +614,7 @@ export class InvoiceService {
  * address is captured at checkout.
  */
 function jurisdictionOf(order: InvoiceableOrder): string {
-    const fromAddress = order.billingAddress?.countryCode;
-    if (fromAddress) return fromAddress.toUpperCase();
-    return order.currency === 'INR' ? 'IN' : 'US';
+    return jurisdictionFor(order.billingAddress?.countryCode, order.currency);
 }
 
 function formatCustomerAddress(order: InvoiceableOrder): string[] {

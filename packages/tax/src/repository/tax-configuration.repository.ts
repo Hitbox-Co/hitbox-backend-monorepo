@@ -37,6 +37,32 @@ export class TaxConfigurationRepository {
         });
     }
 
+    /**
+     * Whether any rate in force for this country (any state) charges tax on this
+     * product. Asked at checkout, before a billing address exists, to decide if
+     * one has to be supplied.
+     */
+    async hasTaxableConfiguration(target: {
+        productId: string;
+        countryCode: string;
+        at: Date;
+    }): Promise<boolean> {
+        const count = await this.prisma.taxConfiguration.count({
+            where: {
+                countryCode: target.countryCode,
+                status: 'ACTIVE',
+                taxType: { not: 'EXEMPT' },
+                taxRate: { gt: 0 },
+                effectiveFrom: { lte: target.at },
+                AND: [
+                    { OR: [{ effectiveTo: null }, { effectiveTo: { gt: target.at } }] },
+                    { OR: [{ productId: target.productId }, { productId: null }] },
+                ],
+            },
+        });
+        return count > 0;
+    }
+
     async list(
         query: ListTaxConfigurationsQuery & { skip: number; take: number },
     ): Promise<{ total: number; items: TaxConfiguration[] }> {

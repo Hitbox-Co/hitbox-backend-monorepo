@@ -26,14 +26,21 @@ documents it.
 
 | # | App step | Call | Doc |
 |---|---|---|---|
-| 1 | Buyer taps **Buy Now**, picks a variant and address, accepts terms | `POST /checkout` → creates the order (`PENDING_PAYMENT`), holds one numbered piece for 15 min, returns a Stripe `clientToken` | [payments-api.md](payments-api.md#post-apiv1checkout) |
-| 2 | Show Stripe's payment sheet with `clientToken` | Stripe SDK (no HitBox call) | [payments-api.md](payments-api.md#paying-with-stripe) |
-| 3 | App was killed / sheet dismissed before paying | `POST /checkout/:orderId/resume` → same order, same charge, fresh `clientToken` | [payments-api.md](payments-api.md#post-apiv1checkoutorderidresume) |
-| 4 | Wait for the result | Poll `GET /orders/:orderId` until `status` leaves `PENDING_PAYMENT` | this file |
-| 5 | Changed their mind before paying | `POST /orders/:orderId/cancel` | this file |
-| 6 | Order is `PAID` → `PROCESSING` → `SHIPPED` → `DELIVERED` | `GET /orders/:orderId`, `GET /orders/:orderId/tracking` | this file |
-| 7 | Receipt | `GET /invoices/:invoiceId/download` (id from `invoice.id` on the detail) | [invoices-api.md](invoices-api.md) |
-| 8 | Something wrong (or cancel after paying) | `POST /refunds` | [payments-api.md](payments-api.md#post-apiv1refunds) |
+| 1 | App start: learn the markets (currencies) | `GET /markets` (public) → pick the buyer's `marketId` | [payments-api.md](payments-api.md#get-apiv1markets) |
+| 2 | Checkout sheet: pick or add shipping and billing addresses | `GET /users/me/addresses`, `POST /users/me/addresses` | [addresses-api.md](addresses-api.md) |
+| 3 | Show the price: variant, tax, total, in stock? Re-call when variant, market or address changes | `POST /checkout/quote` → `totalAmount` is what the card will be charged | [payments-api.md](payments-api.md#post-apiv1checkoutquote) |
+| 4 | Buyer taps **Buy Now**, accepts terms | `POST /checkout` (same `variantId`, `marketId`, address ids) → creates the order (`PENDING_PAYMENT`), holds one numbered piece for 15 min, returns a Stripe `clientToken`. A taxed drop with no billing address is refused with `PAYMENTS_BILLING_ADDRESS_REQUIRED` | [payments-api.md](payments-api.md#post-apiv1checkout) |
+| 5 | Show Stripe's payment sheet with `clientToken` (cards, **Apple Pay**, **Google Pay**) | Stripe SDK (no HitBox call) | [payments-api.md](payments-api.md#paying-with-stripe) |
+| 6 | App was killed / sheet dismissed before paying | `POST /checkout/:orderId/resume` → same order, same charge, fresh `clientToken` | [payments-api.md](payments-api.md#post-apiv1checkoutorderidresume) |
+| 7 | Wait for the result | Poll `GET /orders/:orderId` until `status` leaves `PENDING_PAYMENT` | this file |
+| 8 | Changed their mind before paying | `POST /orders/:orderId/cancel` | this file |
+| 9 | Order is `PAID` → `PROCESSING` → `SHIPPED` → `DELIVERED` | `GET /orders/:orderId`, `GET /orders/:orderId/tracking` | this file |
+| 10 | Receipt | `GET /invoices/:invoiceId/download` (id from `invoice.id` on the detail) | [invoices-api.md](invoices-api.md) |
+| 11 | Something wrong (or cancel after paying) | `POST /refunds` | [payments-api.md](payments-api.md#post-apiv1refunds) |
+
+What the buyer pays is the same number in four places: the quote's `totalAmount`,
+the checkout's `amount`, the order's `amount`, and the invoice's `totalAmount`
+(prices are tax-inclusive: [payments-api.md](payments-api.md#how-the-charge-relates-to-the-invoice)).
 
 The key rule: **the app never decides that an order is paid.** Stripe tells the
 server through a webhook, and the server moves the order to `PAID`. After the
@@ -162,7 +169,10 @@ below), plus:
 
 ### `BuyerAddress`
 
-A copy taken at checkout. It does not change when the buyer edits their address book.
+A copy taken at checkout. It does not change when the buyer edits or deletes
+the saved address in their address book ([addresses-api.md](addresses-api.md)),
+which also carries `id`, `label`, `isDefault`, `usage` and `createdAt` that this
+copy does not.
 
 ```jsonc
 {

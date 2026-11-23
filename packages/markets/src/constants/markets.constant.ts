@@ -23,5 +23,8 @@ export const MARKETS_ERROR_CODES = {
 export const MARKET_WRITE_CAPABILITY = 'drop:manage' as const;
 export const MARKET_READ_CAPABILITY = 'reports-dashboards:read' as const;
 
+/** Per-IP budget for the unauthenticated GET /markets, per minute. */
+export const PUBLIC_MARKETS_RATE_LIMIT = { windowMs: 60_000, perIp: 60 } as const;
+
 export const MARKETS_DEFAULT_LIMIT = 50;
 export const MARKETS_MAX_LIMIT = 200;

@@ -3,7 +3,7 @@ export { createUsersModule } from './module';
 export type { UsersModule, UsersModuleDeps } from './module';
 
 // Constants
-export { USERS_ERROR_CODES, USERS_MODULE } from './constants/users.constant';
+export { ADDRESS_LIMIT, USERS_ERROR_CODES, USERS_MODULE } from './constants/users.constant';
 
 // DTOs
 export { updateProfileSchema } from './dto/user.dto';
@@ -18,3 +18,12 @@ export type { AccountProvisionedPayload } from './events/users-event.payloads';
 
 export type { IProfileStats, ProfileStats } from './domain/profile-stats.port';
 export type { ProfileDto } from './dto/user.dto';
+
+// Address book.
+export { createAddressSchema, updateAddressSchema } from './dto/address.dto';
+export type { AddressDto, CreateAddressDto, UpdateAddressDto } from './dto/address.dto';
+export type {
+    AddressService,
+    CheckoutAddress,
+    ResolvedCheckoutAddresses,
+} from './service/address.service';

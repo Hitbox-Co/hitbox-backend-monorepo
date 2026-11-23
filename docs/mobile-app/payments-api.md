@@ -6,6 +6,8 @@ order, and the **Request a refund / Return item** flow on the order screen.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
+| GET | `/markets` | none | The markets (currencies) a buyer can shop in, to pick a `marketId` |
+| POST | `/checkout/quote` | Bearer | The price breakdown to show before paying. No hold, no Stripe call |
 | POST | `/checkout` | Bearer | Place an order: hold one piece for 15 min and start a Stripe payment |
 | POST | `/checkout/:orderId/resume` | Bearer | Back to paying for an unpaid order (same order, same charge) |
 | POST | `/refunds/evidence/upload-url` | Bearer | Upload URL for one photo of an item being returned |
@@ -16,6 +18,10 @@ These paths sit directly under `/api/v1` (the router is mounted at `/`), so the
 full path is `/api/v1/checkout`, `/api/v1/refunds`, and so on. Code:
 `packages/payments` (`PaymentsController`, `CheckoutService`, `RefundService`,
 `dto/payments.dto.ts`).
+
+`GET /markets` is mounted at `/api/v1/markets` and is public (markets module).
+The buyer's saved addresses that checkout takes are in
+[addresses-api.md](addresses-api.md).
 
 Start with the **Purchase flow** in [orders-api.md](orders-api.md#purchase-flow).
 Payment status is read from the order: `GET /orders/:orderId` → `status` and
@@ -58,6 +64,32 @@ Money is always a **decimal string** with up to 2 decimals (`"2499.00"`).
   "status": "PENDING",                  // payment attempt: INITIATED (no Stripe adapter) | PENDING
   "clientToken": "pi_3Q…_secret_…",     // Stripe PaymentIntent client secret; null without the adapter
   "gatewayRef": "pi_3Q…"                // Stripe PaymentIntent id; null without the adapter
+}
+```
+
+### `CheckoutQuote`: the price before paying
+
+All money and rates are **strings**. Prices are **tax-inclusive**: `unitPrice` is
+the sticker price and already contains the tax, so
+`totalAmount = subtotal + taxAmount + shippingAmount` and, today, equals
+`unitPrice` (see [How the charge relates to the invoice](#how-the-charge-relates-to-the-invoice)).
+
+```jsonc
+{
+  "productId": "5d0b9e1c-2a4f-4b8e-9c1d-7e6f5a4b3c2d",
+  "variantId": "c3a1e8f0-5b2d-4c7a-8e9f-0a1b2c3d4e5f",  // null for a drop without variants
+  "marketId": "0e5f…",                  // the market the price belongs to; send it back to /checkout
+  "currency": "INR",                    // USD | INR | GBP: the market's currency
+  "unitPrice": "2499.00",               // the sticker price, tax included
+  "subtotal": "2231.25",                // the price without tax
+  "taxType": "GST",                     // GST | SALES_TAX | EXEMPT | null (no rate configured)
+  "taxRate": "12.000",                  // percent
+  "taxAmount": "267.75",                // the part of the price that is tax
+  "shippingAmount": "0.00",             // HitBox charges no shipping today
+  "totalAmount": "2499.00",             // exactly what the card is charged
+  "availability": "IN_STOCK",           // IN_STOCK | SOLD_OUT | NOT_ON_SALE
+  "unavailableReason": null,            // NOT_PUBLISHED | NOT_OPEN_YET | CLOSED | SOLD_OUT; null when IN_STOCK
+  "billingAddressRequired": false       // true: POST /checkout will refuse without a billing address
 }
 ```
 
@@ -127,6 +159,130 @@ buyer did **not** get the money. Show it clearly; HitBox support will follow up.
 
 ## Endpoints
 
+### `GET /api/v1/markets`
+
+Public (no token). The active markets, so the app can pass the right `marketId`
+to the quote and to checkout. The **default market comes first**, then the rest
+by code. Cached for 5 minutes (`Cache-Control: public, max-age=300`).
+Rate limit: 60 requests a minute per IP.
+
+```json
+{
+  "data": [
+    { "id": "0e5f7a1c-3b2d-4e8f-9a0b-1c2d3e4f5a6b", "currency": "USD", "countryCodes": ["US", "CA"] },
+    { "id": "7c1d9e2f-6a3b-4c5d-8e9f-0a1b2c3d4e5f", "currency": "INR", "countryCodes": ["IN"] },
+    { "id": "b2e4f6a8-1c3d-4e5f-9a7b-8c9d0e1f2a3b", "currency": "GBP", "countryCodes": ["GB"] }
+  ]
+}
+```
+
+Pick the market whose `countryCodes` contains the buyer's country (their
+default address's `countryCode`, or the device region), and fall back to the
+first item. Inactive and archived markets are never listed. The operator
+version, with usage counts, is `GET /admin/markets`.
+
+### `POST /api/v1/checkout/quote`
+
+What the buyer will pay, **before** paying. It has no side effects: no order, no
+stock hold, no Stripe call. Call it when the Buy Now sheet opens and again when
+the buyer changes variant, address or market.
+
+| Field | Rules |
+|---|---|
+| `productId` | uuid, required |
+| `variantId` | uuid |
+| `marketId` | uuid. None: the newest active price in any market (as for checkout) |
+| `shippingAddressId` | uuid of one of the buyer's saved addresses |
+| `billingAddressId` | uuid of one of the buyer's saved addresses. Its country (and, for the US, state) picks the tax |
+
+```json
+{
+  "productId": "5d0b9e1c-2a4f-4b8e-9c1d-7e6f5a4b3c2d",
+  "variantId": "c3a1e8f0-5b2d-4c7a-8e9f-0a1b2c3d4e5f",
+  "marketId": "7c1d9e2f-6a3b-4c5d-8e9f-0a1b2c3d4e5f",
+  "billingAddressId": "2f6d7c8b-4a1e-4b9c-8d3f-5e6a7b8c9d0e"
+}
+```
+
+**`200 OK`**:
+
+```json
+{
+  "data": {
+    "productId": "5d0b9e1c-2a4f-4b8e-9c1d-7e6f5a4b3c2d",
+    "variantId": "c3a1e8f0-5b2d-4c7a-8e9f-0a1b2c3d4e5f",
+    "marketId": "7c1d9e2f-6a3b-4c5d-8e9f-0a1b2c3d4e5f",
+    "currency": "INR",
+    "unitPrice": "2499.00",
+    "subtotal": "2231.25",
+    "taxType": "GST",
+    "taxRate": "12.000",
+    "taxAmount": "267.75",
+    "shippingAmount": "0.00",
+    "totalAmount": "2499.00",
+    "availability": "IN_STOCK",
+    "unavailableReason": null,
+    "billingAddressRequired": false
+  }
+}
+```
+
+Sold out is an **answer**, not an error, so the screen can show the price next to
+"Sold out":
+
+```json
+{
+  "data": {
+    "productId": "5d0b9e1c-2a4f-4b8e-9c1d-7e6f5a4b3c2d",
+    "variantId": null,
+    "marketId": "7c1d9e2f-6a3b-4c5d-8e9f-0a1b2c3d4e5f",
+    "currency": "INR",
+    "unitPrice": "2499.00",
+    "subtotal": "2231.25",
+    "taxType": "GST",
+    "taxRate": "12.000",
+    "taxAmount": "267.75",
+    "shippingAmount": "0.00",
+    "totalAmount": "2499.00",
+    "availability": "SOLD_OUT",
+    "unavailableReason": "SOLD_OUT",
+    "billingAddressRequired": true
+  }
+}
+```
+
+How to read it:
+
+- **Show `totalAmount` as the price to pay.** The card is charged exactly that
+  (`POST /checkout` returns the same figure as `amount`). Show `taxAmount` as
+  "includes ₹267.75 GST" if you want a breakdown.
+- **With no `billingAddressId`**, the tax is estimated for the market's home
+  country (`INR` → India, any other currency → US) and `billingAddressRequired`
+  tells you whether checkout will insist on one. Re-quote once the buyer picks a
+  billing address: the tax country and state come from it.
+- `availability`: `IN_STOCK` (a piece is free right now: not a promise, another
+  buyer can still take it), `SOLD_OUT` (every piece is sold or held),
+  `NOT_ON_SALE` (`unavailableReason` says why: `NOT_PUBLISHED`, `NOT_OPEN_YET`,
+  `CLOSED`). Disable **Buy** unless it is `IN_STOCK`.
+- `taxType` is `null` with `taxRate` `"0.000"` when no tax rate is configured for
+  the buyer's country. That is a setup gap on HitBox's side, not something the
+  buyer can fix.
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `ORDERS_NOT_FOUND` | No such drop, or it is switched off / archived |
+| 400 | `ORDERS_NO_PRICE` | No active price for the buyer's market (or the drop needs a `variantId`) |
+| 400 | `USERS_ADDRESS_ARCHIVED` | One of the address ids is the buyer's but was deleted |
+| 400 | `USERS_ADDRESS_USAGE_MISMATCH` | A shipping-only address sent as billing, or the reverse |
+| 422 | `VALIDATION_ERROR` | Bad body (not a uuid, …) |
+| 400 | `BODY_REQUIRED` | No JSON body |
+| 429 | `RATE_LIMITED` | Over 60 quotes a minute per user |
+
+An address id that is not the buyer's is **ignored**, exactly as in checkout.
+
+Needs `order:create` like checkout (every buyer holds it at `own` scope), so
+there is no new permission.
+
 ### `POST /api/v1/checkout`
 
 Places the order and starts the payment, in one call.
@@ -138,8 +294,8 @@ Places the order and starts the payment, in one call.
 | `marketId` | uuid | none: the newest active price in any market |
 | `quantity` | int, **must be 1** | `1` |
 | `termsAccepted` | must be the literal `true` | required |
-| `shippingAddressId` | uuid of one of the buyer's saved addresses | none |
-| `billingAddressId` | uuid of one of the buyer's saved addresses | none |
+| `shippingAddressId` | uuid of one of the buyer's saved addresses ([addresses-api.md](addresses-api.md)) | none |
+| `billingAddressId` | uuid of one of the buyer's saved addresses. **Required on a taxed drop**, see [Billing address rule](#billing-address-rule) | none |
 | `gateway` | `STRIPE` | `STRIPE` |
 
 ```json
@@ -153,10 +309,16 @@ Places the order and starts the payment, in one call.
 ```
 
 - An address id that is not the buyer's own is **silently ignored** (the order
-  gets no address). Send a real one: the billing country decides the tax on
-  the invoice.
+  gets no address), as before. An id that **is** the buyer's but was deleted
+  (archived) is now **rejected** with `400 USERS_ADDRESS_ARCHIVED`. Both rules
+  are one shared check, the same one the quote and
+  [addresses-api.md](addresses-api.md#how-checkout-uses-addresses) use.
+- Because an ignored id counts as "no address", a **taxed** drop sent with only
+  a stranger's `billingAddressId` is refused as `PAYMENTS_BILLING_ADDRESS_REQUIRED`.
 - Send a `marketId` when the drop is priced in more than one market, so the
-  buyer pays in the right currency.
+  buyer pays in the right currency. `GET /markets` lists them.
+- The amount charged is the quote's `totalAmount`. Quote first, then check out
+  with the same `variantId`, `marketId` and addresses.
 
 **`201 Created`:**
 
@@ -181,6 +343,9 @@ because the hold expired or the previous order was paid or cancelled.
 | 400 | `ORDERS_NOT_PURCHASABLE` | Drop not on sale (status not `PUBLISHED`/`ACTIVE`), not open yet, or closed. `details` has `status`, `releaseStart` or `releaseEnd` |
 | 409 | `ORDERS_OUT_OF_STOCK` | Every piece is sold or held by another checkout. Show "Sold out — check back" |
 | 400 | `ORDERS_NO_PRICE` | No active price for the buyer's market |
+| 400 | `PAYMENTS_BILLING_ADDRESS_REQUIRED` | The sale is taxed and no usable billing address was sent. `details.currency`. Nothing was held. Ask for a billing address and retry |
+| 400 | `USERS_ADDRESS_ARCHIVED` | `shippingAddressId` or `billingAddressId` is the buyer's but was deleted. `details`: `addressId`, `use` |
+| 400 | `USERS_ADDRESS_USAGE_MISMATCH` | A shipping-only address sent as billing, or the reverse. `details`: `addressId`, `use`, `usage` |
 | 400 | `PAYMENTS_NO_GATEWAY` | No active Stripe configuration for this drop |
 | 400 | `PAYMENTS_GATEWAY_REJECTED` | Stripe refused to create the payment |
 | 400 | `PAYMENTS_GATEWAY_UNREACHABLE` | Stripe could not be reached. Safe to retry via resume |
@@ -189,14 +354,80 @@ because the hold expired or the previous order was paid or cancelled.
 | 400 | `BODY_REQUIRED` | No JSON body (missing `Content-Type: application/json`) |
 
 The stock and price errors carry the `ORDERS_` prefix because the orders module
-creates the order.
+creates the order; the address errors carry `USERS_` because the users module
+owns the address book.
+
+### Billing address rule
+
+**A taxed drop cannot be bought without a billing address.** `POST /checkout`
+refuses with `400 PAYMENTS_BILLING_ADDRESS_REQUIRED` before anything is held.
+
+Why this is enforced (not left to the currency fallback): the invoice is a legal
+document and the billing country picks the tax rules and rate. Without one, the
+server can only guess the country from the currency (`INR` → India, anything
+else → US). That guess is right for a US buyer paying in `USD` and wrong for a
+UK buyer paying in `GBP`, who would get a US invoice. A wrong invoice cannot be
+edited later, only voided and re-issued. Asking for the address up front costs
+the buyer one field; fixing a wrong invoice costs a support case.
+
+When it fires: the buyer sent **no usable** `billingAddressId` (none, or not the
+buyer's) **and** the sale would be taxed in the market's home country **and**
+the price is above zero **and** a piece is available. In every other case
+(free drop, no tax rate configured, sold out, closed) checkout behaves as
+before and a sold-out or closed drop reports its own error, not this one.
+
+Use `billingAddressRequired` on the [quote](#post-apiv1checkoutquote) to decide
+up front whether to show the billing address picker as mandatory.
+
+### How the charge relates to the invoice
+
+**Prices are tax-inclusive. What the buyer is charged, what the quote shows as
+`totalAmount`, and the invoice's `totalAmount` are the same number.**
+
+| | Before | Now |
+|---|---|---|
+| Stripe charge | order price | order price (unchanged) |
+| Invoice `totalAmount` | order price **+ tax** | order price |
+| Invoice `subtotal` / `taxAmount` | price / tax added on top | price ÷ (1 + rate) / the rest of the price |
+
+Example, ₹2,499.00 at 12% GST: subtotal ₹2,231.25 + tax ₹267.75 = **₹2,499.00**,
+the amount charged and the amount on the invoice.
+
+Why inclusive rather than charging price + tax:
+
+1. **They cannot disagree.** The invoice total is the charge by construction;
+   there is no second amount to keep in step.
+2. **Nothing else moves.** Stripe, the webhook's amount check, refunds ("amount
+   exceeds capture"), and finance's gross revenue all already read
+   `order.amount`. Charging price + tax would need a new tax column on the order
+   and changes in all four.
+3. **It matches the prices already shown.** The app and catalogue show one
+   sticker price per market, and in India (the main market) consumer prices are
+   quoted tax-inclusive.
+
+The quote uses the invoice's own arithmetic (the same rate lookup and the same
+split function), so a quote and the invoice that follows it match.
+
+**Trade-offs to know about:**
+
+- In the **US**, sales tax is normally added at the till. With inclusive pricing
+  a `$25.00` price is `$25.00` charged, and HitBox keeps `$25.00 − tax`. If you
+  want US buyers to pay price + tax, that needs a per-market "tax is added on
+  top" setting and `Order.taxAmount`; it is not built.
+- Finance books `order.amount` as gross revenue, which includes the tax portion.
+  That was already true before this change (the charge never included tax on top,
+  so gross was always the charged amount); nothing is worse, but royalty is
+  calculated on a figure that includes tax.
+- Invoices issued **before** this change keep their old figures and have
+  `pricesIncludeTax: false`.
 
 ### Paying with Stripe
 
 1. Initialise the Stripe SDK with the publishable key for the environment
    (`pk_test_…` in development, from app config; the API does not serve it).
 2. Present the PaymentSheet with `clientToken` (a PaymentIntent client secret).
-   The PaymentIntent has automatic payment methods enabled.
+   The PaymentIntent has automatic payment methods enabled, which is what puts
+   **Apple Pay and Google Pay** in the sheet (see [Wallets](#wallets-apple-pay-and-google-pay)).
 3. When the sheet reports **success**, show "Confirming payment…" and poll
    `GET /orders/:orderId` every 2–3 s until `status` is `PAID` (or
    `CANCELLED`). The webhook usually lands within seconds.
@@ -207,6 +438,40 @@ creates the order.
 
 If `clientToken` is `null`, this server has no Stripe adapter and cannot take
 payments in-app.
+
+### Wallets: Apple Pay and Google Pay
+
+**There is no wallet endpoint and none is needed.** Apple Pay and Google Pay are
+offered by Stripe's PaymentSheet, not by this API. The server creates every
+PaymentIntent with `automatic_payment_methods[enabled]=true` and **does not pin
+`payment_method_types`**, so the methods the sheet offers come from your Stripe
+dashboard configuration. A test in `packages/payments/tests/stripe-gateway.test.ts`
+guards this: adding `payment_method_types` to PaymentIntent creation would
+silently turn wallets off.
+
+What must be switched on (all in Stripe, nothing in this repo):
+
+| Where | Setting |
+|---|---|
+| Dashboard → Settings → Payments → **Payment methods** | The active **payment method configuration** has **Apple Pay** and **Google Pay** turned **on** (they are on by default; check the configuration that applies, including any per-account override for an organization on its own Stripe account). |
+| Dashboard → Settings → Payments → Payment methods → Apple Pay | **iOS app:** register the **Apple merchant ID** (create it in the Apple Developer account, then upload Stripe's CSR and add the certificate). **Web checkout** would also need the domain verified there; the mobile app does not. |
+| Apple Developer account | A **Merchant ID** (`merchant.…`) and the **Apple Pay** capability on the app's identifier. |
+| Dashboard → Google Pay | Nothing to register for Stripe-processed cards. Stripe is the gateway. **Production** Google Pay needs the app's Google Pay business profile approved by Google; **test** mode works with Stripe test keys. |
+| Currencies | The wallet only shows when the wallet and the card networks support the PaymentIntent's currency (`USD`, `INR`, `GBP` are fine). The buyer's device also needs a card in the wallet. |
+
+What the **app** must do:
+
+- Configure PaymentSheet with `applePay: { merchantCountryCode, merchantIdentifier }`
+  and `googlePay: { merchantCountryCode, currencyCode, testEnv }`. Use the
+  quote's `currency` for `currencyCode`.
+- Keep presenting the sheet with `clientToken` from `POST /checkout` or
+  `/resume`; a wallet payment settles through the same `payment_intent.succeeded`
+  webhook as a card, so nothing else changes.
+
+Compatibility notes for the server side: the PaymentIntent must stay a plain
+automatic-methods intent: no `payment_method_types`, no `payment_method`, no
+`confirm`. `/resume` returns the same intent, so a wallet choice survives a
+dismissed sheet.
 
 ### `POST /api/v1/checkout/:orderId/resume`
 
@@ -335,6 +600,9 @@ again to refresh them).
 
 ### Checkout, step by step
 
+0. **Addresses and billing rule.** The buyer's address ids go through the
+   shared ownership check (stranger's ignored, archived rejected), and a taxed
+   sale with no billing address is refused, before anything is held.
 1. **Order + hold** (one database transaction). The server checks the drop is
    on sale and finds its current price for the market. It picks the
    lowest-numbered free piece and creates the order (`PENDING_PAYMENT`). It holds
@@ -423,6 +691,17 @@ for the operator side.
 - **Resume does not extend the hold.** `reservationExpiresAt` stays the
   original time.
 - **One item per order** (`quantity` must be 1). No cart.
+- **A quote is a snapshot.** It does not hold a piece or lock the price or tax
+  rate. The charge is whatever the price is at checkout; re-quote if the sheet
+  stays open for long.
+- **No shipping charge.** `shippingAmount` is always `"0.00"` until shipping is
+  priced.
+- **US sales tax is inside the price** (see
+  [How the charge relates to the invoice](#how-the-charge-relates-to-the-invoice)).
+- **The billing rule depends on tax configuration.** If staff have not
+  configured a tax rate for the market's home country, no billing address is
+  demanded, `taxType` is `null`, and the invoice cannot be issued until a rate
+  is added (`TAX_NO_CONFIGURATION`).
 - **Stripe only.** `gateway` accepts only `STRIPE`.
 - **The publishable key is not served by the API.** Ship it in app config.
 - **No buyer cancel for an open refund.** Once requested, only staff can

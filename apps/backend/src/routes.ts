@@ -35,6 +35,8 @@ export interface ApiRouters {
     adminMedia: Router;
     /** Market/currency regions. Reads are wide, writes are platform-wide only. */
     adminMarkets: Router;
+    /** GET /markets: the active markets, public, for the app's market picker. */
+    markets: Router;
     /** Order list, full detail with SKU units, and status transitions. */
     adminOrders: Router;
     /** A buyer's own order tracking — docs/orders/order-history-and-shipments.md. */
@@ -127,6 +129,7 @@ export function buildRoutes(routers: ApiRouters): Router {
 
     api.use('/auth', routers.auth);
     api.use('/users', routers.users);
+    api.use('/markets', routers.markets);
     api.use('/products', routers.products);
     api.use('/discover', routers.discover);
     api.use('/marketplace', routers.marketplace);

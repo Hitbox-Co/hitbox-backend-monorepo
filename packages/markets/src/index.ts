@@ -26,6 +26,7 @@ export {
     MARKET_WRITE_CAPABILITY,
     MARKETS_ERROR_CODES,
     MARKETS_MODULE,
+    PUBLIC_MARKETS_RATE_LIMIT,
 } from './constants/markets.constant';
 
 export {
@@ -40,4 +41,4 @@ export type {
     UpdateMarketDto,
 } from './dto/market.dto';
 
-export type { MarketService } from './service/market.service';
+export type { MarketService, PublicMarket } from './service/market.service';

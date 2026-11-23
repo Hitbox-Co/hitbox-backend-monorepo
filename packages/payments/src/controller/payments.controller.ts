@@ -3,6 +3,7 @@ import { asyncHandler } from '@hitbox/shared';
 import type { PaymentAccess } from '../domain/payment-access';
 import {
     approveRefundSchema,
+    checkoutQuoteSchema,
     checkoutSchema,
     confirmReturnSchema,
     createGatewayConfigSchema,
@@ -54,6 +55,13 @@ export class PaymentsController {
         const dto = checkoutSchema.parse(req.body);
         const buyerId = this.deps.resolveBuyer(req);
         res.status(201).json({ data: await this.deps.checkout.checkout(dto, buyerId) });
+    });
+
+    /** POST /checkout/quote — the price the buyer will pay, with no side effects. */
+    quoteCheckout: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = checkoutQuoteSchema.parse(req.body);
+        const buyerId = this.deps.resolveBuyer(req);
+        res.json({ data: await this.deps.checkout.quote(dto, buyerId) });
     });
 
     /** POST /checkout/:orderId/resume — back to paying for an unpaid order. */

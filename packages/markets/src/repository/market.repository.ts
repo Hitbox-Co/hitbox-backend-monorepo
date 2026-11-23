@@ -49,6 +49,21 @@ export class MarketRepository {
         return { total, items };
     }
 
+    /** Markets a buyer can shop in: active and not archived. Default first. */
+    listSellable(): Promise<
+        { id: string; currency: Currency; marketCountrys: { countryCode: string }[] }[]
+    > {
+        return this.prisma.market.findMany({
+            where: { isActive: true, archivedAt: null },
+            select: {
+                id: true,
+                currency: true,
+                marketCountrys: { select: { countryCode: true }, orderBy: { countryCode: 'asc' } },
+            },
+            orderBy: [{ isDefault: 'desc' }, { code: 'asc' }],
+        });
+    }
+
     findById(id: string): Promise<MarketRow | null> {
         return this.prisma.market.findUnique({ where: { id }, include: marketInclude });
     }

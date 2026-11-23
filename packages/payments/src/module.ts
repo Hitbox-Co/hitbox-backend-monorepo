@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import type { Request, RequestHandler } from 'express';
 import type { PrismaClient } from '@hitbox/database';
-import { createModuleLogger } from '@hitbox/shared';
+import { createModuleLogger, createRateLimiter } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import {
     DEFAULT_RETURN_WINDOW_DAYS,
@@ -11,6 +11,7 @@ import {
     PAYMENT_CONFIGURE_CAPABILITY,
     PAYMENT_MANAGE_CAPABILITY,
     PAYMENT_READ_CAPABILITY,
+    QUOTE_RATE_LIMIT,
 } from './constants/payments.constant';
 import { PaymentsController } from './controller/payments.controller';
 import type {
@@ -25,6 +26,7 @@ import type {
     IFinancePostings,
     IRoyaltyReversal,
 } from './domain/interfaces/finance-postings.interface';
+import type { IAddressBook, ITaxEstimator } from './domain/interfaces/checkout-support.interface';
 import type { IOrderLedger } from './domain/interfaces/order-ledger.interface';
 import type { IPaymentGateway } from './domain/interfaces/payment-gateway.interface';
 import type { IReturnEvidenceMedia } from './domain/interfaces/return-evidence.interface';
@@ -64,6 +66,16 @@ export interface PaymentsModuleDeps {
     royalties: IRoyaltyReversal;
     /** Claims: revoke ownership and quarantine the tag on a refund. */
     claims: IClaimRevocation;
+    /**
+     * Users: the buyer's address book, for the one ownership check checkout and
+     * the quote share. Optional only so unit tests can omit it.
+     */
+    addresses?: IAddressBook | undefined;
+    /**
+     * Tax: the invoice's own arithmetic, for the quote and the billing-address
+     * rule. Optional only so unit tests can omit it.
+     */
+    tax?: ITaxEstimator | undefined;
     /**
      * Media: buyer photos on a return. Optional — without a bucket a buyer
      * cannot place a physical return (it requires photos), and existing
@@ -141,6 +153,8 @@ export function createPaymentsModule(deps: PaymentsModuleDeps): PaymentsModule {
         eventBus: deps.eventBus,
         logger,
         holdSeconds: deps.holdSeconds ?? 900,
+        addresses: deps.addresses,
+        tax: deps.tax,
     });
 
     const refundService = new RefundService({
@@ -212,6 +226,21 @@ export function createPaymentsModule(deps: PaymentsModuleDeps): PaymentsModule {
             router.use(requireAuth);
             const { requirePermission } = deps.guard;
 
+            // The price before paying. Read-only, so it needs no more than the
+            // buyer's own `order:create` grant, but it runs a price lookup, a
+            // stock probe and a tax lookup, so it is throttled per user.
+            // Registered before '/checkout/:orderId/resume' ('quote' is no id).
+            router.post(
+                '/checkout/quote',
+                requirePermission(ORDER_CREATE_CAPABILITY),
+                createRateLimiter({
+                    windowMs: QUOTE_RATE_LIMIT.windowMs,
+                    max: QUOTE_RATE_LIMIT.perUser,
+                    prefix: 'checkout-quote',
+                    keyGenerator: (req) => `user:${deps.resolveBuyer(req) ?? 'anonymous'}`,
+                }),
+                controller.quoteCheckout,
+            );
             router.post(
                 '/checkout',
                 requirePermission(ORDER_CREATE_CAPABILITY),

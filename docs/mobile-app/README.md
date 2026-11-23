@@ -13,6 +13,7 @@ and the folders under [../](../).
 |---|---|---|
 | [auth-api.md](auth-api.md) | `/health`, `/auth`, `/authz` | Sign-up check, session, "who am I", own permissions |
 | [users-api.md](users-api.md) | `/users` | Profiles: my profile and stats, edit, the public/private switch, other collectors' profiles |
+| [addresses-api.md](addresses-api.md) | `/users/me/addresses` | Address book: list, add, edit, delete, default (used by checkout) |
 | [follows-api.md](follows-api.md) | `/follows` | Follow collectors and artists; followers and following lists |
 | [discover-api.md](discover-api.md) | `/discover` | Discover tab: hero, trending, creators, latest drops, search |
 | [marketplace-api.md](marketplace-api.md) | `/marketplace` | Marketplace tab: search, category chips, Featured Listings, See All |
@@ -23,7 +24,7 @@ and the folders under [../](../).
 | [wishlist-api.md](wishlist-api.md) | `/wishlist` | The heart on every card, and the Wishlist screen |
 | [cart-api.md](cart-api.md) | `/cart` | Add to cart, the Cart screen (each item checked out on its own) |
 | [orders-api.md](orders-api.md) | `/orders` | Checkout, order history, shipments (starts with the full purchase flow) |
-| [payments-api.md](payments-api.md) | buyer payment routes | Paying for an order, refund requests |
+| [payments-api.md](payments-api.md) | buyer payment routes, `/markets` | Markets, checkout quote, paying (cards, Apple Pay, Google Pay), refund requests |
 | [invoices-api.md](invoices-api.md) | buyer invoice routes | Receipts / tax invoices |
 
 ## Base URL

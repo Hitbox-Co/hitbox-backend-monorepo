@@ -19,9 +19,9 @@ export interface InvoiceableOrder {
     /** Printed as the line description. Snapshotted onto the invoice line. */
     productName: string;
     quantity: number;
-    /** Per-unit price, exclusive of tax, in `currency`. */
+    /** Per-unit price **including** tax (what the buyer was charged), in `currency`. */
     unitPrice: string;
-    /** quantity × unitPrice, exclusive of tax. */
+    /** quantity × unitPrice, including tax: the amount charged. */
     amount: string;
     currency: string;
     /** PAID / SHIPPED / DELIVERED etc. Only settled orders may be invoiced. */
