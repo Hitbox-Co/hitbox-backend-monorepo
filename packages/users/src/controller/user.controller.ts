@@ -1,6 +1,6 @@
 import type { RequestHandler } from 'express';
 import { AppError, asyncHandler } from '@hitbox/shared';
-import { updateProfileSchema } from '../dto/user.dto';
+import { updateProfileSchema, userIdParamSchema, handleParamSchema } from '../dto/user.dto';
 import type { UserService } from '../service/user.service';
 
 export class UserController {
@@ -21,8 +21,15 @@ export class UserController {
         res.json({ data: await this.service.updateProfile(auth.accountId, dto) });
     });
 
-    /** GET /users/:id — public profile */
+    /** GET /users/:id — anyone's profile; optional auth fills `viewer`. */
     getById: RequestHandler = asyncHandler(async (req, res) => {
-        res.json({ data: await this.service.getPublicById(req.params.id as string) });
+        const { id } = userIdParamSchema.parse(req.params);
+        res.json({ data: await this.service.getProfile(id, req.auth?.accountId ?? null) });
+    });
+
+    /** GET /users/handle/:handle — the same, by handle. */
+    getByHandle: RequestHandler = asyncHandler(async (req, res) => {
+        const { handle } = handleParamSchema.parse(req.params);
+        res.json({ data: await this.service.getProfileByHandle(handle, req.auth?.accountId ?? null) });
     });
 }

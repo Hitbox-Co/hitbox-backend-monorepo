@@ -301,7 +301,7 @@ export class OrderWriteRepository {
                 async (tx) => {
                     const order = await tx.order.findFirst({
                         where: { id: input.orderId, status: 'PENDING_PAYMENT' },
-                        select: { id: true },
+                        select: { id: true, buyerId: true, productId: true, variantId: true },
                     });
                     if (!order) return false;
 
@@ -342,6 +342,11 @@ export class OrderWriteRepository {
                     });
                     // Cancelled between our read and this write: undo the commit.
                     if (updated.count === 0) throw new SettlementLost();
+                    // Bought: it leaves the buyer's cart (docs/mobile-app/cart-api.md).
+                    // Same transaction, so a paid item is never still "in the cart".
+                    await tx.cartItem.deleteMany({
+                        where: { userId: order.buyerId, productId: order.productId, variantId: order.variantId },
+                    });
                     await recordStatusChange(tx, {
                         orderId: input.orderId, from: 'PENDING_PAYMENT', to: 'PAID', source: 'PAYMENT',
                         at: input.settledAt,
@@ -567,6 +572,26 @@ export class OrderWriteRepository {
             select: { id: true, skuId: true, expiresAt: true },
         });
         return hold ? { reservationId: hold.id, skuId: hold.skuId, expiresAt: hold.expiresAt } : null;
+    }
+
+    /** The newest unpaid order of this buyer for this drop/variant that still holds a unit. */
+    async findOpenCheckout(input: {
+        buyerId: string;
+        productId: string;
+        variantId: string | null;
+    }): Promise<string | null> {
+        const order = await this.prisma.order.findFirst({
+            where: {
+                buyerId: input.buyerId,
+                productId: input.productId,
+                variantId: input.variantId,
+                status: 'PENDING_PAYMENT',
+                inventoryReservations: { some: { status: 'HELD', expiresAt: { gt: new Date() } } },
+            },
+            orderBy: { placedAt: 'desc' },
+            select: { id: true },
+        });
+        return order?.id ?? null;
     }
 
     /** The sweeper: every hold past its expiry goes back on sale. */

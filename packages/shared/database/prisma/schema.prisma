@@ -1791,7 +1791,7 @@ enum NotificationStatus {
 // ORDERS MODULE SCHEMA  (packages/orders/prisma/orders.prisma)
 // Merged by shared/database/scripts/merge-schema.mjs.
 //
-// Owns: Order, OrderAddress, InventoryReservation
+// Owns: Order, OrderAddress, InventoryReservation, CartItem
 //
 // The purchase record. Money movement is the payments module; margin and
 // royalty postings are the finance module. This module owns only the order's
@@ -2039,6 +2039,33 @@ enum ReservationStatus {
   HELD
   COMMITTED
   RELEASED
+}
+
+/// A drop the buyer means to buy — one row of the mobile cart.
+///
+/// Deliberately not an order and not a stock hold: nothing is reserved, and
+/// price and availability are read live every time the cart is shown. An
+/// order is exactly one serialized unit, so each row is checked out on its own
+/// through `POST /checkout`; the row is deleted in the same transaction that
+/// marks that order PAID. One row per (user, drop, variant) — Postgres treats
+/// NULLs as distinct, so the migration adds a partial unique index for the
+/// no-variant case that `@@unique` alone cannot express.
+model CartItem {
+  id         String       @id @db.Uuid
+  /// Human-readable record id (`crt…`). Unique, never a foreign key —
+  /// the uuid above stays the key. Written by the publicCode client extension.
+  publicCode String?      @unique @db.VarChar(32)
+  userId     String       @db.Uuid
+  user       User         @relation(fields: [userId], references: [id])
+  productId  String       @db.Uuid
+  drop       Drop         @relation(fields: [productId], references: [id])
+  variantId  String?      @db.Uuid
+  variant    DropVariant? @relation(fields: [variantId], references: [id])
+  createdAt  DateTime
+  updatedAt  DateTime
+
+  @@unique([userId, productId, variantId])
+  @@index([userId, createdAt])
 }
 
 // ───── source: packages/organizations/prisma/organizations.prisma ──────────────────
@@ -2575,6 +2602,7 @@ model Drop {
   orders           Order[]
   royaltyRules     RoyaltyRule[]
   wishlistItems    WishlistItem[]
+  cartItems        CartItem[]
   /// Per-product GST/sales-tax rates and HSN codes — see packages/tax.
   taxConfigurations TaxConfiguration[]
   /// Monthly COGS variance reviews for this drop — see packages/finance.
@@ -2627,6 +2655,7 @@ model DropVariant {
   skus          Sku[]
   orders        Order[]
   wishlistItems WishlistItem[]
+  cartItems     CartItem[]
   /// Vendor supply, per variant — see packages/supply.
   vendorAllotments VendorVariantAllotment[]
   supplyBatchLines SupplyBatchLine[]
@@ -3224,14 +3253,22 @@ model Follow {
   /// the uuid above stays the key. Written by the publicCode client extension.
   publicCode String? @unique @db.VarChar(32)
   followerId             String   @db.Uuid
-  follower               User     @relation(fields: [followerId], references: [id])
+  follower               User     @relation("Follow_follower", fields: [followerId], references: [id])
   artistId               String?  @db.Uuid
   artist                 Artist?  @relation(fields: [artistId], references: [id])
   followedOrganizationId String?  @db.Uuid
+  /// A collector following another collector. Exactly one of artistId,
+  /// followedOrganizationId and followedUserId is set (CHECK in the migration),
+  /// and a user never follows themselves.
+  followedUserId         String?  @db.Uuid
+  followedUser           User?    @relation("Follow_followedUser", fields: [followedUserId], references: [id], onDelete: Cascade)
   createdAt              DateTime
 
   @@unique([followerId, artistId])
   @@unique([followerId, followedOrganizationId])
+  @@unique([followerId, followedUserId])
+  @@index([followedUserId])
+  @@index([artistId])
 }
 
 /// A saved product, optionally narrowed to a variant. Unique per
@@ -4292,7 +4329,11 @@ model User {
   notifications            Notification[]
   notificationPreferences  NotificationPreference[]
   wishlistItems            WishlistItem[]
-  follows                  Follow[]
+  cartItems                CartItem[]
+  /// Follows this user made (artists, organizations, other collectors).
+  follows                  Follow[]                @relation("Follow_follower")
+  /// Collectors following this user.
+  followers                Follow[]                @relation("Follow_followedUser")
   resaleListings           ResaleListing[]
   supportCase_reporter     SupportCase[]           @relation("User_reporter")
   supportCase_resolvedBy   SupportCase[]           @relation("User_resolvedBy")

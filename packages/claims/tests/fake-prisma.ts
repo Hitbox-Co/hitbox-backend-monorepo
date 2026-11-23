@@ -397,11 +397,14 @@ export class FakePrisma {
         findUnique: async ({ where }: { where: Row; select?: Row }) => {
             await tick();
             const key = where.userId_skuId as { userId: string; skuId: string };
-            return (
-                this.store.buyerCollection.find(
-                    (b) => b.userId === key.userId && b.skuId === key.skuId,
-                ) ?? null
+            const row = this.store.buyerCollection.find(
+                (b) => b.userId === key.userId && b.skuId === key.skuId,
             );
+            if (!row) return null;
+            // The owner's profile setting, for the owner-privacy rule. Seeded
+            // users default to PUBLIC unless a test sets profileVisibility.
+            const user = this.store.user.find((u) => u.id === key.userId);
+            return { ...row, user: { profileVisibility: user?.profileVisibility ?? 'PUBLIC' } };
         },
         upsert: async ({ where, create, update }: { where: Row; create: Row; update: Row }) => {
             await tick();

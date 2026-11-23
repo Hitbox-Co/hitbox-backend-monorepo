@@ -163,7 +163,7 @@ export function createTaxModule(deps: TaxModuleDeps): TaxModule {
     // payment — so it is logged with everything needed to issue it by hand
     // through POST /admin/tax/invoices.
     deps.eventBus.subscribe<OrderSettledEventPayload>(
-        deps.settlementEventName ?? 'payments.order.settled',
+        deps.settlementEventName ?? 'payments.order.settled', // PAYMENT_EVENTS.ORDER_SETTLED
         async (payload) => {
             try {
                 await invoices.issueForOrder({ orderId: payload.orderId }, { actorId: null });

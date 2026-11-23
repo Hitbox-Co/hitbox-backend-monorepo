@@ -217,9 +217,12 @@ export class ClaimsRepository {
     ): Promise<'PUBLIC' | 'PRIVATE' | null> {
         const row = await this.prisma.buyerCollection.findUnique({
             where: { userId_skuId: { userId, skuId } },
-            select: { visibility: true, archivedAt: true },
+            select: { visibility: true, archivedAt: true, user: { select: { profileVisibility: true } } },
         });
         if (!row || row.archivedAt) return null;
+        // A PRIVATE profile hides everything its owner holds, whatever each
+        // item's own setting — so the owner is named only when BOTH are PUBLIC.
+        if (row.user.profileVisibility !== 'PUBLIC') return 'PRIVATE';
         return row.visibility as 'PUBLIC' | 'PRIVATE';
     }
 

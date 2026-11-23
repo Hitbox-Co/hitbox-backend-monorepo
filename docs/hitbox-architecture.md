@@ -285,7 +285,7 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 | Port (defined by consumer) | Adapter (implemented by provider) | Purpose |
 |---|---|---|
 | `IAccountLookup` (auth) | `UserAccountLookup` (users) | resolve Clerk user → local account on every authenticated request |
-| `IProductDiscovery` (discover) | `ProductDiscoveryAdapter` (products) | lightweight product cards for the Discover feed |
+| `IProductDiscovery` (discover) | `ProductDiscoveryAdapter` (products) | drop cards and creators for the Discover feed |
 | `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist) for the Marketplace feed |
 | `IArtistCollectionStats` (collections) | `ArtistCollectionStatsAdapter` (artist) | `ArtistCollection` capacity (`Σ maximumLimit`) for the collection-progress stat |
 | `IMediaUrlResolver` (products, collections, claims) | closure over `S3ObjectStorage` (bootstrap) | a renderable URL for a `MediaAsset.storageRef` |
@@ -304,7 +304,7 @@ object-storage **key**, not a URL, and only the media module knows the bucket,
 region and which prefixes are public (see
 [media/s3-configuration.md](media/s3-configuration.md)).
 
-Note what this buys discover and marketplace: those modules have **zero database knowledge** — no `@hitbox/database` dependency at all. Each defines its own screen-level vocabulary (`DiscoverSection`: `trending` / `new_releases` / `top_creators`; `MarketplaceCategory`: `cards` / `figures` / `apparel` / …) and the products adapters map that to storage concerns (`MarketplaceStatus`, `ProductCategory` sets, ordering). Extracting either into a service later means swapping one adapter for an HTTP client.
+Note what this buys discover and marketplace: those modules have **zero database knowledge** — no `@hitbox/database` dependency at all. Each defines its own screen-level vocabulary (`DiscoverSection`: `featured` / `trending` / `new_releases`; `MarketplaceCategory`: `cards` / `figures` / `apparel` / …) and the products adapters map that to storage concerns (`MarketplaceStatus`, `ProductCategory` sets, ordering). Extracting either into a service later means swapping one adapter for an HTTP client.
 
 **Collections is the third flavor of module:** it *owns a table* (`BuyerCollection`) like products/users, *and* consumes ports. Its rows embed a product card, read by traversing the `sku` relation **declared in its own partial** (`collections.prisma`) and then `sku.product` — a documented, deliberate shortcut at the database layer. On extraction, both hops become port calls.
 

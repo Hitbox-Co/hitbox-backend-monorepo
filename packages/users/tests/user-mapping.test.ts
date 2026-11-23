@@ -51,6 +51,7 @@ function makeRepo(user: User | null) {
     return {
         findById: jest.fn().mockResolvedValue(user),
         findByClerkId: jest.fn().mockResolvedValue(user),
+        findByHandle: jest.fn().mockResolvedValue(user),
         existsByEmail: jest.fn().mockResolvedValue(user !== null),
         upsertFromClerk: jest.fn().mockResolvedValue(user ?? row()),
         softDeleteByClerkId: jest.fn().mockResolvedValue(undefined),
@@ -167,38 +168,56 @@ describe('updateProfileSchema', () => {
 });
 
 describe('visibility on the public endpoint', () => {
-    it('returns a PUBLIC profile', async () => {
-        const service = new UserService({
-            eventBus: makeBus() as never,
-            users: makeRepo(row({ profileVisibility: Visibility.PUBLIC })) as never,
-            logger,
-        });
-        expect((await service.getPublicById('id')).handle).toBe('admin');
+    const stats = {
+        claimedItems: 12, artistCollections: 3, collectionProgress: { owned: 10, total: 25, percentage: 40 },
+        followers: 7, following: 2, followingArtists: 4,
+    };
+    const statsPort = (following = false) => ({
+        getStats: jest.fn().mockResolvedValue(stats),
+        isFollowing: jest.fn().mockResolvedValue(following),
+    });
+    const build = (user: User | null, port = statsPort()) =>
+        new UserService({ eventBus: makeBus() as never, users: makeRepo(user) as never, logger, stats: port as never });
+
+    it('returns a PUBLIC profile with stats', async () => {
+        const profile = await build(row({ profileVisibility: Visibility.PUBLIC })).getProfile('id', null);
+        expect(profile).toMatchObject({ handle: 'admin', isPrivate: false, stats, viewer: null });
     });
 
-    it('404s a PRIVATE profile rather than 403', async () => {
-        // 403 would confirm the id exists, which is enough to enumerate users
-        // on an unauthenticated route.
-        const service = new UserService({
-            eventBus: makeBus() as never,
-            users: makeRepo(row({ profileVisibility: Visibility.PRIVATE })) as never,
-            logger,
-        });
-        await expect(service.getPublicById('id')).rejects.toMatchObject({
+    it('returns a PRIVATE profile too — name and stats, flagged private', async () => {
+        // Private hides what the user owns (collections/claims enforce that),
+        // not who they are.
+        const profile = await build(row({ profileVisibility: Visibility.PRIVATE })).getProfile('id', null);
+        expect(profile).toMatchObject({ handle: 'admin', isPrivate: true, stats });
+        expect(profile).not.toHaveProperty('email');
+        expect(profile).not.toHaveProperty('generalLocation');
+    });
+
+    it('fills viewer for a signed-in visitor', async () => {
+        const user = row({ profileVisibility: Visibility.PRIVATE });
+        const profile = await build(user, statsPort(true)).getProfile(user.id, 'someone-else');
+        expect(profile.viewer).toEqual({ isSelf: false, isFollowing: true });
+        const own = await build(user).getProfile(user.id, user.id);
+        expect(own.viewer).toEqual({ isSelf: true, isFollowing: false });
+    });
+
+    it('finds a profile by handle', async () => {
+        await expect(build(row()).getProfileByHandle('admin', null)).resolves.toMatchObject({ handle: 'admin' });
+    });
+
+    it('404s an archived profile', async () => {
+        await expect(build(row({ archivedAt: new Date() })).getProfile('id', null)).rejects.toMatchObject({
             statusCode: 404,
             code: USERS_ERROR_CODES.USER_NOT_FOUND,
         });
     });
 
-    it('404s an archived profile', async () => {
-        const service = new UserService({
-            eventBus: makeBus() as never,
-            users: makeRepo(
-                row({ profileVisibility: Visibility.PUBLIC, archivedAt: new Date() }),
-            ) as never,
-            logger,
-        });
-        await expect(service.getPublicById('id')).rejects.toMatchObject({ statusCode: 404 });
+    it('404s a deactivated (suspended) profile', async () => {
+        await expect(build(row({ isActive: false })).getProfile('id', null)).rejects.toMatchObject({ statusCode: 404 });
+    });
+
+    it('404s an unknown id', async () => {
+        await expect(build(null).getProfile('id', null)).rejects.toMatchObject({ statusCode: 404 });
     });
 
     it('404s an archived row on getMe too', async () => {

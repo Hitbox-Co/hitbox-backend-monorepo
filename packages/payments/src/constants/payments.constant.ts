@@ -96,6 +96,13 @@ export const PAYMENT_EVENTS = {
     CHECKOUT_STARTED: 'payments.checkout.started',
     /** The gateway confirmed the money arrived. */
     PAYMENT_SUCCEEDED: 'payments.payment.succeeded',
+    /**
+     * The money arrived AND the order was marked paid. Tax issues the invoice
+     * on this. Not published when settlement is parked for review (e.g. the
+     * stock hold expired before the webhook), so no invoice goes out for an
+     * order that is not actually paid.
+     */
+    ORDER_SETTLED: 'payments.order.settled',
     PAYMENT_FAILED: 'payments.payment.failed',
     REFUND_REQUESTED: 'payments.refund.requested',
     REFUND_APPROVED: 'payments.refund.approved',

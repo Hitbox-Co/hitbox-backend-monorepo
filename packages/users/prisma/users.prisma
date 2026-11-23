@@ -55,7 +55,11 @@ model User {
   notifications            Notification[]
   notificationPreferences  NotificationPreference[]
   wishlistItems            WishlistItem[]
-  follows                  Follow[]
+  cartItems                CartItem[]
+  /// Follows this user made (artists, organizations, other collectors).
+  follows                  Follow[]                @relation("Follow_follower")
+  /// Collectors following this user.
+  followers                Follow[]                @relation("Follow_followedUser")
   resaleListings           ResaleListing[]
   supportCase_reporter     SupportCase[]           @relation("User_reporter")
   supportCase_resolvedBy   SupportCase[]           @relation("User_resolvedBy")

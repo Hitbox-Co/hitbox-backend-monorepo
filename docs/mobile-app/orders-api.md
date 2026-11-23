@@ -1,0 +1,424 @@
+# Orders — API
+
+The buyer's own orders. This API feeds the **My orders** list (with its tabs),
+the **Order detail** screen (status stepper, buttons, refund state), the
+**Track parcel** screen and the **Cancel order** button on an unpaid order.
+
+| Method | Path | Auth | Purpose |
+|---|---|---|---|
+| GET | `/orders` | Bearer | My orders, with tabs and badge counts |
+| GET | `/orders/:orderId` | Bearer | Full order detail, plus which buttons to show (`actions`) |
+| GET | `/orders/:orderId/tracking` | Bearer | Carrier, tracking number and status timeline |
+| POST | `/orders/:orderId/cancel` | Bearer | Cancel an **unpaid** order |
+
+Base path: `/api/v1/orders`. Code: `packages/orders` (`BuyerOrderController`,
+`BuyerOrderService`, `dto/buyer-order.dto.ts`).
+
+Placing an order and paying for it are **not** in this router. They live in the
+payments module: see [payments-api.md](payments-api.md).
+
+---
+
+## Purchase flow
+
+From the **Buy Now** button to the receipt. Each step names the file that
+documents it.
+
+| # | App step | Call | Doc |
+|---|---|---|---|
+| 1 | Buyer taps **Buy Now**, picks a variant and address, accepts terms | `POST /checkout` → creates the order (`PENDING_PAYMENT`), holds one numbered piece for 15 min, returns a Stripe `clientToken` | [payments-api.md](payments-api.md#post-apiv1checkout) |
+| 2 | Show Stripe's payment sheet with `clientToken` | Stripe SDK (no HitBox call) | [payments-api.md](payments-api.md#paying-with-stripe) |
+| 3 | App was killed / sheet dismissed before paying | `POST /checkout/:orderId/resume` → same order, same charge, fresh `clientToken` | [payments-api.md](payments-api.md#post-apiv1checkoutorderidresume) |
+| 4 | Wait for the result | Poll `GET /orders/:orderId` until `status` leaves `PENDING_PAYMENT` | this file |
+| 5 | Changed their mind before paying | `POST /orders/:orderId/cancel` | this file |
+| 6 | Order is `PAID` → `PROCESSING` → `SHIPPED` → `DELIVERED` | `GET /orders/:orderId`, `GET /orders/:orderId/tracking` | this file |
+| 7 | Receipt | `GET /invoices/:invoiceId/download` (id from `invoice.id` on the detail) | [invoices-api.md](invoices-api.md) |
+| 8 | Something wrong (or cancel after paying) | `POST /refunds` | [payments-api.md](payments-api.md#post-apiv1refunds) |
+
+The key rule: **the app never decides that an order is paid.** Stripe tells the
+server through a webhook, and the server moves the order to `PAID`. After the
+payment sheet reports success, the app shows "Confirming payment…" and polls
+`GET /orders/:orderId`.
+
+---
+
+## Authentication
+
+Every endpoint needs a signed-in user: the Clerk session JWT as
+`Authorization: Bearer <token>`. See [auth-api.md](auth-api.md).
+
+The caller also needs `order:read` (reads) or `order:create` (cancel). Every
+buyer holds both at `own` scope, so a missing grant (`403 AUTHZ_FORBIDDEN`)
+means the account is misconfigured, not that the user did something wrong.
+
+All calls are keyed on the caller's own id. **Someone else's order is a `404
+ORDERS_NOT_FOUND`**, the same answer as an order that does not exist.
+
+---
+
+## Shapes
+
+Money is always a **decimal string** in the order's own currency (`"2499.00"`).
+Dates are ISO-8601 UTC strings.
+
+### `BuyerOrderListItem`: one row on "My orders"
+
+```jsonc
+{
+  "id": "8c1e2f6a-4b1d-4c55-9a3e-1f2b3c4d5e6f",
+  "reference": "odr0kz3m9q",          // short code to show and quote to support; null on old orders
+  "status": "SHIPPED",                // see "Order statuses" below
+  "statusLabel": "Shipped",           // English label from the API
+  "placedAt": "2026-10-20T09:00:00.000Z",
+  "deliveredAt": null,
+  "product": {
+    "id": "5d0b9e1c-…",               // drop id → GET /products/:id
+    "name": "Kaze — Neon Nights Tour Tee",
+    "code": "KZ-NN",                  // the drop's group code
+    "imageUrl": "https://cdn…/drop-images/….png", // null when no image
+    "artistName": "Kaze"              // null when the drop has no artist
+  },
+  "variantLabel": "M / Black",        // null for a drop without variants
+  "quantity": 1,                      // always 1 today
+  "amount": "2499.00",
+  "currency": "INR",
+  "tracking": {                       // null until shipped
+    "carrierName": "Delhivery",
+    "trackingNumber": "14900000000123",
+    "trackingUrl": null               // https link when the carrier has one
+  },
+  "refundInProgress": false           // true while a refund is REQUESTED / AWAITING_RETURN / APPROVED
+}
+```
+
+### `BuyerOrderDetail`: the order screen
+
+All list-item fields except `tracking` and `refundInProgress` (both replaced
+below), plus:
+
+```jsonc
+{
+  // …id, reference, status, statusLabel, placedAt, deliveredAt, product,
+  //   variantLabel, quantity, amount, currency (as in the list item)
+  "paidAt": "2026-10-20T09:03:12.000Z",
+  "shippedAt": "2026-10-21T14:00:00.000Z",
+  "variant": {                        // null for a drop without variants
+    "id": "c3a1…",
+    "label": "M / Black",
+    "options": [
+      { "dimension": "Size",   "value": "M",     "hexCode": null },
+      { "dimension": "Colour", "value": "Black", "hexCode": "#000000" }
+    ]
+  },
+  "unit": {                           // null until a packer scans the numbered piece
+    "skuCode": "KZ-NN-0014",
+    "serialNumber": 14,               // "#14 of 200"
+    "claimed": false,                 // the buyer tapped the tag and owns it
+    "claimedAt": null
+  },
+  "unitPrice": "2499.00",
+  "shippingAddress": BuyerAddress | null,
+  "billingAddress":  BuyerAddress | null,
+  "payment": {
+    "status": "PAID",                 // AWAITING_PAYMENT | PAID | FAILED | REFUNDED | CANCELLED
+    "paidAt": "2026-10-20T09:03:12.000Z",
+    "payBy": null,                    // while AWAITING_PAYMENT: when the held piece is released
+    "failureReason": null             // last declined attempt's reason ("Your card was declined.")
+  },
+  "refunds": [ BuyerOrderRefund ],    // newest first; [] when none
+  "tracking": {                       // null until shipped
+    "carrierName": "Delhivery",
+    "trackingNumber": "14900000000123",
+    "trackingUrl": null,
+    "shippedAt": "2026-10-21T14:00:00.000Z",
+    "deliveredAt": null,
+    "deliveredVia": null              // "ADMIN" | "NFC_CLAIM" | null
+  },
+  "timeline": [                       // one entry per status reached, oldest first
+    { "status": "PENDING_PAYMENT", "at": "2026-10-20T09:00:00.000Z" },
+    { "status": "PAID",            "at": "2026-10-20T09:03:12.000Z" },
+    { "status": "PROCESSING",      "at": "2026-10-21T10:30:00.000Z" },
+    { "status": "SHIPPED",         "at": "2026-10-21T14:00:00.000Z" }
+  ],
+  "invoice": {                        // null until an invoice is issued
+    "id": "e7f2…",                    // → GET /invoices/:invoiceId/download
+    "number": "INV-2026-27-IN-001234",
+    "date": "2026-10-20T09:03:15.000Z",
+    "totalAmount": "2499.00",
+    "currency": "INR"
+  },
+  "actions": BuyerOrderActions
+}
+```
+
+`payment.status` is derived from the order status:
+
+| Order `status` | `payment.status` |
+|---|---|
+| `PENDING_PAYMENT` | `AWAITING_PAYMENT` |
+| `PAID`, `PROCESSING`, `SHIPPED`, `DELIVERED` | `PAID` |
+| `REFUNDED` | `REFUNDED` |
+| `CANCELLED` | `REFUNDED` if it had been paid, else `FAILED` if a charge failed, else `CANCELLED` |
+
+### `BuyerAddress`
+
+A copy taken at checkout. It does not change when the buyer edits their address book.
+
+```jsonc
+{
+  "recipientName": "Arjun Singh",
+  "line1": "12 MG Road",
+  "line2": "Flat 4B",                 // null if not set
+  "city": "Bengaluru",
+  "state": "KA",                      // null if not set
+  "postalCode": "560001",
+  "countryCode": "IN",
+  "phone": "+919800000000"            // null if not set
+}
+```
+
+### `BuyerOrderRefund`: one entry in `refunds[]`
+
+```jsonc
+{
+  "id": "4b2d…",                      // → GET /refunds/:refundId for the photos
+  "status": "AWAITING_RETURN",        // REQUESTED | AWAITING_RETURN | APPROVED | PROCESSED | REJECTED
+  "statusLabel": "Waiting for your return",
+  "reasonCode": "DEFECTIVE_ITEM",
+  "reason": "The print is peeling after the first wash.",
+  "amount": "2499.00",                // null only on very old rows
+  "currency": "INR",
+  "requestedAt": "2026-10-25T08:00:00.000Z",
+  "returnRequired": true,             // the item must come back before approval
+  "returnReceivedAt": null,           // set when the warehouse receives it
+  "photoCount": 2,
+  "rejectionReason": null,            // set when REJECTED
+  "processedAt": null,                // when HitBox sent the money; banks take 5–10 business days after this
+  "failed": false                     // true: Stripe reported the refund failed; support will contact the buyer
+}
+```
+
+| `status` | `statusLabel` |
+|---|---|
+| `REQUESTED` | Refund requested |
+| `AWAITING_RETURN` | Waiting for your return |
+| `APPROVED` | Refund approved |
+| `PROCESSED` | Refunded |
+| `REJECTED` | Refund declined |
+
+### `BuyerOrderActions`: which buttons to show
+
+```jsonc
+{
+  "canCancel": false,                 // → POST /orders/:orderId/cancel
+  "canResumePayment": false,          // → POST /checkout/:orderId/resume
+  "canRequestRefund": true,           // → POST /refunds
+  "refundBlockedReason": null,        // why not, when canRequestRefund is false
+  "returnWindowEndsAt": "2026-11-04T12:00:00.000Z", // null until delivered
+  "canTrack": true,                   // a shipment exists
+  "canDownloadInvoice": true          // an invoice exists → invoice.id
+}
+```
+
+| Flag | True when | Button |
+|---|---|---|
+| `canCancel` | `status = PENDING_PAYMENT` | **Cancel order** |
+| `canResumePayment` | `PENDING_PAYMENT` and the stock hold has not expired | **Complete payment** (countdown from `payment.payBy`) |
+| `canRequestRefund` | see [refund rules](payments-api.md#refund-rules) | **Request a refund** / **Cancel & refund** if not shipped |
+| `canTrack` | a shipment is recorded | **Track parcel** |
+| `canDownloadInvoice` | an invoice exists | **Download invoice** |
+
+`refundBlockedReason` is one of `ORDER_NOT_REFUNDABLE`, `REFUND_IN_PROGRESS`,
+`RETURN_WINDOW_CLOSED`, `FULLY_REFUNDED`.
+
+---
+
+## Endpoints
+
+### `GET /api/v1/orders`
+
+"My orders", newest `placedAt` first.
+
+| Param | Values | Default |
+|---|---|---|
+| `tab` | `all` `active` `completed` `cancelled` | `all` |
+| `page` | int ≥ 1 | `1` |
+| `limit` | int 1–50 | `10` |
+
+| `tab` | Statuses |
+|---|---|
+| `all` | everything |
+| `active` | `PENDING_PAYMENT`, `PAID`, `PROCESSING`, `SHIPPED` |
+| `completed` | `DELIVERED` |
+| `cancelled` | `CANCELLED`, `REFUNDED` |
+
+**This response has no `data` envelope.** The list fields sit at the top level:
+
+```jsonc
+{
+  "page": 1,
+  "limit": 10,
+  "total": 7,                         // rows in the selected tab
+  "counts": { "all": 9, "active": 3, "completed": 4, "cancelled": 2 }, // every tab, always
+  "items": [ BuyerOrderListItem, … ]
+}
+```
+
+Use `counts` for the tab badges. It always has every tab, whichever tab you asked for.
+
+Errors: `422 VALIDATION_ERROR` for a bad `tab`, `page` or `limit`.
+
+### `GET /api/v1/orders/:orderId`
+
+```jsonc
+{ "data": BuyerOrderDetail }
+```
+
+Errors: `404 ORDERS_NOT_FOUND` (no such order, or not yours).
+
+### `GET /api/v1/orders/:orderId/tracking`
+
+The tracking part of the detail on its own, for a light refresh.
+
+```jsonc
+{
+  "data": {
+    "orderId": "8c1e2f6a-…",
+    "status": "SHIPPED",
+    "placedAt": "2026-10-20T09:00:00.000Z",
+    "paidAt": "2026-10-20T09:03:12.000Z",
+    "shippedAt": "2026-10-21T14:00:00.000Z",
+    "deliveredAt": null,
+    "shipment": {                     // null until shipped
+      "carrierName": "Delhivery",
+      "trackingNumber": "14900000000123",
+      "trackingUrl": null,
+      "shippedAt": "2026-10-21T14:00:00.000Z",
+      "deliveredAt": null,
+      "deliveredVia": null
+    },
+    "timeline": [ { "status": "PENDING_PAYMENT", "at": "…" }, { "status": "SHIPPED", "at": "…" } ]
+  }
+}
+```
+
+HitBox has no fixed logistics partner and no live parcel-scan feed:
+
+- show `carrierName` and `trackingNumber` with a **copy** button;
+- if `trackingUrl` is set, **Track parcel** opens it;
+- `deliveredVia: "NFC_CLAIM"` → "Delivered: you tapped your item"; `"ADMIN"` → "Delivered".
+
+Errors: `404 ORDERS_NOT_FOUND`.
+
+### `POST /api/v1/orders/:orderId/cancel`
+
+Cancel an order **before paying**. The held piece goes straight back on sale.
+
+Body (optional, may be empty `{}`):
+
+| Field | Rules |
+|---|---|
+| `reason` | string, trimmed, max 500 chars, optional |
+
+```json
+{ "reason": "Picked the wrong size" }
+```
+
+Returns the updated order:
+
+```jsonc
+{ "data": BuyerOrderDetail }          // status "CANCELLED"
+```
+
+Tapping twice is safe: an already-cancelled order is returned as-is.
+
+| Status | Code | When |
+|---|---|---|
+| 400 | `ORDERS_CANCEL_REQUIRES_REFUND` | The order is already paid. Use `POST /refunds` instead; `details.status` has the current status |
+| 409 | `ORDERS_INVALID_TRANSITION` | The payment landed a moment before the cancel. Reload; the order is paid |
+| 404 | `ORDERS_NOT_FOUND` | No such order, or not yours |
+| 422 | `VALIDATION_ERROR` | `reason` over 500 chars |
+
+### Errors common to all endpoints
+
+Auth errors (`401 AUTH_*`, `403 AUTH_ACCOUNT_SUSPENDED`) are listed in
+[auth-api.md](auth-api.md). Every error uses the shared envelope
+`{ "error": { "code", "message", "details" } }`; see
+[../api-reference.md](../api-reference.md).
+
+---
+
+## How it works
+
+### Order statuses
+
+| `status` | `statusLabel` | Means |
+|---|---|---|
+| `PENDING_PAYMENT` | Awaiting payment | Placed, a piece is held, payment not confirmed |
+| `PAID` | Order confirmed | Stripe confirmed the money; waiting to be packed |
+| `PROCESSING` | Being packed | A numbered piece was scanned for this order (`unit` is now set) |
+| `SHIPPED` | Shipped | Handed to a carrier, with tracking |
+| `DELIVERED` | Delivered | Confirmed by HitBox, or the buyer tapped the NFC tag |
+| `CANCELLED` | Cancelled | Never paid: cancelled by the buyer, payment failed, or time ran out |
+| `REFUNDED` | Refunded | Money returned |
+
+```
+PENDING_PAYMENT ──(webhook: paid)──▶ PAID ──▶ PROCESSING ──▶ SHIPPED ──▶ DELIVERED
+      │                                │           │             │           │
+      │ buyer cancel / payment failed  └───────────┴──── refund processed ───┴──▶ REFUNDED
+      │ / time ran out
+      ▼
+  CANCELLED
+```
+
+- **Only the server moves an order forward.** `PAID` comes from the Stripe
+  webhook. `PROCESSING` and `SHIPPED` come from the warehouse. `DELIVERED` comes
+  from HitBox staff or from the buyer tapping the item's NFC tag (a `SHIPPED`
+  order then becomes `DELIVERED` at once).
+- **The buyer can only cancel an unpaid order.** Once paid, "cancel" means a
+  refund, because the money has to go back.
+- `CANCELLED` and `REFUNDED` are final.
+
+### Stock hold and expiry
+
+1. `POST /checkout` holds the lowest-numbered free piece for
+   **15 minutes** (`INVENTORY_HOLD_SECONDS`, default 900). Nobody else can buy it.
+2. `payment.payBy` shows when the hold ends. `canResumePayment` turns false then.
+3. When the hold expires, the piece goes back on sale. The order stays
+   `PENDING_PAYMENT` for another **30 minutes** (`UNPAID_ORDER_GRACE_SECONDS`),
+   so a slow card payment (3-D Secure) can still settle if nobody took the piece.
+4. After that a server sweep (every 60 s) cancels the order.
+5. Cancelling yourself (`POST /orders/:orderId/cancel`) releases the hold at once.
+
+If a late payment arrives after someone else bought the piece, the money is
+parked for HitBox staff to review and refund. The order stays unpaid and is
+then cancelled.
+
+### Refund state on the order
+
+Refunds are requested through payments (`POST /refunds`). The order shows them
+in `refunds[]` and `refundInProgress`. Only one refund can be open at a time.
+The order moves to `REFUNDED` when HitBox processes the refund. Full rules:
+[payments-api.md → How it works](payments-api.md#how-it-works).
+
+### The return window
+
+A delivered order can be returned for **10 days** (`RETURN_WINDOW_DAYS`) after
+`deliveredAt`. `actions.returnWindowEndsAt` gives the exact end ("Return by
+4 Nov"). After it, the buyer cannot request any refund on that order
+(`refundBlockedReason: "RETURN_WINDOW_CLOSED"`). Before delivery, no window is
+running.
+
+---
+
+## Known limitations
+
+- **One item per order.** Every piece is numbered and an order carries one unit,
+  so `quantity` is always `1`. There is no cart.
+- **No live parcel tracking.** Only the carrier's name, number and link.
+- **The list has no `data` envelope** (`{ page, limit, total, counts, items }`),
+  unlike the other list endpoints.
+- **`statusLabel` is English.** Translate on the client if needed.
+- **The invoice appears a moment after payment.** It is issued when Stripe's
+  webhook confirms the payment, not inside the checkout call. Treat
+  `invoice: null` as "not ready yet", not as an error.

@@ -15,3 +15,6 @@ export type { UserService } from './service/user.service';
 // Events this module publishes.
 export { USERS_EVENTS } from './constants/users.constant';
 export type { AccountProvisionedPayload } from './events/users-event.payloads';
+
+export type { IProfileStats, ProfileStats } from './domain/profile-stats.port';
+export type { ProfileDto } from './dto/user.dto';

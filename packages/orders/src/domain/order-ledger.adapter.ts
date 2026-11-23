@@ -98,6 +98,10 @@ export class OrderLedgerAdapter {
         return this.orders.findLiveHold(orderId);
     }
 
+    findOpenCheckout(input: { buyerId: string; productId: string; variantId: string | null }) {
+        return this.orders.findOpenCheckout(input);
+    }
+
     releaseExpiredReservations(now: Date): Promise<number> {
         return this.orders.releaseExpiredReservations(now);
     }

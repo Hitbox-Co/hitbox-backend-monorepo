@@ -4,6 +4,7 @@ import { AppError, asyncHandler } from '@hitbox/shared';
 import {
     listCollectionQuerySchema,
     updateVisibilitySchema,
+    userIdParamSchema,
 } from '../dto/collection.dto';
 import type { CollectionService } from '../service/collection.service';
 
@@ -52,9 +53,11 @@ export class CollectionController {
     /** GET /collections/user/:userId — public showcase, no auth */
     listPublicByUser: RequestHandler = asyncHandler(async (req, res) => {
         const query = listCollectionQuerySchema.parse(req.query);
+        const { userId } = userIdParamSchema.parse(req.params);
         const { items, total } = await this.service.listPublicByUser(
-            req.params.userId as string,
+            userId,
             query,
+            req.auth?.accountId ?? null,
         );
         res.json({ data: items, meta: paginationMeta(query.page, query.limit, total) });
     });

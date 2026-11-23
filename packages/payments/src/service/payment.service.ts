@@ -137,6 +137,12 @@ export class PaymentService {
             currency: input.transaction.currency,
         });
 
+        if (marked) {
+            await this.deps.eventBus.publish(PAYMENT_EVENTS.ORDER_SETTLED, {
+                orderId: input.transaction.orderId,
+            });
+        }
+
         return { settled: true };
     }
 

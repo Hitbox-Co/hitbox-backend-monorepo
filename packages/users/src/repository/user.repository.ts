@@ -54,6 +54,13 @@ export class UserRepository {
         return this.prisma.user.findUnique({ where: { id } });
     }
 
+    /** Handles are unique; the lookup ignores case so `@Jameela` finds `jameela`. */
+    findByHandle(handle: string): Promise<User | null> {
+        return this.prisma.user.findFirst({
+            where: { handle: { equals: handle, mode: 'insensitive' } },
+        });
+    }
+
     findByClerkId(clerkId: string): Promise<User | null> {
         return this.prisma.user.findUnique({ where: { clerkId } });
     }

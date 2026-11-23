@@ -15,6 +15,7 @@ import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
 import { createMarketplaceModule } from '@hitbox/marketplace';
+import { createSocialModule } from '@hitbox/social';
 import { createCollectionsModule } from '@hitbox/collections';
 import { createArtistModule } from '@hitbox/artist';
 import { createContentModule } from '@hitbox/content';
@@ -77,7 +78,28 @@ export interface Bootstrapped {
  * then every module's router is built with auth's requireAuth middleware.
  */
 export function bootstrap(): Bootstrapped {
-    const usersModule = createUsersModule({ prisma, eventBus });
+    // Profile stats come from collections (items, progress) and social
+    // (follows), both built further down. Deferred like the audit recorder:
+    // only called at request time, long after bootstrap has finished.
+    const usersModule = createUsersModule({
+        prisma,
+        eventBus,
+        stats: {
+            getStats: async (userId) => {
+                const [shelf, follows] = await Promise.all([
+                    collectionsModule.service.getStats(userId),
+                    socialModule.follows.counts(userId),
+                ]);
+                return {
+                    claimedItems: shelf.totalClaimedItems,
+                    artistCollections: shelf.totalArtistCollections,
+                    collectionProgress: shelf.collectionProgress,
+                    ...follows,
+                };
+            },
+            isFollowing: (viewerId, userId) => socialModule.follows.isFollowingUser(viewerId, userId),
+        },
+    });
 
     const authModule = createAuthModule({
         prisma,
@@ -406,6 +428,8 @@ export function bootstrap(): Bootstrapped {
         resolveBuyer: (req: Request) => req.auth?.accountId as string,
         // Same number payments enforces, so the screens never disagree with it.
         returnWindowDays: env.RETURN_WINDOW_DAYS,
+        // The mobile cart's cards and availability (docs/mobile-app/cart-api.md).
+        cartCatalog: productsModule.cards,
     });
 
     /**
@@ -460,10 +484,18 @@ export function bootstrap(): Bootstrapped {
 
     const discoverModule = createDiscoverModule({
         catalog: productsModule.discovery,
+        optionalAuth: authModule.optionalAuth,
+    });
+
+    // Wishlist (WishlistItem is social's table); cards come from products.
+    const socialModule = createSocialModule({
+        prisma,
+        catalog: productsModule.cards,
     });
 
     const marketplaceModule = createMarketplaceModule({
         catalog: productsModule.listings,
+        optionalAuth: authModule.optionalAuth,
     });
 
     /**
@@ -843,11 +875,14 @@ export function bootstrap(): Bootstrapped {
 
     const apiRouter = buildRoutes({
         auth: authModule.router,
-        users: usersModule.createRouter(authModule.requireAuth),
+        users: usersModule.createRouter(authModule.requireAuth, authModule.optionalAuth),
         products: productsModule.createRouter(authModule.requireAuth),
         discover: discoverModule.router,
         marketplace: marketplaceModule.router,
-        collections: collectionsModule.createRouter(authModule.requireAuth),
+        wishlist: socialModule.createWishlistRouter(authModule.requireAuth),
+        follows: socialModule.createFollowsRouter(authModule.requireAuth, authModule.optionalAuth),
+        cart: ordersModule.createCartRouter(authModule.requireAuth),
+        collections: collectionsModule.createRouter(authModule.requireAuth, authModule.optionalAuth),
         claims: claimsRouters.claims,
         claim: claimsRouters.claim,
         verify: claimsRouters.verify,
