@@ -317,13 +317,18 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
             // Any scope of order:read / order:create; every service call is
             // keyed on the caller's own buyer id, so another person's order is
             // a 404 (docs/orders/buyer-orders-api.md).
-            const read = deps.guard.requirePermission(ORDER_READ_CAPABILITY);
+            // Own-scoped grants only match when the guard is told whose record
+            // this is. These routes are always the caller's own, so name them
+            // as the owner; without it `order:read:own` never matches and every
+            // buyer gets a 403. Staff holding a wider scope pass either way.
+            const mine = (req: Request) => ({ ownerId: deps.resolveBuyer(req) });
+            const read = deps.guard.requirePermission(ORDER_READ_CAPABILITY, { context: mine });
             router.get('/', read, buyerOrders.list);
             router.get('/:orderId', read, buyerOrders.get);
             router.get('/:orderId/tracking', read, shipping.buyerTracking);
             router.post(
                 '/:orderId/cancel',
-                deps.guard.requirePermission(ORDER_CREATE_CAPABILITY),
+                deps.guard.requirePermission(ORDER_CREATE_CAPABILITY, { context: mine }),
                 buyerOrders.cancel,
             );
             return router;

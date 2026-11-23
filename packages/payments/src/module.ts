@@ -225,6 +225,10 @@ export function createPaymentsModule(deps: PaymentsModuleDeps): PaymentsModule {
             const router = Router();
             router.use(requireAuth);
             const { requirePermission } = deps.guard;
+            // `order:create:own` only matches when the guard knows whose record
+            // this is; a checkout is always the caller's own.
+            const mine = (req: Request) => ({ ownerId: deps.resolveBuyer(req) });
+            const canBuy = () => requirePermission(ORDER_CREATE_CAPABILITY, { context: mine });
 
             // The price before paying. Read-only, so it needs no more than the
             // buyer's own `order:create` grant, but it runs a price lookup, a
@@ -232,7 +236,7 @@ export function createPaymentsModule(deps: PaymentsModuleDeps): PaymentsModule {
             // Registered before '/checkout/:orderId/resume' ('quote' is no id).
             router.post(
                 '/checkout/quote',
-                requirePermission(ORDER_CREATE_CAPABILITY),
+                canBuy(),
                 createRateLimiter({
                     windowMs: QUOTE_RATE_LIMIT.windowMs,
                     max: QUOTE_RATE_LIMIT.perUser,
@@ -243,14 +247,14 @@ export function createPaymentsModule(deps: PaymentsModuleDeps): PaymentsModule {
             );
             router.post(
                 '/checkout',
-                requirePermission(ORDER_CREATE_CAPABILITY),
+                canBuy(),
                 controller.checkout,
             );
             // Back to paying for an order the buyer already placed (same
             // order, same hold, same charge). docs/orders/buyer-orders-api.md
             router.post(
                 '/checkout/:orderId/resume',
-                requirePermission(ORDER_CREATE_CAPABILITY),
+                canBuy(),
                 controller.resumeCheckout,
             );
             // A buyer raising a refund on their own order needs no operator
