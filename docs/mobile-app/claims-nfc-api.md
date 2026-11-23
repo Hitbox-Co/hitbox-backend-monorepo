@@ -154,7 +154,8 @@ Any tap that fails a check. Always HTTP **200**.
   "productId": "HB-KAZE-001",   // the drop's groupCode (not the uuid)
   "tag": "534A70C1610001",      // legacy Sku.tagId; null for chips registered by consignment
   "ownerId": "jameela",         // "HitBox" on the origin row, else the owner's handle/name;
-                                // null when that owner keeps the item PRIVATE or no longer owns it
+                                // null when that owner keeps the item or their profile PRIVATE,
+                                // or no longer owns it
   "dateTime": "2026-11-03T11:02:00.000Z",
   "hash": "9b2f…(64 hex)",      // SHA-256 of this record
   "previousHash": "41c0…",      // hash of the row before; null for the origin
@@ -356,7 +357,9 @@ ledger gains a row. Nothing is deleted. There is no user-facing revoke API.
 ### Owner privacy
 
 Someone else's owner details are shown **only when that owner made the item
-`PUBLIC`** in their collection. This applies everywhere an owner can appear: `GET /verify`,
+`PUBLIC`** in their collection **and their profile is `PUBLIC`**
+([users-api.md](users-api.md#public-and-private-profiles)). A private profile hides
+the owner of everything they hold. This applies everywhere an owner can appear: `GET /verify`,
 `POST /claim`, `GET /ledger/:tagId` (`ownerId` is `null`), and the deprecated
 `GET /verify/:tagId`, `POST /claims/:tagId` and `/confirm` (the owner comes back
 empty: `{ "id": "", "handle": null, "displayName": null }`). Otherwise `owner` is `null` and the message says

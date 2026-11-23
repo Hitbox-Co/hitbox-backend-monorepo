@@ -48,6 +48,14 @@ export type BuyerCollectionRow = Prisma.BuyerCollectionGetPayload<{ include: typ
 export class BuyerCollectionRepository {
     constructor(private readonly prisma: PrismaClient) { }
 
+    /** Whose shelf this is, and whether they show it — reads users' table (documented shortcut). */
+    findOwner(userId: string) {
+        return this.prisma.user.findFirst({
+            where: { id: userId, isActive: true, archivedAt: null },
+            select: { id: true, profileVisibility: true },
+        });
+    }
+
     async findManyByUser(
         userId: string,
         query: ListCollectionQueryDto,

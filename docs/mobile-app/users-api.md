@@ -1,15 +1,21 @@
 # Users — API
 
 The signed-in user's own profile (Profile tab, Edit profile screen) and other
-users' public profiles (for example a collector's page).
+collectors' profiles (a collector's page), including the **public / private**
+switch.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
-| `GET` | `/api/v1/users/me` | required | My full profile |
-| `PATCH` | `/api/v1/users/me` | required | Edit my profile |
-| `GET` | `/api/v1/users/:id` | public | Another user's public profile |
+| `GET` | `/api/v1/users/me` | required | My full profile, with my stats |
+| `PATCH` | `/api/v1/users/me` | required | Edit my profile, including `profileVisibility` |
+| `GET` | `/api/v1/users/:id` | optional | A collector's profile (public **or** private) |
+| `GET` | `/api/v1/users/handle/:handle` | optional | The same, found by handle |
 
-Code: `packages/users` (`createRouter`, `UserService`, `dto/user.dto.ts`).
+Related: a collector's items are [collections-api.md](collections-api.md)
+(`GET /collections/user/:userId`). Following is [follows-api.md](follows-api.md).
+
+Code: `packages/users` (`createRouter`, `UserService`, `dto/user.dto.ts`). The
+stats come from collections and social, composed in `apps/backend/src/bootstrap.ts`.
 
 ---
 
@@ -21,13 +27,52 @@ errors: 401 `AUTH_UNAUTHENTICATED`, `AUTH_INVALID_TOKEN`,
 `AUTH_ACCOUNT_NOT_FOUND`; 403 `AUTH_ACCOUNT_SUSPENDED`, `AUTH_EMAIL_UNVERIFIED`.
 See [auth-api.md](auth-api.md) for what each means and how to react.
 
-`GET /users/:id` is public and ignores any token.
+`GET /users/:id` and `/users/handle/:handle` are public. A valid token is
+optional and only fills in `viewer` (do I follow them? is this me?). An invalid
+token is treated as a guest.
 
 ---
 
 ## Shapes
 
-### `PublicUser`: what anyone may see
+### `Profile`: a collector's profile, as anyone sees it
+
+Returned for **both PUBLIC and PRIVATE** profiles. Being private hides what the
+collector **owns**, never who they are (see [Public and private profiles](#public-and-private-profiles)).
+
+```jsonc
+{
+  "id": "9b1d7e3a-4c2f-4a8b-b6d1-2e3f4a5b6c7d",
+  "handle": "mia.figures",
+  "fullName": "Mia Lopez",
+  "avatarUrl": "https://img.clerk.com/eyJ0eXBlIjoi...",
+  "bio": "Vinyl figures and signed posters.",
+  "createdAt": "2026-05-02T11:20:13.000Z",
+  "isPrivate": true,                 // profileVisibility = PRIVATE → hide the collection tab
+  "stats": ProfileStats,             // always shown, private or not
+  "viewer": {                        // null for guests
+    "isSelf": false,                 // true when you open your own profile
+    "isFollowing": true              // drives the Follow / Following button
+  }
+}
+```
+
+### `ProfileStats`
+
+```jsonc
+{
+  "claimedItems": 12,                // items on their shelf (counted, never listed, when private)
+  "artistCollections": 3,            // artist collections they hold items from
+  "collectionProgress": { "owned": 10, "total": 25, "percentage": 40 },
+  "followers": 7,                    // collectors following them
+  "following": 2,                    // collectors they follow
+  "followingArtists": 4              // artists they follow
+}
+```
+
+Deactivated and deleted accounts are left out of `followers` and `following`.
+
+### `PublicUser`: the base fields
 
 ```jsonc
 {
@@ -42,7 +87,7 @@ See [auth-api.md](auth-api.md) for what each means and how to react.
 
 ### `Me`: what I see about myself
 
-`PublicUser` plus private fields:
+`PublicUser` plus private fields and my `stats` (the same `ProfileStats`):
 
 ```jsonc
 {
@@ -59,7 +104,8 @@ See [auth-api.md](auth-api.md) for what each means and how to react.
   "generalLocation": null,         // coarse, e.g. "Austin, TX"; never shown to others
   "preferredMarketId": null,       // uuid or null; not editable through this API
   "isActive": true,
-  "updatedAt": "2026-07-16T04:41:00.000Z"
+  "updatedAt": "2026-07-16T04:41:00.000Z",
+  "stats": { "claimedItems": 12, "artistCollections": 3, "collectionProgress": { "owned": 10, "total": 25, "percentage": 40 }, "followers": 7, "following": 2, "followingArtists": 4 }
 }
 ```
 
@@ -87,7 +133,8 @@ Required auth. No params.
     "generalLocation": null,
     "preferredMarketId": null,
     "isActive": true,
-    "updatedAt": "2026-07-16T04:41:00.000Z"
+    "updatedAt": "2026-07-16T04:41:00.000Z",
+    "stats": { "claimedItems": 12, "artistCollections": 3, "collectionProgress": { "owned": 10, "total": 25, "percentage": 40 }, "followers": 7, "following": 2, "followingArtists": 4 }
   }
 }
 ```
@@ -111,7 +158,7 @@ rejected. An empty body `{}` is allowed and changes nothing except
 | `bio` | string | At most 500 chars (`""` is allowed) |
 | `phone` | string | 5–32 chars, no format check |
 | `generalLocation` | string | At most 120 chars. A city or region, never an address |
-| `profileVisibility` | string | `PUBLIC` or `PRIVATE` |
+| `profileVisibility` | string | `PUBLIC` or `PRIVATE`. The profile privacy switch. See [Public and private profiles](#public-and-private-profiles). |
 
 No field accepts `null`. To clear `bio` or `generalLocation`, send `""`.
 `email`, `role`, `isActive` and `preferredMarketId` cannot be changed here.
@@ -125,7 +172,18 @@ No field accepts `null`. To clear `bio` or `generalLocation`, send `""`.
 }
 ```
 
-Response `200`: the updated `Me`, same shape as `GET /users/me`.
+Response `200`: the updated `Me`, same shape as `GET /users/me` but **without
+`stats`**. Re-read `GET /users/me` if you need them.
+
+**Privacy switch only:**
+
+```json
+{ "profileVisibility": "PRIVATE" }
+```
+
+The change takes effect immediately everywhere: profile, shelf, NFC taps and the
+ledger. Cached Discover and Marketplace lists are not involved, because they never
+show owners.
 
 | Status | Code | When |
 |---|---|---|
@@ -137,50 +195,65 @@ Response `200`: the updated `Me`, same shape as `GET /users/me`.
 
 ### `GET /api/v1/users/:id`
 
-Public. Another user's profile.
+Optional auth. A collector's profile, **public or private**.
 
 | Param | In | Type | Notes |
 |---|---|---|---|
-| `id` | path | uuid | `User.id` |
+| `id` | path | uuid | `User.id`. A malformed id is a 404, like an unknown one. |
 
-```json
-{
-  "data": {
-    "id": "9b1d7e3a-4c2f-4a8b-b6d1-2e3f4a5b6c7d",
-    "handle": "mia.figures",
-    "fullName": "Mia Lopez",
-    "avatarUrl": "https://img.clerk.com/eyJ0eXBlIjoi...",
-    "bio": "Vinyl figures and signed posters.",
-    "createdAt": "2026-05-02T11:20:13.000Z"
-  }
-}
+```jsonc
+{ "data": Profile }
 ```
+
+Then, to show their items, call `GET /collections/user/:id`. For a private profile,
+that returns **403 `COLLECTIONS_PROFILE_PRIVATE`**, so skip it when
+`isPrivate` is `true` and show "This profile is private" instead.
 
 | Status | Code | When |
 |---|---|---|
-| 404 | `USERS_NOT_FOUND` | No such user, the user is archived, **or the profile is `PRIVATE`** |
-| 500 | `INTERNAL_ERROR` | `id` is not a valid uuid (see Known limitations) |
+| 404 | `USERS_NOT_FOUND` | No such user, or the account is deleted or deactivated |
+
+### `GET /api/v1/users/handle/:handle`
+
+Optional auth. The same `Profile`, looked up by handle, for links like
+`hitbox.app/@mia.figures`. The lookup ignores case, and a leading `@` is ignored.
+
+| Param | In | Type | Notes |
+|---|---|---|---|
+| `handle` | path | string | 1–50 chars |
+
+Errors are the same as `GET /users/:id`.
 
 ---
 
 ## How it works
 
-### Who can see a profile
+### Public and private profiles
 
-`GET /users/:id` returns a profile only when **both** are true:
+Every collector chooses with `PATCH /users/me { "profileVisibility": … }`. New
+accounts start **`PRIVATE`**.
 
-1. The user row exists and `archivedAt` is `null` (not soft-deleted).
-2. `profileVisibility` is `PUBLIC`.
+| What others see | PUBLIC profile | PRIVATE profile |
+|---|---|---|
+| Name, handle, avatar, bio, join date | ✅ | ✅ |
+| Stats: item count, collections, progress, followers, following | ✅ | ✅ |
+| Follow button, followers and following lists | ✅ | ✅ (anyone can follow) |
+| Their items (`GET /collections/user/:id`) | ✅ only items they marked `PUBLIC` | ❌ 403 `COLLECTIONS_PROFILE_PRIVATE` |
+| Their name when you tap an item they own (NFC verify/claim) | ✅ only for items marked `PUBLIC` | ❌ "another collector" |
+| Their name on an item's ownership history (`/ledger`) | ✅ only for items marked `PUBLIC` | ❌ `ownerId: null` |
 
-Otherwise it returns 404 `USERS_NOT_FOUND`. A private profile looks exactly
-like a missing one, on purpose, so ids cannot be probed.
+So there are **two switches**, and an item is shown as theirs only when both are on:
+the profile is `PUBLIC`, **and** the item is `PUBLIC` (`PATCH /collections/me/:skuId`).
+Making the profile private hides every item at once, without changing any item's
+own setting. Switching back restores the previous per-item choices.
 
-New accounts start as **`PRIVATE`**. A user has no public profile until they
-set `profileVisibility: "PUBLIC"` with `PATCH /users/me`. If the app shows
-other users' profiles, add a visibility toggle to Edit profile.
+The owner always sees everything about themselves: `/users/me`, `/collections/me`,
+and `/collections/user/<own id>` all show the full shelf.
 
-`email`, `phone`, `role`, `generalLocation` and `preferredMarketId` are never
-in the public shape.
+What is never shown to others, on any profile: `email`, `phone`, `role`,
+`generalLocation`, `preferredMarketId`.
+
+Only a **deleted or deactivated** account returns 404.
 
 ### Where profile values come from
 
@@ -207,8 +280,8 @@ The row is created from Clerk on first sign-up (see
   the same values in Clerk too (username, first/last name, profile image).
 - **No avatar upload here.** `avatarUrl` must already be a hosted URL. Upload
   the image through Clerk (`user.setProfileImage`) and use the URL it returns.
-- **A non-uuid `id` returns 500, not 404.** `GET /users/:id` does not validate
-  the id format, and the database rejects it. Only call it with ids the API
-  gave you.
+- **Profiles can be probed by id.** A private profile now returns 200 with
+  its name, instead of 404, so whether an id or handle exists can be checked. This
+  is the cost of showing private profiles at all.
 - **`fullName` cannot be cleared.** It needs at least 1 char, and `null` is not
   accepted.

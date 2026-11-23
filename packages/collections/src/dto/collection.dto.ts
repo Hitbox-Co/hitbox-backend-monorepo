@@ -26,6 +26,11 @@ export const listCollectionQuerySchema = z.object({
 
 export type ListCollectionQueryDto = z.infer<typeof listCollectionQuerySchema>;
 
+/** A malformed id is a 404 like any unknown one, not a database error. */
+export const userIdParamSchema = z.object({
+    userId: z.string().uuid().catch('00000000-0000-0000-0000-000000000000'),
+});
+
 export const updateVisibilitySchema = z
     .object({
         visibility: z.nativeEnum(Visibility),

@@ -10,10 +10,13 @@ import { UserAccountLookup } from './domain/account-lookup.adapter';
 import { registerAuthEventSubscriptions } from './events/auth-event.subscriber';
 import { UserRepository } from './repository/user.repository';
 import { UserService } from './service/user.service';
+import type { IProfileStats } from './domain/profile-stats.port';
 
 export interface UsersModuleDeps {
     prisma: PrismaClient;
     eventBus: IEventBus;
+    /** Profile numbers from collections + social, composed at bootstrap. */
+    stats?: IProfileStats;
 }
 
 export interface UsersModule {
@@ -21,25 +24,31 @@ export interface UsersModule {
     accountLookup: IAccountLookup;
     service: UserService;
     /** requireAuth comes from the auth module at bootstrap. */
-    createRouter(requireAuth: RequestHandler): Router;
+    /**
+     * `optionalAuth` lets the public profile routes know who is looking
+     * (`viewer.isFollowing`); without it they serve everyone as a guest.
+     */
+    createRouter(requireAuth: RequestHandler, optionalAuth?: RequestHandler): Router;
 }
 
 export function createUsersModule(deps: UsersModuleDeps): UsersModule {
     const logger = createModuleLogger(USERS_MODULE);
 
     const users = new UserRepository(deps.prisma);
-    const service = new UserService({ users, eventBus: deps.eventBus, logger });
+    const service = new UserService({ users, eventBus: deps.eventBus, logger, stats: deps.stats });
     registerAuthEventSubscriptions({ eventBus: deps.eventBus, service, logger });
 
     return {
         accountLookup: new UserAccountLookup(users, service),
         service,
-        createRouter(requireAuth) {
+        createRouter(requireAuth, optionalAuth) {
             const controller = new UserController(service);
+            const viewer: RequestHandler = optionalAuth ?? ((_req, _res, next) => next());
             const router = Router();
             router.get('/me', requireAuth, controller.me);
             router.patch('/me', requireAuth, controller.updateMe);
-            router.get('/:id', controller.getById);
+            router.get('/handle/:handle', viewer, controller.getByHandle);
+            router.get('/:id', viewer, controller.getById);
             return router;
         },
     };

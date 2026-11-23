@@ -1,3 +1,4 @@
+import type { ProfileStats } from '../domain/profile-stats.port';
 import { Visibility } from '@hitbox/database';
 import type { User } from '@hitbox/database';
 import { z } from 'zod';
@@ -29,6 +30,19 @@ export const updateProfileSchema = z
 
 export type UpdateProfileDto = z.infer<typeof updateProfileSchema>;
 
+/** A malformed id is a 404 like any unknown one, not a database error. */
+export const userIdParamSchema = z.object({
+    id: z.string().uuid().catch('00000000-0000-0000-0000-000000000000'),
+});
+
+export const handleParamSchema = z.object({
+    handle: z
+        .string()
+        .trim()
+        .transform((value) => value.replace(/^@/, ''))
+        .pipe(z.string().min(1).max(50)),
+});
+
 /**
  * What anyone may see about a user.
  *
@@ -45,6 +59,20 @@ export interface PublicUserDto {
     createdAt: Date;
 }
 
+/**
+ * A profile as another person sees it — `GET /users/:id`, `/users/handle/:handle`.
+ *
+ * Returned for PUBLIC **and** PRIVATE profiles. Private hides what the user
+ * owns (their collection, and their name on items they own), never who they
+ * are: name, handle, avatar, bio and the stats are always shown.
+ */
+export interface ProfileDto extends PublicUserDto {
+    isPrivate: boolean;
+    stats: ProfileStats;
+    /** The signed-in viewer's relation to this profile; null for guests. */
+    viewer: { isSelf: boolean; isFollowing: boolean } | null;
+}
+
 /** What the user sees about themselves. */
 export interface MeDto extends PublicUserDto {
     email: string;
@@ -55,6 +83,8 @@ export interface MeDto extends PublicUserDto {
     preferredMarketId: string | null;
     isActive: boolean;
     updatedAt: Date;
+    /** Present when profile stats are wired (always, in the running app). */
+    stats?: ProfileStats;
 }
 
 export function toPublicUser(user: User): PublicUserDto {

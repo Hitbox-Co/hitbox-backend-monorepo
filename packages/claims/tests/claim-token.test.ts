@@ -512,3 +512,19 @@ describe('GET /ledger/:tagId — owner privacy', () => {
         rows.filter((row) => !row.claimHistory).forEach((row) => expect(row.ownerId).not.toBeNull());
     });
 });
+
+describe('owner privacy — a PRIVATE profile hides everything its owner holds', () => {
+    it('hides the owner on the ledger and on a late claim, even for an item marked PUBLIC', async () => {
+        const h = harness();
+        const token = await validatedToken(h, ALICE);
+        await h.service.claim(TAG_A, ALICE, { visibility: 'PUBLIC', claimToken: token });
+        // Alice then makes her whole profile private.
+        h.prisma.store.user.find((u) => u.id === ALICE)!.profileVisibility = 'PRIVATE';
+
+        const rows = await h.service.ledger(TAG_A);
+        expect(rows.find((row) => row.claimHistory)!.ownerId).toBeNull();
+
+        const late = await h.service.claim(TAG_A, BOB, { visibility: 'PRIVATE', claimToken: undefined });
+        expect(late.owner).toEqual({ id: '', handle: null, displayName: null });
+    });
+});

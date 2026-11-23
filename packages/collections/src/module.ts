@@ -24,7 +24,8 @@ export interface CollectionsModuleDeps {
 export interface CollectionsModule {
     service: CollectionService;
     /** requireAuth comes from the auth module at bootstrap. */
-    createRouter(requireAuth: RequestHandler): Router;
+    /** `optionalAuth` lets `/user/:userId` recognise the owner looking at their own shelf. */
+    createRouter(requireAuth: RequestHandler, optionalAuth?: RequestHandler): Router;
 }
 
 export function createCollectionsModule(deps: CollectionsModuleDeps): CollectionsModule {
@@ -40,8 +41,9 @@ export function createCollectionsModule(deps: CollectionsModuleDeps): Collection
 
     return {
         service,
-        createRouter(requireAuth) {
+        createRouter(requireAuth, optionalAuth) {
             const controller = new CollectionController(service);
+            const viewer: RequestHandler = optionalAuth ?? ((_req, _res, next) => next());
             const router = Router();
 
             // /me/stats before /me/:skuId is a non-issue (distinct verb/path),
@@ -49,7 +51,7 @@ export function createCollectionsModule(deps: CollectionsModuleDeps): Collection
             router.get('/me/stats', requireAuth, controller.stats);
             router.get('/me', requireAuth, controller.listMine);
             router.patch('/me/:skuId', requireAuth, controller.setVisibility);
-            router.get('/user/:userId', controller.listPublicByUser);
+            router.get('/user/:userId', viewer, controller.listPublicByUser);
 
             return router;
         },

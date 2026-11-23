@@ -7,31 +7,45 @@ import type { Logger } from 'pino';
 import { USERS_ERROR_CODES, USERS_EVENTS } from '../constants/users.constant';
 import type { AccountProvisionedPayload } from '../events/users-event.payloads';
 import { toMe, toPublicUser } from '../dto/user.dto';
-import type { MeDto, PublicUserDto, UpdateProfileDto } from '../dto/user.dto';
+import type { MeDto, ProfileDto, UpdateProfileDto } from '../dto/user.dto';
+import type { IProfileStats, ProfileStats } from '../domain/profile-stats.port';
 import type { UserRepository } from '../repository/user.repository';
 
 interface UserServiceDeps {
     users: UserRepository;
     eventBus: IEventBus;
     logger: Logger;
+    /** Composed at bootstrap from collections + social. Absent in unit tests → zeros. */
+    stats?: IProfileStats;
 }
+
+const EMPTY_STATS: ProfileStats = {
+    claimedItems: 0,
+    artistCollections: 0,
+    collectionProgress: { owned: 0, total: 0, percentage: 0 },
+    followers: 0,
+    following: 0,
+    followingArtists: 0,
+};
 
 export class UserService {
     constructor(private readonly deps: UserServiceDeps) { }
 
     /**
-     * A public profile lookup — this route is unauthenticated.
+     * Someone's profile — `GET /users/:id`. Unauthenticated, optionally
+     * personalised by `viewerId`.
      *
-     * `profileVisibility` is honoured here: a PRIVATE profile is reported as
-     * not found rather than forbidden, so the endpoint cannot be used to
-     * enumerate which user ids exist.
+     * Shown for PUBLIC **and** PRIVATE profiles: private hides what the user
+     * owns (enforced by collections and claims), never who they are. Only a
+     * deleted or deactivated account is a 404.
      */
-    async getPublicById(id: string): Promise<PublicUserDto> {
-        const user = await this.deps.users.findById(id);
-        if (!this.isReadable(user) || user.profileVisibility !== Visibility.PUBLIC) {
-            throw AppError.notFound('User not found', USERS_ERROR_CODES.USER_NOT_FOUND);
-        }
-        return toPublicUser(user);
+    async getProfile(id: string, viewerId: string | null): Promise<ProfileDto> {
+        return this.toProfile(await this.deps.users.findById(id), viewerId);
+    }
+
+    /** `GET /users/handle/:handle` — the same profile, found by handle. */
+    async getProfileByHandle(handle: string, viewerId: string | null): Promise<ProfileDto> {
+        return this.toProfile(await this.deps.users.findByHandle(handle), viewerId);
     }
 
     async getMe(accountId: string): Promise<MeDto> {
@@ -39,7 +53,7 @@ export class UserService {
         if (!this.isReadable(user)) {
             throw AppError.notFound('User not found', USERS_ERROR_CODES.USER_NOT_FOUND);
         }
-        return toMe(user);
+        return { ...toMe(user), ...(this.deps.stats && { stats: await this.deps.stats.getStats(user.id) }) };
     }
 
     async updateProfile(accountId: string, dto: UpdateProfileDto): Promise<MeDto> {
@@ -97,6 +111,25 @@ export class UserService {
     }
 
     /** A row exists and has not been tombstoned. */
+    private async toProfile(user: User | null, viewerId: string | null): Promise<ProfileDto> {
+        if (!this.isReadable(user) || !user.isActive) {
+            throw AppError.notFound('User not found', USERS_ERROR_CODES.USER_NOT_FOUND);
+        }
+        const isSelf = viewerId === user.id;
+        const [stats, isFollowing] = await Promise.all([
+            this.deps.stats?.getStats(user.id) ?? Promise.resolve(EMPTY_STATS),
+            viewerId && !isSelf && this.deps.stats
+                ? this.deps.stats.isFollowing(viewerId, user.id)
+                : Promise.resolve(false),
+        ]);
+        return {
+            ...toPublicUser(user),
+            isPrivate: user.profileVisibility !== Visibility.PUBLIC,
+            stats,
+            viewer: viewerId ? { isSelf, isFollowing } : null,
+        };
+    }
+
     private isReadable(user: User | null): user is User {
         return user !== null && user.archivedAt === null;
     }
