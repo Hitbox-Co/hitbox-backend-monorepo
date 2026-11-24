@@ -233,6 +233,9 @@ export class CheckoutService {
             productId: dto.productId,
             variantId: dto.variantId ?? null,
             marketId: dto.marketId ?? null,
+            buyerId,
+            shippingAddressId: addresses.shippingId,
+            billingAddressId: addresses.billingId,
         });
 
         const estimate = this.deps.tax

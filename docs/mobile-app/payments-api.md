@@ -191,7 +191,7 @@ the buyer changes variant, address or market.
 |---|---|
 | `productId` | uuid, required |
 | `variantId` | uuid |
-| `marketId` | uuid. None: the newest active price in any market (as for checkout) |
+| `marketId` | uuid. None: the server picks one ([market fallback](#market-fallback)) |
 | `shippingAddressId` | uuid of one of the buyer's saved addresses |
 | `billingAddressId` | uuid of one of the buyer's saved addresses. Its country (and, for the US, state) picks the tax |
 
@@ -291,7 +291,7 @@ Places the order and starts the payment, in one call.
 |---|---|---|
 | `productId` | uuid, required | — |
 | `variantId` | uuid | none (drop without variants) |
-| `marketId` | uuid | none: the newest active price in any market |
+| `marketId` | uuid | none: the server picks one ([market fallback](#market-fallback)) |
 | `quantity` | int, **must be 1** | `1` |
 | `termsAccepted` | must be the literal `true` | required |
 | `shippingAddressId` | uuid of one of the buyer's saved addresses ([addresses-api.md](addresses-api.md)) | none |
@@ -706,3 +706,26 @@ for the operator side.
 - **The publishable key is not served by the API.** Ship it in app config.
 - **No buyer cancel for an open refund.** Once requested, only staff can
   move it on.
+
+---
+
+## Market fallback
+
+**The app should send `marketId`** to `/checkout/quote` and `/checkout`, from the
+buyer's chosen market or the one whose `countryCodes` hold their address country
+(`GET /markets`). Send the same id on every screen so the product card, the quote
+and the charge show the same price.
+
+When it is missing, the server picks a market by rule (it used to take the newest
+price row, which could be another currency). Among the markets the drop is priced
+in right now:
+
+1. only one: that one;
+2. the buyer's saved preferred market;
+3. the market covering the **billing** address country, then the **shipping** one;
+4. the platform's default market.
+
+If the drop is priced in several markets and none of these applies, the call
+fails with `400 ORDERS_NO_PRICE` and `details.marketIds` lists the markets it is
+sold in: ask the buyer to choose. An explicit `marketId` is always used as given.
+The response's `marketId` and `currency` say which market was used.

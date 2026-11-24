@@ -63,11 +63,17 @@ export class OrderLedgerAdapter {
         productId: string;
         variantId?: string | null;
         marketId?: string | null;
+        buyerId?: string | null;
+        shippingAddressId?: string | null;
+        billingAddressId?: string | null;
     }) {
         const quote = await this.orders.quote({
             productId: input.productId,
             variantId: input.variantId ?? null,
             marketId: input.marketId ?? null,
+            buyerId: input.buyerId ?? null,
+            shippingAddressId: input.shippingAddressId ?? null,
+            billingAddressId: input.billingAddressId ?? null,
             now: new Date(),
         });
         return {

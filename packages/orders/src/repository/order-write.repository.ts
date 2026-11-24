@@ -3,6 +3,7 @@ import { Prisma } from '@hitbox/database';
 import type { PrismaClient } from '@hitbox/database';
 import { AppError } from '@hitbox/shared';
 import { ORDERS_ERROR_CODES } from '../constants/orders.constant';
+import { chooseMarket } from '../domain/market-resolution';
 import { recordStatusChange } from './order-history';
 import { lockSku, unitTakenByAnotherOrder } from './sku-lock';
 
@@ -32,6 +33,13 @@ interface PurchasableProduct {
     organizationId: string | null;
     releaseStart: Date | null;
     releaseEnd: Date | null;
+}
+
+/** What the market fallback may look at when no marketId was sent. */
+export interface MarketHints {
+    buyerId?: string | null;
+    shippingAddressId?: string | null;
+    billingAddressId?: string | null;
 }
 
 export interface PlaceOrderParams {
@@ -148,7 +156,7 @@ export class OrderWriteRepository {
         variantId: string | null;
         marketId: string | null;
         now: Date;
-    }): Promise<QuoteSaleResult> {
+    } & MarketHints): Promise<QuoteSaleResult> {
         const product = await this.loadSellableProduct(params.productId);
         const price = await this.findCurrentPrice(params);
 
@@ -208,7 +216,10 @@ export class OrderWriteRepository {
         variantId: string | null;
         marketId: string | null;
         now: Date;
-    }) {
+    } & MarketHints) {
+        // An explicit market is used as given. Without one, the server picks by
+        // rule (see domain/market-resolution.ts) instead of "newest row wins".
+        const marketId = params.marketId ?? (await this.resolveMarketId(params));
         const price = await this.prisma.dropPrice.findFirst({
             where: {
                 dropId: params.productId,
@@ -216,7 +227,7 @@ export class OrderWriteRepository {
                 status: 'ACTIVE',
                 effectiveFrom: { lte: params.now },
                 OR: [{ effectiveTo: null }, { effectiveTo: { gt: params.now } }],
-                ...(params.marketId ? { marketId: params.marketId } : {}),
+                ...(marketId ? { marketId } : {}),
             },
             select: {
                 amount: true,
@@ -232,10 +243,88 @@ export class OrderWriteRepository {
             throw AppError.badRequest(
                 'This drop has no price for your market.',
                 ORDERS_ERROR_CODES.NO_PRICE,
-                { marketId: params.marketId },
+                { marketId },
             );
         }
         return price;
+    }
+
+    /**
+     * The market to price in when the app sent none. `null` means the drop has
+     * no active price at all; the lookup below then fails with NO_PRICE.
+     */
+    private async resolveMarketId(params: {
+        productId: string;
+        variantId: string | null;
+        now: Date;
+    } & MarketHints): Promise<string | null> {
+        const rows = await this.prisma.dropPrice.findMany({
+            where: {
+                dropId: params.productId,
+                variantId: params.variantId,
+                status: 'ACTIVE',
+                effectiveFrom: { lte: params.now },
+                OR: [{ effectiveTo: null }, { effectiveTo: { gt: params.now } }],
+                market: { isActive: true, archivedAt: null },
+            },
+            select: { marketId: true },
+            distinct: ['marketId'],
+        });
+        const pricedMarketIds = rows.map((r) => r.marketId).filter((id): id is string => !!id);
+        // One market (or none): nothing to decide, skip the other lookups.
+        if (pricedMarketIds.length <= 1) return pricedMarketIds[0] ?? null;
+
+        const [buyer, addresses, fallback] = await Promise.all([
+            params.buyerId
+                ? this.prisma.user.findUnique({
+                    where: { id: params.buyerId },
+                    select: { preferredMarketId: true },
+                })
+                : null,
+            params.buyerId
+                ? this.prisma.address.findMany({
+                    where: {
+                        userId: params.buyerId,
+                        id: { in: [params.billingAddressId, params.shippingAddressId].filter((x): x is string => !!x) },
+                        isActive: true,
+                        archivedAt: null,
+                    },
+                    select: { id: true, countryCode: true },
+                })
+                : [],
+            this.prisma.market.findFirst({
+                where: { isDefault: true, isActive: true, archivedAt: null },
+                select: { id: true },
+            }),
+        ]);
+
+        // Billing first: it is the country the sale is taxed in.
+        const countryOf = (id: string | null | undefined) =>
+            id ? addresses.find((a) => a.id === id)?.countryCode ?? null : null;
+        const countries = [countryOf(params.billingAddressId), countryOf(params.shippingAddressId)]
+            .filter((c): c is string => !!c);
+        const byCountry = countries.length
+            ? await this.prisma.marketCountry.findMany({
+                where: { countryCode: { in: countries } },
+                select: { countryCode: true, marketId: true },
+            })
+            : [];
+
+        const chosen = chooseMarket({
+            pricedMarketIds,
+            preferredMarketId: buyer?.preferredMarketId ?? null,
+            addressMarketIds: countries.map((c) => byCountry.find((m) => m.countryCode === c)?.marketId ?? null),
+            defaultMarketId: fallback?.id ?? null,
+        });
+        if (chosen) return chosen.marketId;
+        // Priced in several markets, none of them the buyer's: refuse rather
+        // than charge in a currency they did not choose. The app should send
+        // `marketId` (GET /markets) for a buyer the server cannot place.
+        throw AppError.badRequest(
+            'This drop is sold in several markets. Choose a market.',
+            ORDERS_ERROR_CODES.NO_PRICE,
+            { marketIds: pricedMarketIds },
+        );
     }
 
     /**
@@ -368,7 +457,10 @@ export class OrderWriteRepository {
                 costOfGoods: price.costOfGoods,
                 expiresAt,
             };
-        });
+            // About ten sequential queries. Prisma's default 5 s limit is too
+            // tight when the database is a network hop away (hosted Postgres):
+            // the transaction expired on its last step and the buyer got a 500.
+        }, { maxWait: 10_000, timeout: 20_000 });
     }
 
     /**

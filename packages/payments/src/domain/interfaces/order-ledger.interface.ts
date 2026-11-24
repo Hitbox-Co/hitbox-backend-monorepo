@@ -41,6 +41,14 @@ export interface QuoteSaleInput {
     productId: string;
     variantId?: string | null;
     marketId?: string | null;
+    /**
+     * Only used when `marketId` is absent: the server's backup for picking the
+     * market (buyer's preferred market, then their address country, then the
+     * default). The app should still send `marketId` itself.
+     */
+    buyerId?: string | null;
+    shippingAddressId?: string | null;
+    billingAddressId?: string | null;
 }
 
 export interface QuotedSale {

@@ -26,7 +26,7 @@ function build(opts: {
             : opts.price;
     const prisma = {
         drop: { findUnique: jest.fn(async () => product) },
-        dropPrice: { findFirst: jest.fn(async () => price) },
+        dropPrice: { findFirst: jest.fn(async () => price), findMany: jest.fn(async () => (price ? [{ marketId: 'm-in' }] : [])) },
         sku: { findFirst: jest.fn(async () => (opts.sku === undefined ? { id: 'sku-1' } : opts.sku)) },
         order: { create: jest.fn() },
         inventoryReservation: { create: jest.fn() },
