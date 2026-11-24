@@ -24,10 +24,10 @@ export class CartService {
     constructor(private readonly deps: CartServiceDeps) { }
 
     /** GET /cart — every row with live price and availability, plus a summary. */
-    async get(userId: string): Promise<CartView> {
+    async get(userId: string, marketId?: string | null): Promise<CartView> {
         const rows = await this.deps.cart.list(userId);
         const cards = new Map(
-            (await this.deps.catalog.findCards(rows.map((row) => row.productId))).map((card) => [card.id, card]),
+            (await this.deps.catalog.findCards(rows.map((row) => row.productId), marketId)).map((card) => [card.id, card]),
         );
         const items = rows.map((row) => this.toView(row, cards.get(row.productId) ?? null));
         return { items, summary: summarise(items) };
@@ -41,9 +41,13 @@ export class CartService {
      * else (not on sale, closed, unpriced) is the same 400
      * `ORDERS_NOT_PURCHASABLE` / `ORDERS_NO_PRICE` checkout would give.
      */
-    async add(userId: string, dto: AddCartItemDto): Promise<{ item: CartItemView; created: boolean }> {
+    async add(
+        userId: string,
+        dto: AddCartItemDto,
+        marketId?: string | null,
+    ): Promise<{ item: CartItemView; created: boolean }> {
         const variantId = dto.variantId ?? null;
-        const card = await this.requirePurchasable(dto.productId, variantId);
+        const card = await this.requirePurchasable(dto.productId, variantId, marketId);
 
         const existing = await this.deps.cart.findOne(userId, dto.productId, variantId);
         if (existing) return { item: this.toView(existing, card), created: false };
@@ -81,8 +85,12 @@ export class CartService {
         return { removed: await this.deps.cart.clear(userId) };
     }
 
-    private async requirePurchasable(productId: string, variantId: string | null): Promise<CartDropCard> {
-        const [card] = await this.deps.catalog.findCards([productId]);
+    private async requirePurchasable(
+        productId: string,
+        variantId: string | null,
+        marketId?: string | null,
+    ): Promise<CartDropCard> {
+        const [card] = await this.deps.catalog.findCards([productId], marketId);
         if (!card || !card.isViewable) {
             throw AppError.notFound('Drop not found.', ORDERS_ERROR_CODES.NOT_FOUND);
         }
@@ -90,9 +98,12 @@ export class CartService {
             throw AppError.notFound('That variant does not belong to this drop.', ORDERS_ERROR_CODES.VARIANT_NOT_FOUND);
         }
         if (!card.isPurchasable) {
+            const noPrice = card.unavailableReason === 'NO_PRICE' || card.unavailableReason === 'NOT_AVAILABLE_IN_REGION';
             throw AppError.badRequest(
-                'This drop cannot be bought right now.',
-                card.unavailableReason === 'NO_PRICE' ? ORDERS_ERROR_CODES.NO_PRICE : ORDERS_ERROR_CODES.NOT_PURCHASABLE,
+                card.unavailableReason === 'NOT_AVAILABLE_IN_REGION'
+                    ? 'This drop is not available in your region.'
+                    : 'This drop cannot be bought right now.',
+                noPrice ? ORDERS_ERROR_CODES.NO_PRICE : ORDERS_ERROR_CODES.NOT_PURCHASABLE,
                 { status: card.status, reason: card.unavailableReason },
             );
         }

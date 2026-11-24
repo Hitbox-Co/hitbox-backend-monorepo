@@ -10,12 +10,14 @@ import type { MarketplaceCategory } from '../enums/marketplace-category.enum';
  * `rewardPoints` is back as `Drop.rewardPoints` — set by HitBox System
  * Admin, `0` when none were set.
  */
-/** The base price of the default market. Null on the card when none is set. */
+/** The base price of the requested market, else of the default market. Null on the card when none is set. */
 export interface MarketplacePrice {
     /** Decimal string with two places ("480.00"); "0" when the drop is free. */
     amount: string;
     currency: string;
     isFree: boolean;
+    /** The market this price belongs to. */
+    marketId: string | null;
 }
 
 /**
@@ -62,6 +64,8 @@ export interface MarketplaceListingsQuery {
     limit: number;
     /** The signed-in account, for `isWishlisted`. Absent for guests. */
     viewerId?: string;
+    /** Optional `?marketId=`: show prices of this market (default market when absent, unknown or not priced there). */
+    marketId?: string;
 }
 
 export interface MarketplaceListingsResult {

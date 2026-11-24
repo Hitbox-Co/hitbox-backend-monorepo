@@ -27,20 +27,34 @@ const imageArgs = {
     select: { asset: { select: { storageRef: true } } },
 } satisfies Prisma.Drop$dropImagesArgs;
 
-/** The one base price a market-less feed can legitimately show. */
+/**
+ * The base price (no variant) of every ACTIVE market. Which one a response
+ * shows is decided afterwards by `pickBasePrice` (`?marketId=`, else the default
+ * market), so the cached rows serve every market. Newest version first.
+ */
 const basePriceArgs = {
     where: {
         status: DropPriceStatus.ACTIVE,
         variantId: null,
-        market: { isDefault: true, isActive: true },
+        market: { isActive: true },
     },
-    take: 1,
+    orderBy: { effectiveFrom: 'desc' },
     select: {
         amount: true,
         isFree: true,
-        market: { select: { currency: true, code: true } },
+        marketId: true,
+        market: { select: { currency: true, code: true, isDefault: true } },
     },
 } satisfies Prisma.Drop$dropPricesArgs;
+
+/** Drops with an active base price in this market: the region filter for the lists. */
+export function pricedInMarket(marketId: string): Prisma.DropWhereInput {
+    return {
+        dropPrices: {
+            some: { status: DropPriceStatus.ACTIVE, variantId: null, marketId, market: { isActive: true } },
+        },
+    };
+}
 
 const listInclude = {
     dropImages: imageArgs,
@@ -397,6 +411,20 @@ export class ProductRepository {
             distinct: ['productId'],
         });
         return new Set(rows.map((row) => row.productId));
+    }
+
+    /**
+     * The market to price in, or null when `marketId` is absent, unknown or not
+     * an active market. Null means "no region selected" (default behaviour), never
+     * an error: an unusable id is ignored.
+     */
+    async activeMarketId(marketId: string | null | undefined): Promise<string | null> {
+        if (!marketId) return null;
+        const market = await this.prisma.market.findFirst({
+            where: { id: marketId, isActive: true, archivedAt: null },
+            select: { id: true },
+        });
+        return market?.id ?? null;
     }
 
     /** Card projection for the marketplace feed — the same card as discover. */

@@ -12,6 +12,9 @@ export const addCartItemSchema = z
 
 export const cartItemIdParamSchema = z.object({ itemId: uuid });
 
+/** `?marketId=` on GET/POST /cart. Never an error: a bad, unknown or inactive id is ignored. */
+export const cartMarketQuerySchema = z.object({ marketId: uuid.optional().catch(undefined) });
+
 export type AddCartItemDto = z.infer<typeof addCartItemSchema>;
 
 /** One cart row as the app receives it. */

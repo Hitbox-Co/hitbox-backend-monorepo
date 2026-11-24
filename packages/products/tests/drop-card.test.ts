@@ -33,7 +33,7 @@ describe('toDropCard', () => {
             rarity: 'UNCOMMON',
             category: 'FIGURE',
             artist: { id: 'a1', name: 'Yuki Lab', slug: 'yuki-lab' },
-            price: { amount: '110.00', currency: 'USD', isFree: false },
+            price: { amount: '110.00', currency: 'USD', isFree: false, marketId: null },
             totalSupply: 150,
             mintedCount: 9,
             rewardPoints: 550,
@@ -43,12 +43,12 @@ describe('toDropCard', () => {
 
     it('formats a cached string amount with two decimals', () => {
         const card = toDropCard(row({ dropPrices: [{ amount: '480.5', isFree: false, market: { currency: 'USD', code: 'US' } }] }), urls, null);
-        expect(card.price).toEqual({ amount: '480.50', currency: 'USD', isFree: false });
+        expect(card.price).toEqual({ amount: '480.50', currency: 'USD', isFree: false, marketId: null });
     });
 
     it('a free drop is "0"; no price row is null', () => {
         expect(toDropCard(row({ dropPrices: [{ amount: null, isFree: true, market: { currency: 'USD', code: 'US' } }] }), urls, null).price)
-            .toEqual({ amount: '0', currency: 'USD', isFree: true });
+            .toEqual({ amount: '0', currency: 'USD', isFree: true, marketId: null });
         expect(toDropCard(row({ dropPrices: [] }), urls, null).price).toBeNull();
     });
 

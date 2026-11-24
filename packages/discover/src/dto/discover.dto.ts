@@ -22,12 +22,16 @@ const pagination = {
 
 export const discoverFeedQuerySchema = z.object({
     category: z.nativeEnum(DiscoverCategory).optional(),
+    /** Never an error: a non-uuid, unknown or inactive market is ignored. */
+    marketId: z.string().uuid().optional().catch(undefined),
 });
 
 export const discoverProductsQuerySchema = z.object({
     section: z.nativeEnum(DiscoverSection).optional(),
     category: z.nativeEnum(DiscoverCategory).optional(),
     search: z.string().trim().min(1).max(100).optional(),
+    /** Never an error: a non-uuid, unknown or inactive market is ignored. */
+    marketId: z.string().uuid().optional().catch(undefined),
     ...pagination,
 });
 

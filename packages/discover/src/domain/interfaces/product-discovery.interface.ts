@@ -1,12 +1,14 @@
 import type { DiscoverCategory } from '../enums/discover-category.enum';
 import type { DiscoverSection } from '../enums/discover-section.enum';
 
-/** The base price of the default market. Null on the card when none is set. */
+/** The base price of the requested market, else of the default market. Null on the card when none is set. */
 export interface DiscoverPrice {
     /** Decimal string ("480.00"); "0" when the drop is free. */
     amount: string;
     currency: string;
     isFree: boolean;
+    /** The market this price belongs to. */
+    marketId: string | null;
 }
 
 /**
@@ -59,6 +61,8 @@ export interface DiscoverProductsQuery {
     limit: number;
     /** The signed-in account, for `isWishlisted`. Absent for guests. */
     viewerId?: string;
+    /** Optional `?marketId=`: show prices of this market (default market when absent, unknown or not priced there). */
+    marketId?: string;
 }
 
 export interface DiscoverProductsResult {

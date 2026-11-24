@@ -58,7 +58,7 @@ built by one function on the server, so they cannot differ.
   "artist": {                             // drop's artist, else its collection's artist
     "id": "a91e…", "name": "Yuki Lab", "slug": "yuki-lab"
   },
-  "price": {                              // base price of the default market; null if none
+  "price": {                              // base price of ?marketId (that market only), else the default market; null if none
     "amount": "110.00",                   // decimal string, always 2 places; "0" when free
     "currency": "USD",
     "isFree": false
@@ -101,6 +101,7 @@ The whole screen in **one round-trip**.
 | Param | Values | Default |
 |---|---|---|
 | `category` | `cards` `figures` `apparel` `posters` `digital` `other` | none (All Items) |
+| `marketId` | uuid of a market from `GET /markets` | none: unfiltered, default market's price. With one: only drops priced there. See [Market selection](#market-selection) |
 
 `category` narrows **both** lists.
 
@@ -125,6 +126,7 @@ A paginated grid. It backs "See All", the category chips and the search bar.
 | `featured` | `true` `false` | `false`. `true` = only drops that qualify as featured (no fallback) |
 | `category` | `cards` `figures` `apparel` `posters` `digital` `other` | none |
 | `search` | 1–100 chars, case-insensitive match on name | none |
+| `marketId` | uuid of a market from `GET /markets` | none: unfiltered, default market's price. With one: only drops priced there. See [Market selection](#market-selection) |
 | `sort` | `newest` `popular` | `newest` |
 | `page` | int ≥ 1 | `1` |
 | `limit` | int 1–50 | `20` |
@@ -234,9 +236,11 @@ A drop whose category is in no list (or is `null`) appears only under **All Item
 
 - `imageUrl` is the drop's primary image. If none is marked primary, it is the
   one with the lowest position. Archived image placements are skipped.
-- `price` is the drop's **base price** (no variant) in the **default market**,
-  only when that price row is `ACTIVE` and the market is active. Otherwise
-  `price` is `null`. There is no market selection on this route.
+- `price` is the drop's **base price** (no variant) in the market chosen with
+  `?marketId=` (else the **default market**), only when that price row is `ACTIVE`
+  and the market is active. Otherwise `price` is `null`. With a market selected,
+  drops not priced there are not listed at all. `price.marketId` says which
+  market it is. See [Market selection](#market-selection).
 
 ### Caching
 
@@ -269,6 +273,24 @@ Five drops pass step 1, and all five have a `releaseStart` (2026-07-31):
 
 ---
 
+## Market selection
+
+Send the buyer's market on this route as **`?marketId=<uuid>`** (an id from
+`GET /markets`). It is the *region*: the app sends the same id on every screen and
+to `/checkout/quote` and `/checkout`.
+
+- **Only drops priced in that market are listed.** A drop with no active base
+  price in the selected market is left out, and `meta.total` and paging count only
+  the drops that remain. Changing the market changes the list and every price.
+- Each card's `price` is that market's price (`amount`, `currency`, `isFree`), and
+  `price.marketId` is the selected market.
+- **No `marketId`**, or one that is not a uuid, unknown or an inactive market:
+  **ignored, never an error.** The list is unfiltered and shows the default
+  market's price, exactly as before.
+- Sorting, filters, paging and caching headers are unchanged.
+- Counts and sections follow the filter: for example, `featured` can hold fewer
+  than 10 cards in a market where fewer featured drops are sold.
+
 ## Known limitations
 
 - **The Peer-to-Peer banner has no backend.** It is a static promo. There is a
@@ -280,7 +302,7 @@ Five drops pass step 1, and all five have a `releaseStart` (2026-07-31):
 - **"Popular" means most minted**, not most sold.
 - **No price sorting.** Price lives in a per-market table, so it cannot be an
   `ORDER BY` on this list.
-- **No market selection.** The price is always the default market's.
+- **Base price only.** Variant prices are not shown on cards; pick the market with `?marketId=`.
 
 ## Changes from the previous version
 

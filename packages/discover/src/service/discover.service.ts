@@ -24,6 +24,7 @@ interface DiscoverServiceDeps {
 export interface DiscoverFeedQuery {
     category?: DiscoverCategory;
     viewerId?: string;
+    marketId?: string;
 }
 
 export class DiscoverService {
