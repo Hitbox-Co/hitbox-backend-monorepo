@@ -53,6 +53,9 @@ export {
     batchUpdateSkusSchema,
     bindTagSchema,
     bulkBindTagsSchema,
+    chipKeysBodySchema,
+    chipReportQuerySchema,
+    importChipKeysSchema,
     listSkusQuerySchema,
     mintSkusSchema,
     skuChangesSchema,
@@ -66,6 +69,12 @@ export type {
     BindTagDto,
     BulkBindResult,
     BulkBindTagsDto,
+    ChipKeysBodyDto,
+    ChipKeysResult,
+    ChipReportItem,
+    ChipReportQuery,
+    ImportChipKeysDto,
+    ImportChipKeysResult,
     ListSkusQuery,
     MintResult,
     MintSkusDto,
@@ -97,6 +106,9 @@ export type { SkuUpdateChanges, SkuUpdatePlan, SkuUpdateTarget } from './domain/
 export { assertFiltersPermitted, forbiddenFilters, GATED_FILTERS } from './domain/sku-filters';
 
 export { NOOP_SKU_AUDIT } from './domain/interfaces/sku-audit.interface';
+export type { AttachedChip, ChipToAttach, ISkuChipRegistry } from './domain/interfaces/chip-registry.interface';
+export { chipStatusOf } from './domain/chip-state';
+export type { ChipState, ChipStatus } from './domain/chip-state';
 export type { ISkuReleaseGate, SkuReleaseVerdict } from './domain/interfaces/release-gate.interface';
 export type { ISkuAudit, SkuAuditInput } from './domain/interfaces/sku-audit.interface';
 

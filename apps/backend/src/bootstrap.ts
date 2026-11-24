@@ -240,6 +240,16 @@ export function bootstrap(): Bootstrapped {
         mintLedger: {
             recordMintWithin: (tx, input) => claimsModule.mintLedger.recordMintWithin(tx, input),
         },
+        /**
+         * Every chip added to a unit gets the NfcTag and keys a tap is verified
+         * against, written by supply (which owns them) inside skus' transaction.
+         * Deferred lambdas: `supplyModule` is constructed further down.
+         */
+        chipRegistry: {
+            attachWithin: (tx, input) => supplyModule.chips.attachWithin(tx, input),
+            addKeysManyWithin: (tx, input) => supplyModule.chips.addKeysManyWithin(tx, input),
+            revokeWithin: (tx, input) => supplyModule.chips.revokeWithin(tx, input),
+        },
         // Adapted onto the real recorder, which is constructed further down —
         // the lambda closes over it and only runs per request, so the order of
         // the two `const`s here does not matter. Same arrangement as releases.

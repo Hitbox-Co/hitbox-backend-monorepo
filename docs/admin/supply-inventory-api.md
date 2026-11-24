@@ -441,7 +441,47 @@ the vendor portal does:
 
 `quantity` then becomes the sum of the lines (if sent too, it must match).
 Each variant must be a live variant of the drop (`400 SUPPLY_VARIANT_INVALID`).
-Staff bookings are **not** capped by vendor allotments. Every consignment
+Staff bookings are **not** capped by vendor allotments.
+
+**A drop whose type requires variants must be booked with lines**, and this is
+checked at **booking time** (here and on `POST /vendor/batches`), not when the
+consignment is accepted:
+
+| Status | Code | When |
+|---|---|---|
+| `422` | `SUPPLY_VARIANT_LINES_REQUIRED` | the drop's type has `variantMode: REQUIRED` and the booking has no `lines` |
+| `409` | `PRODUCTS_VARIANTS_REQUIRED` | the drop's type is `REQUIRED` but the drop has no live variant yet: add variants first |
+
+Before this, such a booking was accepted without lines, could never be ACCEPTED
+(`409 PRODUCTS_VARIANTS_REQUIRED` at accept), and there was no way to add lines to
+it. Drops of other types (`OPTIONAL`, `NONE`, or a legacy untyped drop) and
+consignments with no drop are unaffected.
+
+### `PATCH /api/v1/admin/supply/batches/:batchId/lines`
+
+Corrects the variant lines of a consignment that is still open, instead of
+rejecting it and booking again. Requires `nfc-tag-claim:manage:global`. Allowed
+while the consignment is `UPLOADED` or `VALIDATED`.
+
+```json
+{ "lines": [ { "variantId": "v1…", "quantity": 60 }, { "variantId": "v2…", "quantity": 40 } ] }
+```
+
+- The lines replace the old ones and must **add up to the consignment's declared
+  `quantity`** (`400 SUPPLY_LINES_QUANTITY_MISMATCH`). Each variant must be a live
+  variant of the drop (`400 SUPPLY_VARIANT_INVALID`), once only.
+- **Chips already registered** without a variant (a consignment booked with no
+  lines) are assigned to the new lines in order: the oldest chip first, line by
+  line, up to each line's quantity. A chip that already has a variant keeps it, and
+  that variant must stay on a line (`409 SUPPLY_LINES_LOCKED`), and a line cannot be
+  smaller than the chips already on it (`409 SUPPLY_LINE_QUANTITY_EXCEEDED`).
+- The per-line counters (`rowsReceived` / `rowsAccepted` / `rowsRejected`) are
+  recomputed from the chip rows.
+- A `ACCEPTED` or `REJECTED` consignment is refused (`409
+  SUPPLY_BATCH_STATE_INVALID`). The change is audited as `supply.batch.lines` with
+  the lines before and after.
+
+Response: the consignment, as `GET /admin/supply/batches/:batchId`. Every consignment
 response now carries `lines[]` (`[]` when not split) — see
 [vendor/vendor-portal-api.md §5](../vendor/vendor-portal-api.md#5-consignments).
 
@@ -516,6 +556,17 @@ configured on the deployment (see [13](#13-deployment)).
 Up to **1000 rows** per call (`SUPPLY_MANIFEST_MAX`) — matched to a physical
 carton, and registered in one transaction. A 10,000-chip consignment arrives as
 ten calls.
+
+#### Chips added outside a consignment
+
+Chips can also reach a unit through the SKU routes (`POST …/skus` with `chips`,
+`POST …/skus/tags`, `PATCH /admin/skus/:skuId/tag`). They get an `NfcTag` and
+keys exactly as a manifest chip does, with **no consignment** (`supplyBatchId` is
+`null`, and `batch` is `null` on chip reads). The chip inventory now also returns
+`hasActiveKeys` and `verifiable` on every chip. See
+[sku-api.md](sku-api.md#the-chip-one-shape-on-every-route) for the request shape.
+A keyed UID is 14 hex characters (7 bytes) here too: the manifest enforces the
+same rule when a row carries keys.
 
 #### Variant per row
 
@@ -869,6 +920,11 @@ Standard envelope:
 | `SUPPLY_TAG_UID_DUPLICATED` | 400 | The manifest repeats a UID within itself |
 | `SUPPLY_NO_CHANGES` | 400 | A body that would change nothing |
 | `SUPPLY_TAG_KEY_UNAVAILABLE` | 503 | No chip-UID key configured on this deployment |
+| `SUPPLY_VARIANT_LINES_REQUIRED` | 422 | Booking for a `REQUIRED`-variant drop without `lines` |
+| `PRODUCTS_VARIANTS_REQUIRED` | 409 | Booking for a `REQUIRED`-variant drop that has no live variant |
+| `SUPPLY_LINES_QUANTITY_MISMATCH` | 400 | `PATCH …/lines`: the lines do not add up to the declared quantity |
+| `SUPPLY_LINES_LOCKED` | 409 | `PATCH …/lines`: a registered chip is on a variant the new lines leave out |
+| `SUPPLY_TAG_UID_INVALID`, `SUPPLY_TAG_UNUSABLE`, `SUPPLY_TAG_VARIANT_MISMATCH`, `SUPPLY_TAG_KEYS_MISMATCH`, `SUPPLY_TAG_KEYS_EXIST` | 400 / 409 | Chips added through the SKU routes: see [sku-api.md](sku-api.md#the-chip-one-shape-on-every-route) |
 
 Vendor-portal and vendor-administration codes (`SUPPLY_VENDOR_MEMBER_*`,
 `SUPPLY_DROP_NOT_ASSIGNED`, …) are listed in

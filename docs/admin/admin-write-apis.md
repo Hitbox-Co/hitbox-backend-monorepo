@@ -473,7 +473,7 @@ request either produces a drop with 500 units or produces nothing. The response
 then carries an extra `skus` key reporting `minted`, `firstSerial`,
 `lastSerial` and `skuCodes`; the key is **absent** when no block was sent.
 
-There is deliberately no `tagIds` here — binding a physical NFC tag needs
+There is deliberately no `tagIds` (or `chips`) here — binding a physical NFC tag needs
 `nfc-tag-claim:manage`, which this route does not check. Full contract,
 including minting more units later and reading them back:
 [sku-api.md](sku-api.md).

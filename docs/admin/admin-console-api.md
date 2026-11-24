@@ -824,7 +824,7 @@ What exists today, and what it does not cover:
 | Submit for review | ✅ `POST /api/v1/admin/releases` — freezes who must approve |
 | Approve / reject | ✅ `POST /api/v1/admin/releases/:id/decision` — **the owner approves, not HitBox**; needs the legal compliance tickmark ([admin-write-apis.md 4.0](admin-write-apis.md)) |
 | "Deploy New Drop" / publish action | ❌ **nothing** — no `APPROVED → PUBLISHED/ACTIVE` transition |
-| NFC tag claims "Enabled" toggle | ⚠️ tags are bound at mint time via `tagIds` ([sku-api.md 3](sku-api.md)); there is no per-drop toggle and no way to bind a tag to an already-minted unit |
+| NFC tag claims "Enabled" toggle | ⚠️ chips are bound at mint time via `chips`, or to an already-minted unit via `POST …/skus/tags` / `PATCH /admin/skus/:skuId/tag` ([sku-api.md 3](sku-api.md)); each chip is `{ uid, key0, key1, key2 }`. There is no per-drop toggle |
 
 **One endpoint still missing before this screen is buildable end to end:**
 

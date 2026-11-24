@@ -1,4 +1,5 @@
 import { ClaimedStatus, TagLifecycleState } from '@hitbox/database';
+import { chipKeyField, chipKeysSchema, chipSchema, chipUidField, refineChip } from '@hitbox/shared';
 import { z } from 'zod';
 import {
     SKU_BATCH_RANGE_MAX,
@@ -75,6 +76,14 @@ export const mintSkusSchema = z
          */
         tagIds: z.array(tagId).min(1).max(SKU_MINT_MAX_BATCH).optional(),
         /**
+         * The chips to embed, in serial order: `{ uid, key0, key1, key2 }` each.
+         * The keys are what makes a tap verifiable; a chip with no keys is
+         * refused. Either omit it, or supply exactly `count` of them. Replaces
+         * `tagIds` (deprecated: a bare UID can never be verified by tap).
+         * Requires `nfc-tag-claim:manage`.
+         */
+        chips: z.array(chipSchema).min(1).max(SKU_MINT_MAX_BATCH).optional(),
+        /**
          * Which vendor provisioned the tags, and the batch reference they came
          * in under. Recorded, not verified — the supply module owns batches and
          * tags routinely arrive before that row exists.
@@ -85,6 +94,10 @@ export const mintSkusSchema = z
         isActive: z.boolean().default(true),
     })
     .strict()
+    .refine((value) => !(value.tagIds && value.chips), {
+        message: 'Send chips, or the deprecated tagIds, not both',
+        path: ['chips'],
+    })
     .refine((value) => !value.tagIds || value.tagIds.length === value.count, {
         message: 'tagIds must contain exactly `count` entries when supplied',
         path: ['tagIds'],
@@ -92,6 +105,14 @@ export const mintSkusSchema = z
     .refine((value) => !value.tagIds || new Set(value.tagIds).size === value.tagIds.length, {
         message: 'tagIds contains the same tag twice',
         path: ['tagIds'],
+    })
+    .refine((value) => !value.chips || value.chips.length === value.count, {
+        message: 'chips must contain exactly `count` entries when supplied',
+        path: ['chips'],
+    })
+    .refine((value) => !value.chips || new Set(value.chips.map((chip) => chip.uid)).size === value.chips.length, {
+        message: 'chips contains the same chip twice',
+        path: ['chips'],
     });
 
 export type MintSkusDto = z.infer<typeof mintSkusSchema>;
@@ -108,7 +129,10 @@ export type MintSkusDto = z.infer<typeof mintSkusSchema>;
  */
 export const bindTagSchema = z
     .object({
-        tagId,
+        /** The chip: `{ uid, key0, key1, key2 }`. Replaces `tagId`. */
+        chip: chipSchema.optional(),
+        /** @deprecated A bare UID cannot be verified by tap. Send `chip`. */
+        tagId: tagId.optional(),
         vendorId: z.string().uuid().optional(),
         provisioningBatchId: z.string().trim().min(1).max(120).optional(),
         /**
@@ -121,7 +145,11 @@ export const bindTagSchema = z
          */
         replace: z.boolean().default(false),
     })
-    .strict();
+    .strict()
+    .refine((value) => (value.chip === undefined) !== (value.tagId === undefined), {
+        message: 'Send chip ({ uid, key0, key1, key2 }), or the deprecated tagId, not both',
+        path: ['chip'],
+    });
 export type BindTagDto = z.infer<typeof bindTagSchema>;
 
 /** One row of a vendor manifest: which unit, which tag. */
@@ -131,14 +159,35 @@ const tagBindingSchema = z
         serialNumber: z.coerce.number().int().min(1).optional(),
         /** …or by its full code. Exactly one of the two. */
         skuCode: z.string().trim().min(1).max(64).optional(),
-        tagId,
+        /** The chip, inline: `uid` plus its three keys. Replaces `tagId`. */
+        uid: chipUidField.optional(),
+        key0: chipKeyField.optional(),
+        key1: chipKeyField.optional(),
+        key2: chipKeyField.optional(),
+        /** @deprecated A bare UID cannot be verified by tap. Send `uid` and the keys. */
+        tagId: tagId.optional(),
     })
     .strict()
     .refine(
         (value) =>
             (value.serialNumber === undefined) !== (value.skuCode === undefined),
         { message: 'Provide exactly one of serialNumber or skuCode' },
-    );
+    )
+    .superRefine((value, ctx) => {
+        const hasChipFields =
+            value.uid !== undefined || value.key0 !== undefined || value.key1 !== undefined || value.key2 !== undefined;
+        if (value.tagId !== undefined) {
+            if (hasChipFields) {
+                ctx.addIssue({ code: 'custom', message: 'Send uid and keys, or the deprecated tagId, not both', path: ['tagId'] });
+            }
+            return;
+        }
+        if (value.uid === undefined) {
+            ctx.addIssue({ code: 'custom', message: 'Send uid and key0, key1, key2 (or the deprecated tagId).', path: ['uid'] });
+            return;
+        }
+        refineChip({ uid: value.uid, key0: value.key0, key1: value.key1, key2: value.key2 }, ctx, { keysRequired: true });
+    });
 
 /**
  * `POST /admin/products/:productId/skus/tags` — bind a batch.
@@ -156,7 +205,10 @@ export const bulkBindTagsSchema = z
     })
     .strict()
     .refine(
-        (value) => new Set(value.bindings.map((b) => b.tagId)).size === value.bindings.length,
+        (value) => {
+            const ids = value.bindings.map((b) => b.uid ?? b.tagId);
+            return new Set(ids).size === ids.length;
+        },
         { message: 'The same tag appears twice in this batch', path: ['bindings'] },
     )
     .refine(
@@ -171,7 +223,143 @@ export type BulkBindTagsDto = z.infer<typeof bulkBindTagsSchema>;
 export interface BulkBindResult {
     productId: string;
     bound: number;
-    items: { skuCode: string; serialNumber: number; tagId: string; replaced: boolean }[];
+    /** Chips that arrived with keys. Counts only: keys are never returned. */
+    withKeys: number;
+    /** Chips a tap can be verified against. 0 for the deprecated `tagId` form (a bare UID has no keys). */
+    chipsVerifiable: number;
+    items: {
+        skuCode: string;
+        serialNumber: number;
+        /** Only on the deprecated `tagId` form. A keyed chip's UID is not echoed. */
+        tagId?: string;
+        replaced: boolean;
+        verifiable: boolean;
+    }[];
+}
+
+// ── Keys for chips that are already bound ───────────────────────────────────
+
+/** `POST /admin/skus/:skuId/chip-keys` — the three keys of the unit's chip. */
+export const chipKeysBodySchema = chipKeysSchema;
+export type ChipKeysBodyDto = z.infer<typeof chipKeysBodySchema>;
+
+const keyedUnitRowSchema = z
+    .object({
+        serialNumber: z.coerce.number().int().min(1).optional(),
+        skuCode: z.string().trim().min(1).max(64).optional(),
+        key0: chipKeyField,
+        key1: chipKeyField,
+        key2: chipKeyField,
+    })
+    .strict()
+    .superRefine((row, ctx) => {
+        if ((row.serialNumber === undefined) === (row.skuCode === undefined)) {
+            ctx.addIssue({ code: 'custom', message: 'Provide exactly one of serialNumber or skuCode', path: ['serialNumber'] });
+        }
+        if (new Set([row.key0, row.key1, row.key2]).size !== 3) {
+            ctx.addIssue({ code: 'custom', message: 'key0, key1 and key2 must all be different.', path: ['key0'] });
+        }
+    });
+export type KeyedUnitRow = z.infer<typeof keyedUnitRowSchema>;
+
+const CSV_HEADER_FIRST_CELLS = new Set(['serial', 'serialnumber', 'skucode', 'sku', 'unit']);
+
+/**
+ * `serial,key0,key1,key2` per line (or `skuCode,key0,key1,key2`). A header line
+ * is skipped. Errors name the line and field, never the value: a key must not
+ * end up in an error message.
+ */
+function parseKeyedUnitCsv(csv: string, ctx: z.RefinementCtx): KeyedUnitRow[] {
+    const rows: KeyedUnitRow[] = [];
+    const lines = csv.split(/\r?\n/);
+    lines.forEach((raw, index) => {
+        const line = raw.trim();
+        if (line.length === 0) return;
+        const cells = line.split(',').map((cell) => cell.trim());
+        if (index === 0 && CSV_HEADER_FIRST_CELLS.has((cells[0] ?? '').toLowerCase())) return;
+        const label = `line ${index + 1}`;
+        if (cells.length !== 4) {
+            ctx.addIssue({ code: 'custom', path: ['csv'], message: `${label}: expected 4 columns (unit, key0, key1, key2).` });
+            return;
+        }
+        const unit = cells[0]!;
+        const candidate = {
+            ...(/^\d+$/.test(unit) ? { serialNumber: Number(unit) } : { skuCode: unit }),
+            key0: cells[1],
+            key1: cells[2],
+            key2: cells[3],
+        };
+        const parsed = keyedUnitRowSchema.safeParse(candidate);
+        if (!parsed.success) {
+            // Messages only; never the offending value.
+            const reasons = [...new Set(parsed.error.issues.map((issue) => `${issue.path.join('.') || 'row'}: ${issue.message}`))];
+            ctx.addIssue({ code: 'custom', path: ['csv'], message: `${label}: ${reasons.join('; ')}` });
+            return;
+        }
+        rows.push(parsed.data);
+    });
+    return rows;
+}
+
+/**
+ * `POST /admin/products/:productId/skus/chip-keys` — attach keys to the chips
+ * of many already-bound units. Send `rows` (JSON), or `csv` (the file's text).
+ */
+export const importChipKeysSchema = z
+    .object({
+        rows: z.array(keyedUnitRowSchema).min(1).max(SKU_TAG_BIND_MAX).optional(),
+        csv: z.string().min(1).max(1_000_000).optional(),
+    })
+    .strict()
+    .transform((value, ctx): { rows: KeyedUnitRow[] } => {
+        if ((value.rows === undefined) === (value.csv === undefined)) {
+            ctx.addIssue({ code: 'custom', path: ['rows'], message: 'Send exactly one of rows or csv.' });
+            return { rows: [] };
+        }
+        const rows = value.rows ?? parseKeyedUnitCsv(value.csv!, ctx);
+        if (rows.length === 0) {
+            ctx.addIssue({ code: 'custom', path: ['rows'], message: 'No rows to import.' });
+        }
+        if (rows.length > SKU_TAG_BIND_MAX) {
+            ctx.addIssue({ code: 'custom', path: ['rows'], message: `At most ${SKU_TAG_BIND_MAX} rows per request.` });
+        }
+        const units = rows.map((row) => row.skuCode ?? `#${row.serialNumber}`);
+        if (new Set(units).size !== units.length) {
+            ctx.addIssue({ code: 'custom', path: ['rows'], message: 'The same unit appears twice.' });
+        }
+        return { rows };
+    });
+export type ImportChipKeysDto = z.infer<typeof importChipKeysSchema>;
+
+export interface ChipKeysResult {
+    skuId: string;
+    skuCode: string;
+    /** The unit's chip is now verifiable. */
+    verifiable: boolean;
+}
+
+export interface ImportChipKeysResult {
+    productId: string;
+    attached: number;
+    items: { skuCode: string; serialNumber: number }[];
+}
+
+/** `GET /admin/skus/chip-report` — units whose chip cannot be verified by tap. */
+export const chipReportQuerySchema = z.object({
+    page: z.coerce.number().int().min(1).default(1),
+    limit: z.coerce.number().int().min(1).max(SKUS_MAX_LIMIT).default(SKUS_DEFAULT_LIMIT),
+    productId: z.string().uuid().optional(),
+    /** `UID_ONLY`: a bare UID on the unit, no NfcTag. `LINKED_NO_KEYS`: an NfcTag with no ACTIVE keys. */
+    state: z.enum(['ALL', 'UID_ONLY', 'LINKED_NO_KEYS']).default('ALL'),
+});
+export type ChipReportQuery = z.infer<typeof chipReportQuerySchema>;
+
+export interface ChipReportItem {
+    skuId: string;
+    skuCode: string;
+    serialNumber: number;
+    productId: string;
+    state: 'UID_ONLY' | 'LINKED_NO_KEYS';
 }
 
 // ── Updating a unit ─────────────────────────────────────────────────────────
@@ -486,6 +674,14 @@ export interface SkuListItem {
     tag?: {
         tagId: string | null;
         tagLifecycleState: TagLifecycleState;
+        /**
+         * Whether a tap on this unit's chip can be verified: it has an `NfcTag`
+         * that is BOUND or ACTIVE with ACTIVE keys. `state` says why not:
+         * `NONE` no chip, `UID_ONLY` a bare UID with no `NfcTag`,
+         * `LINKED_NO_KEYS` an `NfcTag` with no ACTIVE keys, `INACTIVE` the chip
+         * is LOST / REVOKED / DISPUTED, `VERIFIABLE`.
+         */
+        chip: { state: 'NONE' | 'UID_ONLY' | 'LINKED_NO_KEYS' | 'INACTIVE' | 'VERIFIABLE'; verifiable: boolean };
         lastTapCounter?: number;
         /**
          * Where the tag came from. FULL only: a batch reference identifies the
@@ -551,7 +747,12 @@ export interface MintResult {
     firstSerial: number;
     lastSerial: number;
     skuCodes: string[];
+    /** Units given a chip at mint time (counts only). */
     tagsBound: number;
+    /** Of those, chips that arrived with keys. Counts only: keys are never returned. */
+    withKeys: number;
+    /** Chips a tap can be verified against. 0 for the deprecated `tagIds` form (a bare UID has no keys). */
+    chipsVerifiable: number;
 }
 
 export { ClaimedStatus, TagLifecycleState };

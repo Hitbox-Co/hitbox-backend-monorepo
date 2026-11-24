@@ -44,6 +44,7 @@ export {
 
 export {
     createBatchSchema,
+    updateBatchLinesSchema,
     createVendorSchema,
     decideBatchSchema,
     listBatchesQuerySchema,
@@ -122,6 +123,8 @@ export type { ISupplyStockMinter } from './domain/interfaces/stock-minter.interf
 export type { VendorUserIdResolver } from './controller/vendor.controller';
 
 export type { SupplyService, SupplyMutationContext } from './service/supply.service';
+export { ChipRegistryService } from './service/chip-registry.service';
+export type { AttachedChip, ChipToAttach } from './service/chip-registry.service';
 export { percent } from './service/supply.service';
 export { formatTagCode, nextTagOrdinal } from './repository/supply.repository';
 

@@ -161,7 +161,7 @@ export class OrderFulfilmentRepository {
         skip: number;
         take: number;
         now: Date;
-    }): Promise<{ total: number; items: { id: string; skuCode: string; serialNumber: number; tagId: string | null; variantId: string | null }[] }> {
+    }): Promise<{ total: number; items: { id: string; skuCode: string; serialNumber: number; tagId: string | null; variantId: string | null; chipVerifiable: boolean }[] }> {
         const serial = input.search && /^\d+$/.test(input.search) ? Number(input.search) : undefined;
         const where: Prisma.SkuWhereInput = {
             productId: input.productId,
@@ -183,13 +183,36 @@ export class OrderFulfilmentRepository {
             this.prisma.sku.count({ where }),
             this.prisma.sku.findMany({
                 where,
-                select: { id: true, skuCode: true, serialNumber: true, tagId: true, variantId: true },
+                select: {
+                    id: true,
+                    skuCode: true,
+                    serialNumber: true,
+                    tagId: true,
+                    variantId: true,
+                    // Only whether a tap on the chip can be verified (BOUND / ACTIVE
+                    // with an ACTIVE key), never the key.
+                    currentNfcTag: {
+                        select: {
+                            lifecycleState: true,
+                            keys: { where: { status: 'ACTIVE' }, select: { id: true }, take: 1 },
+                        },
+                    },
+                },
                 orderBy: { serialNumber: 'asc' },
                 skip: input.skip,
                 take: input.take,
             }),
         ]);
-        return { total, items };
+        return {
+            total,
+            items: items.map(({ currentNfcTag, ...sku }) => ({
+                ...sku,
+                chipVerifiable:
+                    currentNfcTag !== null &&
+                    (currentNfcTag.lifecycleState === 'BOUND' || currentNfcTag.lifecycleState === 'ACTIVE') &&
+                    currentNfcTag.keys.length > 0,
+            })),
+        };
     }
 
     async queue(

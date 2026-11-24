@@ -20,6 +20,17 @@ export type { Redis } from './cache/redis';
 
 // Utils
 export { asyncHandler } from './utils/async-handler';
+export {
+    KEYED_CHIP_UID_HEX_LENGTH,
+    chipKeyField,
+    chipKeysSchema,
+    chipSchema,
+    chipUidField,
+    hasDuplicateUids,
+    normaliseHex,
+    refineChip,
+} from './utils/chip-schema';
+export type { ChipInput, ChipKeysInput } from './utils/chip-schema';
 
 
 // Events

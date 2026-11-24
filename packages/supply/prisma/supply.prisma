@@ -219,8 +219,10 @@ model NfcTag {
   /// the uuid above stays the key. Written by the publicCode client extension.
   publicCode String? @unique @db.VarChar(32)
   nfcTagCode      String            @unique @db.VarChar(10) // NT
-  supplyBatchId   String            @db.Uuid
-  supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
+  /// The consignment the chip arrived in. Null for a chip added directly to a
+  /// unit (the SKU routes), which has no consignment.
+  supplyBatchId   String?           @db.Uuid
+  supplyBatch     SupplyBatch?      @relation(fields: [supplyBatchId], references: [id])
   /// The variant of the goods this chip is embedded in — set from the
   /// manifest row when the consignment has variant lines. Binding the chip to
   /// a unit should match it against `Sku.variantId`.

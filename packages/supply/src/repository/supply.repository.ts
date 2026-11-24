@@ -105,6 +105,8 @@ const tagSelect = {
     qcReportedAt: true,
     qcNotes: true,
     lifecycleState: true,
+    // Only whether an ACTIVE key row exists, never the key.
+    keys: { where: { status: 'ACTIVE' }, select: { id: true }, take: 1 },
     lastTapCounter: true,
     tamperStatus: true,
     personalizedAt: true,
@@ -462,6 +464,131 @@ export class SupplyRepository {
             select: { organizationId: true },
         });
         return row === null ? undefined : row.organizationId;
+    }
+
+    /**
+     * The drop's type rule about variants, or `undefined` when the drop does not
+     * exist, `null` for a legacy drop with no type. Read so a booking can be
+     * refused up front when the drop needs variants and the booking has none.
+     */
+    async findDropVariantRule(
+        dropId: string,
+    ): Promise<{ variantMode: 'NONE' | 'OPTIONAL' | 'REQUIRED'; typeCode: string } | null | undefined> {
+        const row = await this.prisma.drop.findUnique({
+            where: { id: dropId },
+            select: { dropType: { select: { variantMode: true, code: true } } },
+        });
+        if (row === null) return undefined;
+        return row.dropType ? { variantMode: row.dropType.variantMode, typeCode: row.dropType.code } : null;
+    }
+
+    /**
+     * Replaces a consignment's variant lines, and fixes the registered chips to
+     * match, in one transaction on the locked batch row.
+     *
+     * Chips registered on a consignment booked without lines carry no variant.
+     * They are assigned to the new lines in order (oldest chip first, line by
+     * line, up to each line's quantity), so a bad booking is corrected instead
+     * of rejected and rebooked. A chip already on a variant must stay on a line
+     * for that variant. Line counters are recomputed from the chip rows.
+     */
+    replaceBatchLines(input: { batchId: string; lines: VariantQuantity[] }): Promise<BatchRow> {
+        return this.prisma.$transaction(
+            async (tx) => {
+                const locked = await this.lockBatchWithin(tx, input.batchId);
+                if (!locked || !acceptsRows(locked.status)) {
+                    throw AppError.conflict(
+                        `This consignment is ${locked?.status ?? 'gone'}; its lines can no longer be changed.`,
+                        SUPPLY_ERROR_CODES.BATCH_STATE_INVALID,
+                    );
+                }
+                const total = input.lines.reduce((sum, line) => sum + line.quantity, 0);
+                if (total !== locked.quantity) {
+                    throw AppError.badRequest(
+                        `The lines add up to ${total}, but the consignment declares ${locked.quantity}.`,
+                        SUPPLY_ERROR_CODES.LINES_QUANTITY_MISMATCH,
+                        { declared: locked.quantity, lines: total },
+                    );
+                }
+
+                const rows = await tx.nfcTag.findMany({
+                    where: { supplyBatchId: input.batchId },
+                    orderBy: [{ createdAt: 'asc' }, { nfcTagCode: 'asc' }],
+                    select: { id: true, variantId: true, qcStatus: true },
+                });
+                const wanted = new Map(input.lines.map((line) => [line.variantId, line.quantity]));
+
+                const stranded = [...new Set(rows.flatMap((row) => (row.variantId && !wanted.has(row.variantId) ? [row.variantId] : [])))];
+                if (stranded.length > 0) {
+                    throw AppError.conflict(
+                        'Chips are already registered on a variant the new lines leave out. Keep a line for it.',
+                        SUPPLY_ERROR_CODES.LINES_LOCKED,
+                        { variantIds: stranded },
+                    );
+                }
+
+                const have = new Map<string, number>();
+                for (const row of rows) {
+                    if (row.variantId) have.set(row.variantId, (have.get(row.variantId) ?? 0) + 1);
+                }
+                const over = input.lines.filter((line) => (have.get(line.variantId) ?? 0) > line.quantity);
+                if (over.length > 0) {
+                    throw AppError.conflict(
+                        'More chips are registered on a variant than its new line declares.',
+                        SUPPLY_ERROR_CODES.LINE_QUANTITY_EXCEEDED,
+                        { lines: over.map((line) => ({ variantId: line.variantId, quantity: line.quantity, registered: have.get(line.variantId) })) },
+                    );
+                }
+
+                // Give the variant-less chips a variant, line by line, in order.
+                const loose = rows.filter((row) => !row.variantId);
+                const finalVariant = new Map(rows.map((row) => [row.id, row.variantId]));
+                let cursor = 0;
+                for (const line of input.lines) {
+                    const spare = line.quantity - (have.get(line.variantId) ?? 0);
+                    const ids = loose.slice(cursor, cursor + Math.max(spare, 0)).map((row) => row.id);
+                    cursor += ids.length;
+                    if (ids.length === 0) continue;
+                    await tx.nfcTag.updateMany({ where: { id: { in: ids } }, data: { variantId: line.variantId } });
+                    for (const id of ids) finalVariant.set(id, line.variantId);
+                }
+                if (cursor < loose.length) {
+                    throw AppError.conflict(
+                        'More chips are registered than the lines can hold.',
+                        SUPPLY_ERROR_CODES.LINE_QUANTITY_EXCEEDED,
+                    );
+                }
+
+                const counters = new Map<string, { received: number; rejected: number }>();
+                for (const row of rows) {
+                    const variantId = finalVariant.get(row.id);
+                    if (!variantId) continue;
+                    const entry = counters.get(variantId) ?? { received: 0, rejected: 0 };
+                    entry.received += 1;
+                    if (row.qcStatus === QcStatus.FAILED) entry.rejected += 1;
+                    counters.set(variantId, entry);
+                }
+
+                await tx.supplyBatchLine.deleteMany({ where: { batchId: input.batchId } });
+                await tx.supplyBatchLine.createMany({
+                    data: input.lines.map((line) => {
+                        const entry = counters.get(line.variantId) ?? { received: 0, rejected: 0 };
+                        return {
+                            id: randomUUID(),
+                            batchId: input.batchId,
+                            variantId: line.variantId,
+                            quantity: line.quantity,
+                            rowsReceived: entry.received,
+                            rowsAccepted: entry.received - entry.rejected,
+                            rowsRejected: entry.rejected,
+                        };
+                    }),
+                });
+
+                return tx.supplyBatch.findUniqueOrThrow({ where: { id: input.batchId }, select: batchSelect });
+            },
+            { maxWait: 10_000, timeout: 30_000 },
+        );
     }
 
     // ── Chip inventory ──────────────────────────────────────────────────────

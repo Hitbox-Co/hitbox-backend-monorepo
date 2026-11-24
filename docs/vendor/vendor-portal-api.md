@@ -204,6 +204,8 @@ for this vendor, and ones for drops since unassigned.
 | `403 SUPPLY_DROP_NOT_ASSIGNED` | Drop not assigned to you |
 | `400 SUPPLY_ALLOTMENT_SHAPE_INVALID` | `quantity` for a by-variant drop, or `lines` for one without |
 | `400 SUPPLY_VARIANT_INVALID` | A line's variant is not a live variant of the drop |
+| `422 SUPPLY_VARIANT_LINES_REQUIRED` | The drop's type requires variants and the booking has no `lines`. Checked when you book, not when HitBox accepts |
+| `409 PRODUCTS_VARIANTS_REQUIRED` | The drop's type requires variants but the drop has no live variant yet. Ask HitBox to add them |
 
 Going over your allotment is **not** refused. The response's `allotment`
 block (below) shows whether HitBox could accept this consignment as things
@@ -388,6 +390,8 @@ UIDs are never returned by any endpoint once registered.
 | `SUPPLY_BATCH_QUANTITY_EXCEEDED` | 409 | Manifest would exceed declared quantity |
 | `SUPPLY_ALLOTMENT_SHAPE_INVALID` | 400 | `quantity` vs `lines` doesn't match your allotment |
 | `SUPPLY_VARIANT_INVALID` | 400 | Line names a variant that isn't a live variant of the drop |
+| `SUPPLY_VARIANT_LINES_REQUIRED` | 422 | Booking for a drop whose type requires variants, without `lines` |
+| `PRODUCTS_VARIANTS_REQUIRED` | 409 | Booking for a drop that requires variants but has none yet |
 | `SUPPLY_VARIANT_REQUIRED` | 400 | Manifest row without `variantId` on a split consignment (`details.rows`) |
 | `SUPPLY_VARIANT_NOT_IN_BATCH` | 400 | Row's variant isn't one of the batch's lines, or the batch has no lines (`details.rows`) |
 | `SUPPLY_LINE_QUANTITY_EXCEEDED` | 409 | More chips on a variant than its line declares (`details.lines`) |

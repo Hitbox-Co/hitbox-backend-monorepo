@@ -202,7 +202,7 @@ organization**. Not `globalOnly` — a Brand Admin holding
 `collectible-instance:manage:organization` mints the edition for a drop they
 own, and the engine confines them to it.
 
-**Binding tags additionally requires `nfc-tag-claim:manage`.**
+**Binding chips additionally requires `nfc-tag-claim:manage`.**
 
 ### Request
 
@@ -210,7 +210,11 @@ own, and the engine confines them to it.
 {
   "count": 3,
   "variantId": null,
-  "tagIds": ["04:A3:9B:2C:5D:6E:80", "04A39B2C5D6E81", "04-A3-9B-2C-5D-6E-82"],
+  "chips": [
+    { "uid": "04A39B2C5D6E80", "key0": "000102030405060708090A0B0C0D0E0F", "key1": "101112131415161718191A1B1C1D1E1F", "key2": "202122232425262728292A2B2C2D2E2F" },
+    { "uid": "04A39B2C5D6E81", "key0": "…", "key1": "…", "key2": "…" },
+    { "uid": "04A39B2C5D6E82", "key0": "…", "key1": "…", "key2": "…" }
+  ],
   "vendorId": "11112222-3333-4444-5555-666677778888",
   "provisioningBatchId": "BATCH-2026-09-41",
   "isActive": true
@@ -220,7 +224,8 @@ own, and the engine confines them to it.
 | Field | Type | Notes |
 |---|---|---|
 | `count` | int 1–1000 | required |
-| `tagIds` | string[] | hex, `:`/`-`/space separators allowed. **Exactly `count` entries or omit entirely** |
+| `chips` | object[] | one chip per unit, in serial order: `{ uid, key0, key1, key2 }`, see [the chip](#the-chip-one-shape-on-every-route). **Exactly `count` entries or omit entirely** |
+| `tagIds` | string[] | **Deprecated.** A bare UID: the unit gets no `NfcTag` and no keys, so a tap on it can **never** be verified. Accepted for one release, logged, and reported as `chipsVerifiable: 0`. Not allowed together with `chips` |
 | `vendorId` | uuid | who provisioned the tags |
 | `provisioningBatchId` | string | recorded, not verified — tags routinely arrive before the supply row exists |
 | `isActive` | boolean | default `true`; mint `false` to stage units ahead of a release |
@@ -230,7 +235,7 @@ storage, so `04:A3:9B…`, `04-a3-9b…` and `04A39B…` are the same tag. `Sku.
 is unique platform-wide, and that uniqueness is the primary defence against
 cloned tags — it only works if the stored form is canonical.
 
-**Why `tagIds` must be exactly `count` long:** a shorter list would silently
+**Why `chips` must be exactly `count` long:** a shorter list would silently
 leave the tail of the batch untagged, and "silently" is not a property you want
 in the table that proves authenticity.
 
@@ -248,14 +253,25 @@ in the table that proves authenticity.
       "123456780042-000502",
       "123456780042-000503"
     ],
-    "tagsBound": 3
+    "tagsBound": 3,
+    "withKeys": 3,
+    "chipsVerifiable": 3
   }
 }
 ```
 
-Units are created `UNCLAIMED`, with `tagLifecycleState` of `BOUND` when a tag
+`withKeys` and `chipsVerifiable` are **counts**: keys are never returned (nor
+logged, nor audited). `chipsVerifiable` is how many of the new units a tap can be
+verified against; it is `0` for the deprecated `tagIds` form.
+
+Units are created `UNCLAIMED`, with `tagLifecycleState` of `BOUND` when a chip
 was supplied and `UNPROVISIONED` otherwise. `ACTIVE` is reached on first claim,
 by the claims module — never here.
+
+For every chip, minting creates or links the chip's `NfcTag` (found by UID hash)
+and writes its wrapped `NfcTagKey`, **in the same transaction as the units**, and
+points each unit at its chip (`Sku.currentNfcTagId`). All or nothing: a chip that
+is refused (below) mints no unit.
 
 ### Concurrency
 
@@ -282,9 +298,9 @@ physical tags arrive later, in boxes, with a manifest.
 So there are two paths, and for anything past a handful of units you want the
 second.
 
-### Path A — tags in hand at mint time (small batches)
+### Path A — chips in hand at mint time (small batches)
 
-Pass `tagIds` alongside `count`, exactly as long as `count` (3). Fine for 10
+Pass `chips` alongside `count`, exactly as long as `count` (3). Fine for 10
 units. For 500 it means a 500-element array in one request body, and it is
 impossible past 1000 because that is the batch cap.
 
@@ -294,8 +310,8 @@ impossible past 1000 because that is the batch cap.
 1. POST /admin/products/:id/skus        { "count": 500 }
       → 500 units, UNPROVISIONED, no tags
 2.   … tags are manufactured and shipped …
-3. POST /admin/products/:id/skus/tags   { "bindings": [ … ] }
-      → units become BOUND
+3. POST /admin/products/:id/skus/tags   { "bindings": [ { serialNumber, uid, key0, key1, key2 }, … ] }
+      → units become BOUND, and every chip verifiable
 ```
 
 Step 1 and step 3 are days or weeks apart, which is the point.
@@ -306,15 +322,14 @@ Step 1 and step 3 are days or weeks apart, which is the point.
 capability. A Drop Manager mints the edition; whoever holds tag custody binds
 the tags. Today only `HITBOX_SYSTEM_ADMIN` holds it.
 
-The body is a direct translation of a vendor CSV (`serial,tagId` per line),
-because that is what actually arrives with a box of tags:
+The body is a direct translation of the vendor's file (`serial,uid,key0,key1,key2`
+per line), because that is what actually arrives with a box of chips:
 
 ```json
 {
   "bindings": [
-    { "serialNumber": 1, "tagId": "04:A3:9B:2C:5D:6E:80" },
-    { "serialNumber": 2, "tagId": "04-a3-9b-2c-5d-6e-81" },
-    { "serialNumber": 3, "tagId": "04a39b2c5d6e82" }
+    { "serialNumber": 1, "uid": "04:A3:9B:2C:5D:6E:80", "key0": "000102…0F", "key1": "101112…1F", "key2": "202122…2F" },
+    { "skuCode": "123456780042-000002", "uid": "04-a3-9b-2c-5d-6e-81", "key0": "…", "key1": "…", "key2": "…" }
   ],
   "vendorId": "11112222-3333-4444-5555-666677778888",
   "provisioningBatchId": "BATCH-2026-09-41",
@@ -326,7 +341,8 @@ because that is what actually arrives with a box of tags:
 |---|---|
 | `bindings[].serialNumber` | position in the edition — **or** |
 | `bindings[].skuCode` | the full code. Exactly one of the two per row |
-| `bindings[].tagId` | hex, any separator style |
+| `bindings[].uid`, `key0`, `key1`, `key2` | the chip, inline: see [the chip](#the-chip-one-shape-on-every-route) |
+| `bindings[].tagId` | **Deprecated** bare UID (no keys): use `uid` and the three keys. Not allowed on a row that has `uid` |
 | `vendorId` / `provisioningBatchId` | applied to every unit in the batch |
 | `replace` | allow overwriting a tag already bound. Default `false` |
 
@@ -336,17 +352,28 @@ Up to **1000 bindings per call**. A 10,000-unit edition is ten calls.
 {
   "data": {
     "productId": "0f1e2d3c-…",
-    "bound": 3,
+    "bound": 2,
+    "withKeys": 2,
+    "chipsVerifiable": 2,
     "items": [
-      { "skuCode": "123456780042-000001", "serialNumber": 1, "tagId": "04A39B2C5D6E80", "replaced": false },
-      { "skuCode": "123456780042-000002", "serialNumber": 2, "tagId": "04A39B2C5D6E81", "replaced": false },
-      { "skuCode": "123456780042-000003", "serialNumber": 3, "tagId": "04A39B2C5D6E82", "replaced": false }
+      { "skuCode": "123456780042-000001", "serialNumber": 1, "replaced": false, "verifiable": true },
+      { "skuCode": "123456780042-000002", "serialNumber": 2, "replaced": false, "verifiable": true }
     ]
   }
 }
 ```
 
+`withKeys` and `chipsVerifiable` are counts. A keyed chip's UID is **not** echoed
+back (the deprecated `tagId` form still echoes `tagId`, and reports
+`verifiable: false`).
+
 ### Five rules that make this safe
+
+**0. A bind is a chip, not a UID.** Binding creates or links the unit's `NfcTag`
+and writes its wrapped `NfcTagKey` (through the supply module, in the same
+transaction), sets `Sku.currentNfcTagId`, moves the chip `UNPROVISIONED` →
+`BOUND`, and mirrors the UID to the legacy `Sku.tagId`. That is what lets a tap
+verify; a bare UID did none of it.
 
 **1. Tags are normalised before anything else.** `04:A3:9B:…`, `04-a3-9b-…`
 and `04a39b…` are one tag, stored as `04A39B…`. `Sku.tagId` is unique
@@ -389,13 +416,128 @@ first — that is what those states are for.
 ### `PATCH /api/v1/admin/skus/:skuId/tag`
 
 One unit, same rules. For the single-item case — a chip failed, an item was
-re-tagged after repair.
+re-tagged after repair. A single unit takes one `chip` (an object, not an array):
 
 ```json
-{ "tagId": "04A39B2C5D6E99", "replace": true, "provisioningBatchId": "BATCH-2026-10-02" }
+{
+  "chip": { "uid": "04A39B2C5D6E99", "key0": "…", "key1": "…", "key2": "…" },
+  "replace": true,
+  "provisioningBatchId": "BATCH-2026-10-02"
+}
 ```
 
-Returns the full unit detail, shaped for your grants (6).
+`tagId` (a bare UID) is **deprecated** here too, and `chip` and `tagId` cannot be
+sent together. Returns the full unit detail, shaped for your grants (6).
+
+**Re-tagging.** Sending a *different* chip for a unit that has one needs
+`replace: true`. The old chip is then **REVOKED** and its keys revoked, so a tap
+on it stops verifying. Sending the unit's *own* chip again (same UID, same keys)
+is an idempotent no-op. A chip that is already another unit's chip, is
+LOST / REVOKED / DISPUTED, failed QC, was registered for another variant, or
+already has *different* keys on file is refused.
+
+## The chip: one shape on every route
+
+Every route that adds a chip to a unit takes the same thing, validated the same
+way as the consignment manifest (`POST /admin/supply/batches/:batchId/tags`):
+
+```json
+{ "uid": "04A39B2C5D6E80",
+  "key0": "000102030405060708090A0B0C0D0E0F",
+  "key1": "101112131415161718191A1B1C1D1E1F",
+  "key2": "202122232425262728292A2B2C2D2E2F" }
+```
+
+| Field | Rule |
+|---|---|
+| `uid` | hex, `:` `-` space separators allowed, stored upper case. **14 hex characters (7 bytes)** for a keyed chip |
+| `key0`, `key1`, `key2` | AES-128 keys, **32 hex** each (separators allowed). **All three are required together**, and must all be different |
+
+No duplicate UIDs within a request. A request that breaks a rule is a
+`422 VALIDATION_ERROR` naming the field, **never the value**: keys do not appear
+in errors, responses, logs or the audit trail. Keys are wrapped by the KMS before
+they are stored and are never returned.
+
+Where the chip goes:
+
+| Route | Field |
+|---|---|
+| `POST /admin/products/:productId/skus` | `chips[]` (replaces `tagIds`) |
+| `POST /admin/products/:productId/skus/tags` | `bindings[]` carry `uid` + keys inline (replace `tagId`) |
+| `PATCH /admin/skus/:skuId/tag` | `chip` (replaces `tagId`) |
+
+**The deprecated forms** (`tagIds`, `tagId`) still work for one release: they
+log a warning and are reported as `chipsVerifiable: 0`. They write only the bare
+UID, so the unit has no `NfcTag` and no keys and a tap on it answers `UNKNOWN_TAG`
+or `NO_KEYS`. Move to `chips` now; the deprecated forms will then be removed (or
+refused for NTAG 424 DNA drops).
+
+`Sku.currentNfcTagId` is the **source of truth** for a unit's chip. The plain
+`Sku.tagId` is kept only as a mirror of its UID (so searches, filters and the
+unique index keep working) and is going away.
+
+On a deployment with no chip registry or no key wrapper (`503
+SKUS_CHIP_REGISTRY_UNAVAILABLE`, `503 SUPPLY_KEY_WRAPPER_UNAVAILABLE`, `503
+SUPPLY_TAG_KEY_UNAVAILABLE`) a request with chips is refused outright rather than
+falling back to a bare UID.
+
+### Keys for chips that are already bound
+
+Units bound through the old routes have a bare UID (or a linked chip with no
+keys). Fix them without rebinding:
+
+#### `GET /api/v1/admin/skus/chip-report`
+
+Units whose chip cannot be verified by tap. **Capability:** `nfc-tag-claim:manage`
+(global). Never returns a UID or a key.
+
+| Query | Notes |
+|---|---|
+| `state` | `ALL` (default), `UID_ONLY` (a bare UID on the unit, no `NfcTag`), `LINKED_NO_KEYS` (an `NfcTag` with no ACTIVE keys) |
+| `productId` | narrow to one drop |
+| `page` / `limit` | `limit` max `200` |
+
+```json
+{
+  "data": [ { "skuId": "…", "skuCode": "123456780042-000014", "serialNumber": 14, "productId": "0f1e…", "state": "UID_ONLY" } ],
+  "meta": { "page": 1, "limit": 50, "total": 37 }
+}
+```
+
+#### `POST /api/v1/admin/skus/:skuId/chip-keys`
+
+```json
+{ "key0": "…", "key1": "…", "key2": "…" }
+```
+
+Attaches the keys written onto the unit's chip. For a unit with a bare UID the
+`NfcTag` is created from that UID and linked; for a linked chip it just gets its
+keys. Returns `{ "data": { "skuId", "skuCode", "verifiable": true } }`. Refused if
+the unit has no chip (`409 SKUS_NO_CHIP`), the chip already has keys (`409
+SUPPLY_TAG_KEYS_EXIST`: existing keys are never overwritten), or the chip is not
+usable (`409 SUPPLY_TAG_UNUSABLE`). A bare UID that is not 14 hex (7 bytes) is
+`400 SUPPLY_TAG_UID_INVALID`: re-tag that unit with a proper chip.
+
+#### `POST /api/v1/admin/products/:productId/skus/chip-keys`
+
+The same for a whole drop. Send `rows` (JSON) **or** `csv` (the text of the file),
+not both; at most 1000 rows, all or nothing:
+
+```json
+{ "rows": [ { "serialNumber": 14, "key0": "…", "key1": "…", "key2": "…" },
+            { "skuCode": "123456780042-000015", "key0": "…", "key1": "…", "key2": "…" } ] }
+```
+
+```json
+{ "csv": "serial,key0,key1,key2\n14,000102…0F,101112…1F,202122…2F\n" }
+```
+
+A CSV line is `serial,key0,key1,key2` or `skuCode,key0,key1,key2`; the header line
+is optional. A bad line is reported by line number and field, never by value.
+Response: `{ "data": { "productId", "attached": 2, "items": [ { skuCode, serialNumber } ] } }`.
+Both routes use the same validation and key wrapping as the other chip routes.
+
+The report is the `chip-report` endpoint above; there is no separate command.
 
 ### Tracking progress
 
@@ -540,7 +682,8 @@ printed on the item, the UUID is not written anywhere physical.
     },
 
     "trust":  { "resaleBlocked": false, "resaleBlockedReason": null, "tamperStatus": null },
-    "tag":    { "tagId": "04A39B2C5D6E80", "tagLifecycleState": "ACTIVE", "lastTapCounter": 7,
+    "tag":    { "tagId": "04A39B2C5D6E80", "tagLifecycleState": "ACTIVE",
+                "chip": { "state": "VERIFIABLE", "verifiable": true }, "lastTapCounter": 7,
                 "vendorId": null, "provisioningBatchId": "BATCH-2026-09-41",
                 "vendorAuthenticatedAt": null },
     "owner":  { "ownerId": "7788…", "email": "jane.doe@example.com", "handle": "janedrifts" },
@@ -592,7 +735,16 @@ each is gated by its own resource rather than by one "can you see SKUs" flag:
 |---|---|---|
 | *(identity)* | always present | `skuId`, `skuCode`, `serialNumber`, `claimedStatus`, `variantId`, `isActive`, `createdAt`, `updatedAt` |
 | `trust` | `collectible-instance` at **FULL** | `resaleBlocked`, `resaleBlockedReason`, `tamperStatus` |
-| `tag` | `nfc-tag-claim` | `tagId`, `tagLifecycleState`; `lastTapCounter`, `vendorId`, `provisioningBatchId`, `vendorAuthenticatedAt` (FULL only) |
+| `tag` | `nfc-tag-claim` | `tagId`, `tagLifecycleState`, `chip`; `lastTapCounter`, `vendorId`, `provisioningBatchId`, `vendorAuthenticatedAt` (FULL only) |
+
+`tag.chip` says whether a tap on the unit can be verified, so nobody has to tap to
+find out: `{ "state", "verifiable" }` where `state` is `NONE` (no chip),
+`UID_ONLY` (a bare UID, no `NfcTag`), `LINKED_NO_KEYS` (an `NfcTag` without
+ACTIVE keys), `INACTIVE` (the chip is LOST / REVOKED / DISPUTED) or `VERIFIABLE`
+(BOUND or ACTIVE with ACTIVE keys: exactly what tap verification requires). It is
+also on every unit in the list. The same fact is `chipVerifiable` on the packing
+candidates (`GET /admin/orders/:orderId/unit/candidates`) and `verifiable` /
+`hasActiveKeys` on the chip inventory (`GET /admin/supply/tags`).
 | `owner` | `buyer-profile` | `ownerId`, `email`, `handle` |
 | `provenance` | `nfc-tag-claim` | claim count, ledger length, holder timestamps |
 | `commerce` | `order` | allocated order, reservation status |
@@ -698,7 +850,7 @@ All errors use the platform envelope:
 | `400` | `PRODUCTS_MINTING_UNAVAILABLE` | a `skus` block arrived but no minting provider is wired in |
 | `400` | `PRODUCTS_SUPPLY_EXCEEDED` | `skus.count` exceeds the drop's own `totalSupply` in the same payload |
 | `401` | `AUTH_*` | missing or invalid session token |
-| `403` | `SKUS_FORBIDDEN` | reached the route but holds no operator-grade `collectible-instance` grant — or sent `tagIds` without `nfc-tag-claim:manage` |
+| `403` | `SKUS_FORBIDDEN` | reached the route but holds no operator-grade `collectible-instance` grant — or sent `chips` / `tagIds` without `nfc-tag-claim:manage` |
 | `403` | `AUTHZ_FORBIDDEN` | the route's capability check failed outright |
 | `404` | `SKUS_NOT_FOUND` | no such unit, **or** it belongs to a drop outside your organization |
 | `404` | `SKUS_PRODUCT_NOT_FOUND` | no such drop, **or** outside your organization |
@@ -709,7 +861,17 @@ All errors use the platform envelope:
 | `409` | `SKUS_UNIT_NOT_IN_PRODUCT` | a manifest row names a unit that is not in this drop |
 | `409` | `SKUS_TAG_ALREADY_BOUND` | the unit carries a tag and `replace` was not set |
 | `409` | `SKUS_TAG_REPLACE_REFUSED` | re-tagging a claimed unit whose tag is still healthy |
-| `422` | `VALIDATION_ERROR` | schema failure — e.g. `tagIds` length ≠ `count` |
+| `409` | `SKUS_NO_CHIP` | `chip-keys` on a unit that has no chip |
+| `409` | `SUPPLY_TAG_UID_TAKEN` | the chip is already another unit's chip, or was registered by a concurrent request (send it again) |
+| `409` | `SUPPLY_TAG_UNUSABLE` | the chip is LOST / REVOKED / DISPUTED or failed QC |
+| `409` | `SUPPLY_TAG_VARIANT_MISMATCH` | the chip was registered for a different variant than the unit's |
+| `409` | `SUPPLY_TAG_KEYS_MISMATCH` | the chip already has different keys on file |
+| `409` | `SUPPLY_TAG_KEYS_EXIST` | `chip-keys` on a chip that already has ACTIVE keys (never overwritten) |
+| `400` | `SUPPLY_TAG_UID_INVALID` | a keyed chip's UID is not 7 bytes (14 hex) |
+| `400` | `SUPPLY_TAG_UID_DUPLICATED` | the same chip twice in one request |
+| `503` | `SKUS_CHIP_REGISTRY_UNAVAILABLE` | no chip registry wired on this deployment |
+| `503` | `SUPPLY_KEY_WRAPPER_UNAVAILABLE` / `SUPPLY_TAG_KEY_UNAVAILABLE` | no key wrapper / no UID key configured |
+| `422` | `VALIDATION_ERROR` | schema failure — e.g. `chips` length ≠ `count`, a missing or equal key, a UID that is not 14 hex |
 
 The edit and batch endpoints add `SKUS_NO_CHANGES`, `SKUS_UPDATE_FORBIDDEN`,
 `SKUS_FILTER_FORBIDDEN`, `SKUS_UPDATE_REFUSED`, `SKUS_BATCH_REJECTED` and

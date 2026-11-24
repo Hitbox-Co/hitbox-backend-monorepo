@@ -16,6 +16,7 @@ import type { ISkuAudit } from './domain/interfaces/sku-audit.interface';
 import type { ISkuReleaseGate } from './domain/interfaces/release-gate.interface';
 import type { ISkuVariantPolicy } from './domain/interfaces/variant-policy.interface';
 import type { ISkuMintLedger } from './domain/interfaces/mint-ledger.interface';
+import type { ISkuChipRegistry } from './domain/interfaces/chip-registry.interface';
 import { SkuRepository } from './repository/sku.repository';
 import { SkuService } from './service/sku.service';
 
@@ -62,6 +63,12 @@ export interface SkusModuleDeps {
      * A running server must pass it — every unit is born with its MINT row.
      */
     mintLedger?: ISkuMintLedger | undefined;
+    /**
+     * Creates the NfcTag / NfcTagKey rows that make a chip verifiable by tap.
+     * Provided by @hitbox/supply, which owns them. Without it, a request that
+     * carries chips is refused with a 503 instead of writing a bare UID.
+     */
+    chipRegistry?: ISkuChipRegistry | undefined;
 }
 
 export interface SkusModule {
@@ -87,6 +94,7 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
         releaseGate: deps.releaseGate,
         variantPolicy: deps.variantPolicy,
         mintLedger: deps.mintLedger,
+        chipRegistry: deps.chipRegistry,
     });
     const controller = new SkuController(service, deps.resolvePrincipal);
 
@@ -157,6 +165,15 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
                 controller.bulkBindTags,
             );
 
+            // Attach keys to chips that are already bound (a UID-only unit, or a
+            // linked chip with no keys). Tag custody, like binding. Literal path,
+            // registered before the '/batch' PATCH and any '/:id' route.
+            router.post(
+                '/chip-keys',
+                deps.guard.requirePermission(SKU_TAG_CAPABILITY, { context: productContext }),
+                controller.importChipKeys,
+            );
+
             /**
              * Batch inventory edits, confined to one drop.
              *
@@ -195,6 +212,14 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
                 controller.getByCode,
             );
 
+            // The units whose chip cannot be verified by tap. Platform-wide, so it
+            // needs a global tag-custody grant; registered before `/:skuId`.
+            router.get(
+                '/chip-report',
+                deps.guard.requirePermission(SKU_TAG_CAPABILITY),
+                controller.chipReport,
+            );
+
             // Registered before `/:skuId`, or Express matches "batch" as an id
             // and the batch endpoint becomes a 404 for a unit that does not
             // exist. Literal paths first is the rule for every router here.
@@ -229,6 +254,13 @@ export function createSkusModule(deps: SkusModuleDeps): SkusModule {
                 '/:skuId/tag',
                 deps.guard.requirePermission(SKU_TAG_CAPABILITY, { context: skuContext }),
                 controller.bindTag,
+            );
+
+            // The chip's keys, for a unit that is already bound.
+            router.post(
+                '/:skuId/chip-keys',
+                deps.guard.requirePermission(SKU_TAG_CAPABILITY, { context: skuContext }),
+                controller.addChipKeys,
             );
 
             return router;

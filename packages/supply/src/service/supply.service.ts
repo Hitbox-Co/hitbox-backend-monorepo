@@ -15,6 +15,7 @@ import type { ISupplyAudit, SupplyActorType } from '../domain/interfaces/supply-
 import type { ITagCipher } from '../domain/interfaces/tag-cipher.interface';
 import type { IKeyWrapper } from '../domain/interfaces/key-wrapper.interface';
 import { rowHasKeys } from '../dto/supply.dto';
+import type { UpdateBatchLinesDto } from '../dto/supply.dto';
 import type { ISupplyStockMinter } from '../domain/interfaces/stock-minter.interface';
 import {
     requireConsignmentAccess,
@@ -279,6 +280,92 @@ export class SupplyService {
     }
 
     /**
+     * The drop's type decides whether a booking needs variant lines.
+     *
+     *   REQUIRED and the drop has no live variant  -> 409 PRODUCTS_VARIANTS_REQUIRED
+     *   REQUIRED and the booking has no `lines`    -> 422 SUPPLY_VARIANT_LINES_REQUIRED
+     *
+     * Only for item types that carry chips and mint units on accept.
+     */
+    private async assertVariantsBookable(dto: {
+        dropId?: string | undefined;
+        itemType: SupplyItemType;
+        lines?: unknown[] | undefined;
+    }): Promise<void> {
+        if (!dto.dropId || !MANIFEST_ITEM_TYPES.has(dto.itemType)) return;
+        const rule = await this.deps.supply.findDropVariantRule(dto.dropId);
+        if (!rule || rule.variantMode !== 'REQUIRED') return;
+
+        const variants = await this.deps.supply.findDropVariants(dto.dropId);
+        if (!variants.some((variant) => variant.isActive && !variant.archivedAt)) {
+            throw AppError.conflict(
+                `A ${rule.typeCode} drop needs at least one active variant before a consignment can be booked. ` +
+                'Add the variants to the drop first.',
+                SUPPLY_ERROR_CODES.DROP_VARIANTS_REQUIRED,
+                { dropId: dto.dropId },
+            );
+        }
+        if (!dto.lines || dto.lines.length === 0) {
+            throw new AppError(
+                `Every unit of a ${rule.typeCode} drop belongs to a variant, so this consignment must say how many ` +
+                'of each variant it carries: send `lines` ([{ variantId, quantity }]).',
+                422,
+                SUPPLY_ERROR_CODES.VARIANT_LINES_REQUIRED,
+                { dropId: dto.dropId },
+            );
+        }
+    }
+
+    /**
+     * Corrects the per-variant lines of a consignment that is still open
+     * (UPLOADED / VALIDATED). Chips already registered without a variant are
+     * assigned to the new lines in order, so a bad booking is fixed rather than
+     * rejected and rebooked.
+     */
+    async updateBatchLines(
+        context: SupplyMutationContext,
+        batchId: string,
+        dto: UpdateBatchLinesDto,
+    ): Promise<SupplyBatchResponse> {
+        requireWrite(context.access);
+        const batch = await this.loadBatch(context.access, batchId);
+
+        if (!batch.dropId) {
+            throw AppError.badRequest(
+                'This consignment is not for a drop, so it has no variant lines.',
+                SUPPLY_ERROR_CODES.VARIANT_INVALID,
+            );
+        }
+        if (!acceptsRows(batch.status)) {
+            throw AppError.conflict(
+                `A consignment in ${batch.status} no longer accepts changes to its lines.`,
+                SUPPLY_ERROR_CODES.BATCH_STATE_INVALID,
+            );
+        }
+        await this.assertLinesBelongToDrop(batch.dropId, dto.lines);
+
+        const before = batch.lines.map((line) => ({ variantId: line.variantId, quantity: line.quantity }));
+        const row = await this.deps.supply.replaceBatchLines({ batchId, lines: dto.lines });
+
+        await this.deps.audit.record({
+            eventType: SUPPLY_AUDIT_EVENTS.BATCH_LINES,
+            actorId: context.access.userId,
+            actorType: 'HITBOX_ADMIN',
+            organizationId: null,
+            resourceType: 'SupplyBatch',
+            resourceId: batchId,
+            result: 'SUCCESS',
+            correlationId: context.correlationId,
+            before: { lines: before },
+            after: {
+                lines: row.lines.map((line) => ({ variantId: line.variantId, quantity: line.quantity })),
+                rowsReceived: row.rowsReceived,
+            },
+        });
+        return toBatchResponse(row, context.access.tag !== null);
+    }
+
+    /**
      * Writes a consignment, its audit row and its event. No access checks —
      * the caller has made them: `createBatch` for HitBox staff, the vendor
      * portal for a vendor booking against one of its assigned drops.
@@ -291,6 +378,10 @@ export class SupplyService {
         dto: CreateBatchDto;
     }): Promise<BatchRow> {
         const { dto } = input;
+        // Refused here, at booking, not at accept: a consignment of a drop that
+        // needs variants but carries no lines can never be accepted, and nobody
+        // could add lines to it afterwards.
+        await this.assertVariantsBookable(dto);
         // The schema guarantees one of the two; lines win because the total
         // is defined as their sum.
         const quantity = dto.lines
@@ -1189,6 +1280,10 @@ export function toTagResponse(row: TagRow): NfcTagResponse {
         qcReportedAt: row.qcReportedAt?.toISOString() ?? null,
         qcNotes: row.qcNotes,
         lifecycleState: row.lifecycleState,
+        hasActiveKeys: row.keys.length > 0,
+        verifiable:
+            row.keys.length > 0 &&
+            (row.lifecycleState === 'BOUND' || row.lifecycleState === 'ACTIVE'),
         lastTapCounter: row.lastTapCounter,
         tamperStatus: row.tamperStatus,
         personalizedAt: row.personalizedAt?.toISOString() ?? null,

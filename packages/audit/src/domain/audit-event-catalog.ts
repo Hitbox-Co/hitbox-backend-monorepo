@@ -583,6 +583,25 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         sourceStories: ['docs/admin/sku-inventory-management.md 3'],
     },
     {
+        eventType: 'sku.chip.bind',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            'An NFC chip was bound to serialized units: minted into them, bound in a manifest, ' +
+            'or a unit was re-tagged. Carries counts and unit codes only: NEVER tag UIDs or chip ' +
+            'keys, which would make the audit trail a second copy of the anti-counterfeiting material.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/admin/sku-api.md'],
+    },
+    {
+        eventType: 'sku.chip.keys',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "Keys were attached to the chips of units that were already bound. Carries the unit " +
+            'and a count: NEVER the keys or the UID.',
+        defaultSeverity: CRITICAL,
+        sourceStories: ['docs/admin/sku-api.md'],
+    },
+    {
         eventType: 'sku.batch-update',
         personaGroup: HITBOX_ADMIN,
         description:
@@ -654,6 +673,15 @@ export const AUDIT_EVENT_CATALOG: readonly AuditEventTypeDefinition[] = [
         description:
             'A consignment was booked in. Carries the vendor, item type, declared ' +
             'quantity and the vendor\'s own batch reference.',
+        defaultSeverity: WARNING,
+        sourceStories: ['docs/admin/supply-inventory-api.md 6'],
+    },
+    {
+        eventType: 'supply.batch.lines',
+        personaGroup: HITBOX_ADMIN,
+        description:
+            "A consignment's per-variant lines were corrected while it was still open. Carries the " +
+            'lines before and after and the number of chips registered; never tag UIDs.',
         defaultSeverity: WARNING,
         sourceStories: ['docs/admin/supply-inventory-api.md 6'],
     },

@@ -13,6 +13,7 @@ import {
     recordQcSchema,
     registerTagsSchema,
     supplyMetricsQuerySchema,
+    updateBatchLinesSchema,
     updateVendorSchema,
 } from '../dto/supply.dto';
 import type { SupplyMutationContext, SupplyService } from '../service/supply.service';
@@ -98,6 +99,18 @@ export class SupplyController {
         const dto = createBatchSchema.parse(req.body);
         res.status(201).json({
             data: await this.service.createBatch(await this.mutation(req), dto),
+        });
+    });
+
+    /** PATCH /admin/supply/batches/:batchId/lines: correct a booking's variant lines. */
+    updateBatchLines: RequestHandler = asyncHandler(async (req, res) => {
+        const dto = updateBatchLinesSchema.parse(req.body);
+        res.json({
+            data: await this.service.updateBatchLines(
+                await this.mutation(req),
+                req.params.batchId as string,
+                dto,
+            ),
         });
     });
 
