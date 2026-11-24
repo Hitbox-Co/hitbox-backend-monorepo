@@ -37,7 +37,41 @@ export interface PlacedOrder {
     expiresAt: string;
 }
 
+export interface QuoteSaleInput {
+    productId: string;
+    variantId?: string | null;
+    marketId?: string | null;
+    /**
+     * Only used when `marketId` is absent: the server's backup for picking the
+     * market (buyer's preferred market, then their address country, then the
+     * default). The app should still send `marketId` itself.
+     */
+    buyerId?: string | null;
+    shippingAddressId?: string | null;
+    billingAddressId?: string | null;
+}
+
+export interface QuotedSale {
+    productId: string;
+    variantId: string | null;
+    /** The market the price row belongs to (resolved when none was sent). */
+    marketId: string | null;
+    currency: string;
+    /** Sticker price of one unit, tax included. */
+    unitPrice: string;
+    availability: 'IN_STOCK' | 'SOLD_OUT' | 'NOT_ON_SALE';
+    unavailableReason: 'NOT_PUBLISHED' | 'NOT_OPEN_YET' | 'CLOSED' | 'SOLD_OUT' | null;
+}
+
 export interface IOrderLedger {
+    /**
+     * Price and availability right now, with no side effects: nothing is held
+     * and no order exists. Same rules as `placeOrder`, but "sold out" and "not
+     * on sale" are answers, not errors. Throws only for an unknown drop
+     * (`ORDERS_NOT_FOUND`) or a drop with no price (`ORDERS_NO_PRICE`).
+     */
+    quoteSale(input: QuoteSaleInput): Promise<QuotedSale>;
+
     /**
      * Creates the order and holds a unit for it, in one transaction.
      *

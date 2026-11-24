@@ -13,6 +13,7 @@ import {
     updateProductImageSchema,
     updateProductPriceSchema,
     updateProductSchema,
+    marketIdQuerySchema,
 } from '../dto/product.dto';
 import type { ProductService } from '../service/product.service';
 
@@ -35,12 +36,14 @@ export class ProductController {
      * `/api/v1/verify` and `/api/v1/ledger` own that surface now.
      */
     getByCode: RequestHandler = asyncHandler(async (req, res) => {
-        res.json({ data: await this.service.getByGroupCode(req.params.groupCode as string) });
+        const { marketId } = marketIdQuerySchema.parse(req.query);
+        res.json({ data: await this.service.getByGroupCode(req.params.groupCode as string, marketId) });
     });
 
     /** GET /products/:id */
     getById: RequestHandler = asyncHandler(async (req, res) => {
-        res.json({ data: await this.service.getById(req.params.id as string) });
+        const { marketId } = marketIdQuerySchema.parse(req.query);
+        res.json({ data: await this.service.getById(req.params.id as string, marketId) });
     });
 
     /**

@@ -24,6 +24,7 @@ import { RoleRepository } from './repository/role.repository';
 import { StaffInvitationRepository } from './repository/staff-invitation.repository';
 import { UserDirectoryRepository } from './repository/user-directory.repository';
 import { PermissionService } from './service/permission.service';
+import { DefaultRoleService } from './service/default-role.service';
 import { RoleAssignmentService } from './service/role-assignment.service';
 import { RoleService } from './service/role.service';
 import { StaffInvitationService } from './service/staff-invitation.service';
@@ -176,6 +177,22 @@ export function createAccessControlModule(
             }
         },
     );
+
+    // Every new account is a collector. Own subscription, not part of the
+    // invitation claim above: the two are independent and one failing must not
+    // block the other. A staff invitee ends up with both roles, which is fine:
+    // the roles' permissions are a union and buying is baseline for everyone.
+    const defaultRole = new DefaultRoleService({ roles: roleRepo, assignments: assignmentService, logger });
+    deps.eventBus.subscribe<{ userId: string }>('users.account.provisioned', async (payload) => {
+        try {
+            await defaultRole.grantTo(payload.userId);
+        } catch (error) {
+            logger.error(
+                { err: error, userId: payload.userId },
+                'default buyer role grant failed — the account exists without it',
+            );
+        }
+    });
 
     const controller = new AuthzController(
         roleService,

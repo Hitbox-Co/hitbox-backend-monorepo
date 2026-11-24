@@ -131,6 +131,10 @@ model Invoice {
   subtotal       Decimal       @db.Decimal(12, 2)
   taxAmount      Decimal       @db.Decimal(12, 2)
   totalAmount    Decimal       @db.Decimal(12, 2)
+  /// True when the order price already contained the tax (new invoices): the
+  /// total equals what the buyer was charged and `taxAmount` is the portion of
+  /// it. False on invoices issued before that change, which added tax on top.
+  pricesIncludeTax Boolean
   taxType        TaxType
   /// The headline rate. Per-line rates live on InvoiceLineItem; this is the
   /// single rate when (as today) every line on an invoice shares one.

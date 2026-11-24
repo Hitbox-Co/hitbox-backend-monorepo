@@ -128,6 +128,7 @@ export class OrderFulfilmentService {
                 tagId: sku.tagId,
                 variantId: sku.variantId,
                 heldForThisOrder: sku.id === hold.skuId,
+                chipVerifiable: sku.chipVerifiable,
             })),
         };
     }

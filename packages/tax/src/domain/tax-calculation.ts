@@ -1,4 +1,4 @@
-import { addMoney, multiplyMoney, rate, sumMoney, taxOn } from './money';
+import { addMoney, multiplyMoney, netOfTax, rate, subtractMoney, sumMoney, taxOn } from './money';
 
 /**
  * The arithmetic of an invoice, as a pure function of its inputs.
@@ -23,7 +23,10 @@ export interface TaxLineInput {
     hsnCode?: string | null;
     sacCode?: string | null;
     quantity: number;
-    /** Exclusive of tax. */
+    /**
+     * Exclusive of tax for `calculateInvoice`; **inclusive** of tax for
+     * `calculateInclusiveInvoice`.
+     */
     unitPrice: string;
     /** Percentage, e.g. '12.00'. */
     taxRate: string;
@@ -77,6 +80,64 @@ export function calculateInvoice(inputs: TaxLineInput[]): InvoiceTotals {
     const subtotal = sumMoney(lines.map((line) => line.lineSubtotal));
     const taxAmount = sumMoney(lines.map((line) => line.taxAmount));
 
+    const rates = new Set(lines.map((line) => line.taxRate));
+    const hsnCodes = new Set(lines.map((line) => line.hsnCode ?? ''));
+
+    return {
+        lines,
+        subtotal,
+        taxAmount,
+        totalAmount: addMoney(subtotal, taxAmount),
+        uniformTaxRate: rates.size === 1 ? (lines[0] as TaxLine).taxRate : null,
+        uniformHsnCode:
+            hsnCodes.size === 1 && (lines[0] as TaxLine).hsnCode
+                ? ((lines[0] as TaxLine).hsnCode as string)
+                : null,
+    };
+}
+
+/**
+ * The same invoice for a price that **already contains** the tax.
+ *
+ * This is how HitBox invoices since tax-inclusive pricing: the buyer is charged
+ * the sticker price, the invoice total *is* that price, and the tax is the part
+ * of it that belongs to the tax authority. `unitPrice` on each input is the
+ * gross (tax-inclusive) unit price. Per line: `gross = unitPrice × quantity`,
+ * `subtotal = gross / (1 + rate)` rounded half-up once, `tax = gross − subtotal`.
+ *
+ * Because the total is the gross and nothing is added on top, the invoice and
+ * the amount charged cannot disagree. The checkout quote calls this same
+ * function, so the quote and the invoice cannot disagree either.
+ */
+export function calculateInclusiveInvoice(inputs: TaxLineInput[]): InvoiceTotals {
+    if (inputs.length === 0) {
+        throw new Error('An invoice must have at least one line item.');
+    }
+
+    const lines = inputs.map((input, index): TaxLine => {
+        if (!Number.isInteger(input.quantity) || input.quantity < 1) {
+            throw new Error(
+                `Line ${index + 1} has a non-positive quantity (${input.quantity}).`,
+            );
+        }
+        const lineTotal = multiplyMoney(input.unitPrice, input.quantity);
+        const lineSubtotal = netOfTax(lineTotal, input.taxRate);
+        return {
+            ...input,
+            // The line prints the net unit price; for a quantity above 1 it is
+            // the rounded net of one unit (the line figures stay exact).
+            unitPrice:
+                input.quantity === 1 ? lineSubtotal : netOfTax(input.unitPrice, input.taxRate),
+            taxRate: rate(input.taxRate),
+            position: index + 1,
+            lineSubtotal,
+            taxAmount: subtractMoney(lineTotal, lineSubtotal),
+            lineTotal,
+        };
+    });
+
+    const subtotal = sumMoney(lines.map((line) => line.lineSubtotal));
+    const taxAmount = sumMoney(lines.map((line) => line.taxAmount));
     const rates = new Set(lines.map((line) => line.taxRate));
     const hsnCodes = new Set(lines.map((line) => line.hsnCode ?? ''));
 

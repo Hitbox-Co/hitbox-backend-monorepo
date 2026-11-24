@@ -1,3 +1,4 @@
+import { pickBasePrice } from '../domain/base-price';
 import { randomInt, randomUUID } from 'node:crypto';
 import type { Logger } from 'pino';
 import { AppError } from '@hitbox/shared';
@@ -151,7 +152,15 @@ export interface ProductResponse {
     /** Ordered primary-first. Empty when the drop has no artwork yet. */
     images: string[];
     /** Base price in the default market, or null when none is configured. */
-    price: { amount: string | null; currency: string; isFree: boolean } | null;
+    price: { amount: string | null; currency: string; isFree: boolean; marketId: string | null } | null;
+    /**
+     * False only when a market was selected (`?marketId=`) and the drop has no
+     * active price in it: show "not available in your region". `price` is then
+     * null. Always true when no market was selected.
+     */
+    availableInMarket: boolean;
+    /** `NOT_AVAILABLE_IN_REGION` when `availableInMarket` is false, else null. */
+    unavailableReason: 'NOT_AVAILABLE_IN_REGION' | null;
     /** The product type, or null for a legacy (untyped) drop. */
     dropType: { code: string; name: string; variantMode: string } | null;
     /**
@@ -217,12 +226,12 @@ export class ProductService {
     }
 
     /** Public detail (`GET /products/:id`). Unreleased or withdrawn drops are a 404. */
-    async getById(id: string): Promise<ProductResponse> {
+    async getById(id: string, marketId?: string | null): Promise<ProductResponse> {
         const product = await this.deps.products.findById(id);
         if (!product || !isPubliclyViewable(product)) {
             throw AppError.notFound('Product not found', PRODUCTS_ERROR_CODES.PRODUCT_NOT_FOUND);
         }
-        return this.toResponse(product);
+        return this.toResponse(product, marketId ? await this.deps.products.activeMarketId(marketId) : null);
     }
 
     /**
@@ -278,12 +287,12 @@ export class ProductService {
      * Backed by `Product.groupCode` — the restructure renamed the old
      * `productCode` column; the route and its meaning are unchanged.
      */
-    async getByGroupCode(groupCode: string): Promise<ProductResponse> {
+    async getByGroupCode(groupCode: string, marketId?: string | null): Promise<ProductResponse> {
         const product = await this.deps.products.findByGroupCode(groupCode);
         if (!product || !isPubliclyViewable(product)) {
             throw AppError.notFound('Product not found', PRODUCTS_ERROR_CODES.PRODUCT_NOT_FOUND);
         }
-        return this.toResponse(product);
+        return this.toResponse(product, marketId ? await this.deps.products.activeMarketId(marketId) : null);
     }
 
     /**
@@ -1141,7 +1150,7 @@ export class ProductService {
 
     /** The default-market base price of a listing row, as a decimal string. */
     priceOf(row: ProductListingRow): { amount: string | null; currency: string } | null {
-        const price = row.dropPrices[0];
+        const price = pickBasePrice(row.dropPrices);
         if (!price) return null;
         return {
             amount: price.isFree ? '0.00' : (price.amount?.toFixed(2) ?? null),
@@ -1191,8 +1200,9 @@ export class ProductService {
         return product;
     }
 
-    private toResponse(product: ProductWithRelations): ProductResponse {
-        const price = product.dropPrices[0];
+    private toResponse(product: ProductWithRelations, marketId?: string | null): ProductResponse {
+        const price = pickBasePrice(product.dropPrices, marketId);
+        const availableInMarket = !marketId || price !== null;
         return {
             id: product.id,
             groupCode: product.groupCode,
@@ -1230,8 +1240,11 @@ export class ProductService {
                     amount: price.isFree ? '0.00' : (price.amount?.toFixed(2) ?? null),
                     currency: price.market.currency,
                     isFree: price.isFree,
+                    marketId: price.marketId ?? null,
                 }
                 : null,
+            availableInMarket,
+            unavailableReason: availableInMarket ? null : 'NOT_AVAILABLE_IN_REGION',
             dropType: product.dropType
                 ? {
                     code: product.dropType.code,

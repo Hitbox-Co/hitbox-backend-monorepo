@@ -6,6 +6,7 @@ import {
     VendorMemberStatus,
     VendorType,
 } from '@hitbox/database';
+import { chipKeyField, chipUidField, refineChip } from '@hitbox/shared';
 import { z } from 'zod';
 import {
     SUPPLY_DEFAULT_LIMIT,
@@ -234,6 +235,14 @@ export const createBatchSchema = createBatchBaseSchema
     });
 export type CreateBatchDto = z.infer<typeof createBatchSchema>;
 
+/**
+ * `PATCH /admin/supply/batches/:batchId/lines`: the corrected per-variant
+ * breakdown of a consignment that is still open. The lines must add up to the
+ * quantity the consignment already declares.
+ */
+export const updateBatchLinesSchema = z.object({ lines: variantQuantitiesSchema }).strict();
+export type UpdateBatchLinesDto = z.infer<typeof updateBatchLinesSchema>;
+
 /** One variant line of a consignment, with its own row counters. */
 export interface SupplyBatchLineResponse {
     variantId: string;
@@ -331,23 +340,12 @@ export interface SupplyBatchResponse {
  * `uid` is the raw chip UID. It is hashed and encrypted on the way in and is
  * never stored, logged or returned in the clear — see the tag cipher port.
  */
-/** One AES-128 chip key: 16 bytes as 32 hex. Separators are tolerated and stripped. */
-const chipKey = z
-    .string()
-    .trim()
-    .transform((value) => value.replace(/[\s:-]/g, '').toUpperCase())
-    .pipe(z.string().regex(/^[0-9A-F]{32}$/, 'A chip key must be 32 hex characters (16 bytes).'))
-    .optional();
+/** Required on every manifest row: a chip registered without its keys can never be verified by tap. */
+const chipKey = chipKeyField;
 
 export const manifestRowSchema = z.object({
     /** Hex UID as the vendor prints it; separators are tolerated and stripped. */
-    uid: z
-        .string()
-        .trim()
-        .min(8)
-        .max(64)
-        .transform((value) => value.replace(/[\s:-]/g, '').toUpperCase())
-        .pipe(z.string().regex(/^[0-9A-F]+$/, 'A tag UID must be hexadecimal.')),
+    uid: chipUidField,
     qcStatus: upperEnum(QcStatus).optional(),
     qcNotes: optionalText(500),
     /**
@@ -365,15 +363,7 @@ export const manifestRowSchema = z.object({
     key0: chipKey,
     key1: chipKey,
     key2: chipKey,
-}).superRefine((row, ctx) => {
-    const keys = [row.key0, row.key1, row.key2];
-    const given = keys.filter((key) => key !== undefined).length;
-    if (given !== 0 && given !== 3) {
-        ctx.addIssue({ code: 'custom', message: 'Send all three keys (key0, key1, key2) or none.', path: ['key0'] });
-    } else if (given === 3 && new Set(keys).size !== 3) {
-        ctx.addIssue({ code: 'custom', message: 'key0, key1 and key2 must all be different.', path: ['key0'] });
-    }
-});
+}).superRefine((row, ctx) => refineChip(row, ctx, { keysRequired: true }));
 export type ManifestRow = z.infer<typeof manifestRowSchema>;
 
 /** True when a manifest row carries the chip's keys. */
@@ -452,7 +442,8 @@ export type RecordQcDto = z.infer<typeof recordQcSchema>;
 export interface NfcTagResponse {
     id: string;
     nfcTagCode: string;
-    supplyBatchId: string;
+    /** Null for a chip added straight to a unit, with no consignment. */
+    supplyBatchId: string | null;
     batch: { id: string; batchRef: string | null; vendorId: string; vendorName: string } | null;
     /** The variant of the goods the chip is embedded in, when the manifest said. */
     variantId: string | null;
@@ -462,6 +453,10 @@ export interface NfcTagResponse {
     qcReportedAt: string | null;
     qcNotes: string | null;
     lifecycleState: TagLifecycleState;
+    /** The chip has ACTIVE keys on file (never the keys themselves). */
+    hasActiveKeys: boolean;
+    /** A tap can be verified: BOUND or ACTIVE, with ACTIVE keys. */
+    verifiable: boolean;
     lastTapCounter: number;
     tamperStatus: string | null;
     personalizedAt: string | null;

@@ -3495,8 +3495,10 @@ model NfcTag {
   /// the uuid above stays the key. Written by the publicCode client extension.
   publicCode String? @unique @db.VarChar(32)
   nfcTagCode      String            @unique @db.VarChar(10) // NT
-  supplyBatchId   String            @db.Uuid
-  supplyBatch     SupplyBatch       @relation(fields: [supplyBatchId], references: [id])
+  /// The consignment the chip arrived in. Null for a chip added directly to a
+  /// unit (the SKU routes), which has no consignment.
+  supplyBatchId   String?           @db.Uuid
+  supplyBatch     SupplyBatch?      @relation(fields: [supplyBatchId], references: [id])
   /// The variant of the goods this chip is embedded in — set from the
   /// manifest row when the consignment has variant lines. Binding the chip to
   /// a unit should match it against `Sku.variantId`.
@@ -3855,6 +3857,10 @@ model Invoice {
   subtotal       Decimal       @db.Decimal(12, 2)
   taxAmount      Decimal       @db.Decimal(12, 2)
   totalAmount    Decimal       @db.Decimal(12, 2)
+  /// True when the order price already contained the tax (new invoices): the
+  /// total equals what the buyer was charged and `taxAmount` is the portion of
+  /// it. False on invoices issued before that change, which added tax on top.
+  pricesIncludeTax Boolean
   taxType        TaxType
   /// The headline rate. Per-line rates live on InvoiceLineItem; this is the
   /// single rate when (as today) every line on an invoice shares one.
@@ -4355,14 +4361,32 @@ model Address {
   postalCode        String
   countryCode       String
   phone             String?
-  isDefaultShipping Boolean
-  isDefaultBilling  Boolean
+  /// What the buyer may use it for. BOTH is the common case; a SHIPPING-only or
+  /// BILLING-only entry is rejected on the other side of checkout.
+  usage             AddressBookUsage
+  /// Exactly one active address per user carries this (the first one saved).
+  /// The database enforces it with a partial unique index Prisma cannot
+  /// express: `Address_one_default_per_user` (migration 20261123100000).
+  isDefault         Boolean
+  /// Active = `isActive` and `archivedAt IS NULL`. Archiving sets both; the row
+  /// stays because OrderAddress.sourceAddressId may still point at it.
   isActive          Boolean
   archivedAt        DateTime?
   createdAt         DateTime
   updatedAt         DateTime
 
   orderAddresss OrderAddress[]
+
+  @@index([userId, isActive])
+}
+
+/// Which side of a purchase an address book entry may serve. Not the same enum
+/// as orders' AddressUsage: an order snapshot is one side or the other, a saved
+/// address may serve both.
+enum AddressBookUsage {
+  SHIPPING
+  BILLING
+  BOTH
 }
 
 /// Account role on the platform. Single-module enum — only User.role uses it.

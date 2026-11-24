@@ -91,7 +91,7 @@ the fields — nothing partial is written.
 | `claimToken`, `claimTokenIssuedAt`, `claimTokenUsedAt` | Never read, never written, never returned. A live one-shot token in a response body is a claim somebody else can make |
 | `lastTapCounter` | A monotonic anti-replay counter. Its entire value is that nothing can lower it |
 | `claimedStatus` | Editable only through `flagged`, below |
-| `tagId` | Bound through `PATCH /admin/skus/:skuId/tag`, which has its own re-tagging rules — see [sku-api.md 3a](sku-api.md) |
+| `tagId` | Bound through `PATCH /admin/skus/:skuId/tag` (a `chip` with its keys), which has its own re-tagging rules — see [sku-api.md 3a](sku-api.md) |
 | `createdAt`, `updatedAt` | `updatedAt` moves on every write here |
 
 ### 2.1 `reason` is required for four changes
@@ -511,7 +511,7 @@ PATCH /admin/skus/batch
 tag is healthy, so mark it lost first:
 ```jsonc
 PATCH /admin/skus/:skuId       { "tagLifecycleState": "LOST", "reason": "chip failed on read" }
-PATCH /admin/skus/:skuId/tag   { "tagId": "04A39B2C5D6E99", "replace": true }
+PATCH /admin/skus/:skuId/tag   { "chip": { "uid": "04A39B2C5D6E99", "key0": "…", "key1": "…", "key2": "…" }, "replace": true }
 ```
 
 **Freeze a unit pending a counterfeit investigation, then release it.**

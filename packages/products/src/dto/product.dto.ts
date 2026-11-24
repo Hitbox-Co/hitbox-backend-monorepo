@@ -125,6 +125,15 @@ export const listProductsQuerySchema = z.object({
 
 export type ListProductsQuery = z.infer<typeof listProductsQuerySchema>;
 
+/**
+ * `?marketId=` on the public catalog routes. Optional, and never an error: a
+ * value that is not a uuid is dropped like an unknown or inactive market, and
+ * the response falls back to the default market's price.
+ */
+export const marketIdQuerySchema = z.object({
+    marketId: z.string().uuid().optional().catch(undefined),
+});
+
 /** Paginates the serialized units embedded in the product detail response. */
 export const productDetailQuerySchema = z.object({
     skuPage: z.coerce.number().int().min(1).default(1),

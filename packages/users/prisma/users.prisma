@@ -101,14 +101,32 @@ model Address {
   postalCode        String
   countryCode       String
   phone             String?
-  isDefaultShipping Boolean
-  isDefaultBilling  Boolean
+  /// What the buyer may use it for. BOTH is the common case; a SHIPPING-only or
+  /// BILLING-only entry is rejected on the other side of checkout.
+  usage             AddressBookUsage
+  /// Exactly one active address per user carries this (the first one saved).
+  /// The database enforces it with a partial unique index Prisma cannot
+  /// express: `Address_one_default_per_user` (migration 20261123100000).
+  isDefault         Boolean
+  /// Active = `isActive` and `archivedAt IS NULL`. Archiving sets both; the row
+  /// stays because OrderAddress.sourceAddressId may still point at it.
   isActive          Boolean
   archivedAt        DateTime?
   createdAt         DateTime
   updatedAt         DateTime
 
   orderAddresss OrderAddress[]
+
+  @@index([userId, isActive])
+}
+
+/// Which side of a purchase an address book entry may serve. Not the same enum
+/// as orders' AddressUsage: an order snapshot is one side or the other, a saved
+/// address may serve both.
+enum AddressBookUsage {
+  SHIPPING
+  BILLING
+  BOTH
 }
 
 /// Account role on the platform. Single-module enum — only User.role uses it.

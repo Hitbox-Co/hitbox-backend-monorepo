@@ -53,6 +53,15 @@ const skuSelect = {
     ownerId: true,
     tagId: true,
     tagLifecycleState: true,
+    // The chip's NfcTag, and only whether it has an ACTIVE key, never the key:
+    // enough to say whether a tap on this unit can be verified.
+    currentNfcTagId: true,
+    currentNfcTag: {
+        select: {
+            lifecycleState: true,
+            keys: { where: { status: 'ACTIVE' }, select: { id: true }, take: 1 },
+        },
+    },
     provisioningBatchId: true,
     vendorId: true,
     vendorAuthenticatedAt: true,
@@ -137,9 +146,36 @@ export interface TagBindTarget {
     id: string;
     skuCode: string;
     serialNumber: number;
+    productId: string;
+    variantId: string | null;
+    /** The legacy plain UID (a mirror of the chip's UID, or all there is for a UID-only unit). */
     tagId: string | null;
+    /** The unit's `NfcTag`: the source of truth for its chip. */
+    currentNfcTagId: string | null;
     tagLifecycleState: TagLifecycleState;
     claimedStatus: ClaimedStatus;
+    /** The chip has an ACTIVE key row. False when there is no chip at all. */
+    chipHasKeys: boolean;
+}
+
+const bindTargetSelect = {
+    id: true,
+    skuCode: true,
+    serialNumber: true,
+    productId: true,
+    variantId: true,
+    tagId: true,
+    currentNfcTagId: true,
+    tagLifecycleState: true,
+    claimedStatus: true,
+    currentNfcTag: { select: { keys: { where: { status: 'ACTIVE' }, select: { id: true }, take: 1 } } },
+} satisfies Prisma.SkuSelect;
+
+type BindTargetRow = Prisma.SkuGetPayload<{ select: typeof bindTargetSelect }>;
+
+function toBindTarget(row: BindTargetRow): TagBindTarget {
+    const { currentNfcTag, ...rest } = row;
+    return { ...rest, chipHasKeys: (currentNfcTag?.keys.length ?? 0) > 0 };
 }
 
 export interface MintSpec {
@@ -347,70 +383,103 @@ export class SkuRepository {
         if (skuCodes.length > 0) or.push({ skuCode: { in: skuCodes } });
         if (or.length === 0) return Promise.resolve([]);
 
-        return this.prisma.sku.findMany({
-            where: { productId, OR: or },
-            select: {
-                id: true,
-                skuCode: true,
-                serialNumber: true,
-                tagId: true,
-                tagLifecycleState: true,
-                claimedStatus: true,
-            },
-        });
+        return this.prisma.sku
+            .findMany({ where: { productId, OR: or }, select: bindTargetSelect })
+            .then((rows) => rows.map(toBindTarget));
     }
 
     findByIdForBinding(skuId: string): Promise<TagBindTarget | null> {
-        return this.prisma.sku.findUnique({
-            where: { id: skuId },
-            select: {
-                id: true,
-                skuCode: true,
-                serialNumber: true,
-                tagId: true,
-                tagLifecycleState: true,
-                claimedStatus: true,
-            },
-        });
+        return this.prisma.sku
+            .findUnique({ where: { id: skuId }, select: bindTargetSelect })
+            .then((row) => (row ? toBindTarget(row) : null));
     }
 
     /**
-     * Applies a whole manifest in one transaction.
+     * Points units at their chips (`Sku.currentNfcTagId`, the source of truth),
+     * inside a caller's transaction.
      *
-     * All-or-nothing on purpose: a partially applied manifest leaves a box of
-     * physical tags in an unknown state, and working out which of 500 items
-     * got written is a warehouse problem, not a database one.
+     * `uid` is also written to the legacy `Sku.tagId` as a mirror, so readers
+     * that still filter or search on it keep working and the platform-wide
+     * unique index on it keeps guarding against one UID on two units. The chip
+     * moves UNPROVISIONED -> BOUND (a tap is only verified for BOUND / ACTIVE)
+     * and records which unit it sits in.
      */
-    bindTags(
-        bindings: {
+    async bindChipsWithin(
+        tx: Prisma.TransactionClient,
+        binds: {
             skuId: string;
-            tagId: string;
+            nfcTagId: string;
+            uid: string;
             vendorId?: string | null | undefined;
             provisioningBatchId?: string | null | undefined;
         }[],
     ): Promise<void> {
         const now = new Date();
-        return this.prisma.$transaction(async (tx) => {
-            for (const binding of bindings) {
-                await tx.sku.update({
-                    where: { id: binding.skuId },
-                    data: {
-                        tagId: binding.tagId,
-                        // A unit with a tag written to it is BOUND. ACTIVE is
-                        // reached on first claim, by the claims module.
-                        tagLifecycleState: TagLifecycleState.BOUND,
-                        ...(binding.vendorId !== undefined && binding.vendorId !== null
-                            ? { vendorId: binding.vendorId }
-                            : {}),
-                        ...(binding.provisioningBatchId !== undefined &&
-                            binding.provisioningBatchId !== null
-                            ? { provisioningBatchId: binding.provisioningBatchId }
-                            : {}),
-                        updatedAt: now,
-                    },
-                });
-            }
-        });
+        for (const bind of binds) {
+            await tx.sku.update({
+                where: { id: bind.skuId },
+                data: {
+                    currentNfcTagId: bind.nfcTagId,
+                    tagId: bind.uid,
+                    // BOUND; ACTIVE is reached on first claim, by the claims module.
+                    tagLifecycleState: TagLifecycleState.BOUND,
+                    ...(bind.vendorId ? { vendorId: bind.vendorId } : {}),
+                    ...(bind.provisioningBatchId ? { provisioningBatchId: bind.provisioningBatchId } : {}),
+                    updatedAt: now,
+                },
+            });
+            await tx.nfcTag.updateMany({
+                where: { id: bind.nfcTagId, lifecycleState: TagLifecycleState.UNPROVISIONED },
+                data: { lifecycleState: TagLifecycleState.BOUND, boundAt: now },
+            });
+            await tx.nfcTag.update({ where: { id: bind.nfcTagId }, data: { skuId: bind.skuId } });
+        }
+    }
+
+    /** Units of one drop (by serial or code) with the chip facts the key import needs. */
+    findForChipKeys(
+        productId: string,
+        serialNumbers: number[],
+        skuCodes: string[],
+    ): Promise<TagBindTarget[]> {
+        return this.findForBinding(productId, serialNumbers, skuCodes);
+    }
+
+    /**
+     * Units whose chip cannot be verified by tap: a bare UID with no `NfcTag`,
+     * or an `NfcTag` with no ACTIVE key. Never returns a UID or a key.
+     */
+    async chipReport(input: {
+        productId?: string | undefined;
+        state: 'ALL' | 'UID_ONLY' | 'LINKED_NO_KEYS';
+        skip: number;
+        take: number;
+    }): Promise<{ total: number; items: { id: string; skuCode: string; serialNumber: number; productId: string; currentNfcTagId: string | null }[] }> {
+        const uidOnly: Prisma.SkuWhereInput = { tagId: { not: null }, currentNfcTagId: null };
+        const noKeys: Prisma.SkuWhereInput = {
+            currentNfcTagId: { not: null },
+            currentNfcTag: { keys: { none: { status: 'ACTIVE' } } },
+        };
+        const where: Prisma.SkuWhereInput = {
+            archivedAt: null,
+            ...(input.productId ? { productId: input.productId } : {}),
+            ...(input.state === 'UID_ONLY'
+                ? uidOnly
+                : input.state === 'LINKED_NO_KEYS'
+                    ? noKeys
+                    : { OR: [uidOnly, noKeys] }),
+        };
+        const [total, items] = await this.prisma.$transaction([
+            this.prisma.sku.count({ where }),
+            this.prisma.sku.findMany({
+                where,
+                orderBy: [{ productId: 'asc' }, { serialNumber: 'asc' }],
+                skip: input.skip,
+                take: input.take,
+                select: { id: true, skuCode: true, serialNumber: true, productId: true, currentNfcTagId: true },
+            }),
+        ]);
+        return { total, items };
     }
 
     /** Units already minted for a drop, counted inside the caller's transaction. */

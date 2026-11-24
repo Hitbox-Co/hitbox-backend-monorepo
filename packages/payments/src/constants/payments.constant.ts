@@ -41,7 +41,12 @@ export const PAYMENTS_ERROR_CODES = {
     EVIDENCE_STORAGE_UNAVAILABLE: 'PAYMENTS_EVIDENCE_STORAGE_UNAVAILABLE',
     /** More than RETURN_WINDOW_DAYS since delivery: no return, and no buyer refund. */
     RETURN_WINDOW_CLOSED: 'PAYMENTS_RETURN_WINDOW_CLOSED',
+    /** The sale is taxed and the buyer sent no billing address to say where. */
+    BILLING_ADDRESS_REQUIRED: 'PAYMENTS_BILLING_ADDRESS_REQUIRED',
 } as const;
+
+/** Per-user request budget for POST /checkout/quote, per minute. */
+export const QUOTE_RATE_LIMIT = { windowMs: 60_000, perUser: 60 } as const;
 
 // ── Return evidence ─────────────────────────────────────────────────────────
 

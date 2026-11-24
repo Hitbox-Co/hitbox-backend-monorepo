@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import type { Request, RequestHandler } from 'express';
 import type { PrismaClient } from '@hitbox/database';
-import { createModuleLogger } from '@hitbox/shared';
+import { createModuleLogger, createRateLimiter } from '@hitbox/shared';
 import {
     MARKET_READ_CAPABILITY,
     MARKET_WRITE_CAPABILITY,
     MARKETS_MODULE,
+    PUBLIC_MARKETS_RATE_LIMIT,
 } from './constants/markets.constant';
 import { MarketController } from './controller/market.controller';
 import { MarketRepository } from './repository/market.repository';
@@ -33,6 +34,8 @@ export interface MarketsModuleDeps {
 }
 
 export interface MarketsModule {
+    /** `GET /markets`: no auth, active markets only, `{ id, currency, countryCodes }`. */
+    createPublicRouter(): Router;
     createRouter(requireAuth: RequestHandler): Router;
     /**
      * Market lookup for modules that reference markets in their own tables —
@@ -57,6 +60,21 @@ export function createMarketsModule(deps: MarketsModuleDeps): MarketsModule {
     return {
         markets: {
             findManyByIdsOrCodes: (ids, codes) => markets.findManyByIdsOrCodes(ids, codes),
+        },
+
+        createPublicRouter() {
+            const router = Router();
+            // No sign-in, so it is throttled per IP.
+            router.get(
+                '/',
+                createRateLimiter({
+                    windowMs: PUBLIC_MARKETS_RATE_LIMIT.windowMs,
+                    max: PUBLIC_MARKETS_RATE_LIMIT.perIp,
+                    prefix: 'markets-public',
+                }),
+                controller.listPublic,
+            );
+            return router;
         },
 
         createRouter(requireAuth) {

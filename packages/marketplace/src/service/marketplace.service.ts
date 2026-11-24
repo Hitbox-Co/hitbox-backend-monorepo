@@ -15,6 +15,7 @@ import type { MarketplaceFeedDto } from '../dto/marketplace.dto';
 export interface MarketplaceFeedQuery {
     category?: MarketplaceCategory;
     viewerId?: string;
+    marketId?: string;
 }
 
 interface MarketplaceServiceDeps {

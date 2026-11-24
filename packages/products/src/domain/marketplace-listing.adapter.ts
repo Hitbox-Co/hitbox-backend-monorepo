@@ -8,7 +8,7 @@ import type {
 } from '@hitbox/marketplace';
 import type { IMediaUrlResolver } from './interfaces/media-url-resolver.interface';
 import type { ProductRepository } from '../repository/product.repository';
-import { PUBLIC_PRODUCT_WHERE } from '../repository/product.repository';
+import { PUBLIC_PRODUCT_WHERE, pricedInMarket } from '../repository/product.repository';
 import { toDropCard } from './drop-card';
 import { STORAGE_CATEGORIES_BY_TAB } from './storage-categories';
 
@@ -36,8 +36,11 @@ export class MarketplaceListingAdapter implements IListingCatalog {
     ) { }
 
     async findListings(query: MarketplaceListingsQuery): Promise<MarketplaceListingsResult> {
+        // A usable region narrows the list to drops priced there; an unusable one is ignored.
+        const marketId = await this.products.activeMarketId(query.marketId);
         const where: Prisma.DropWhereInput = {
             ...PUBLIC_PRODUCT_WHERE,
+            ...(marketId && pricedInMarket(marketId)),
             // "Featured" was `marketplaceStatus != null`, a curation column the
             // restructure removed. The nearest honest equivalent is a drop
             // that has actually opened — already implied by PUBLIC_PRODUCT_WHERE,
@@ -67,6 +70,6 @@ export class MarketplaceListingAdapter implements IListingCatalog {
             ? await this.products.findWishlistedProductIds(query.viewerId, items.map((row) => row.id))
             : null;
 
-        return { items: items.map((row) => toDropCard(row, this.mediaUrls, wishlisted)), total };
+        return { items: items.map((row) => toDropCard(row, this.mediaUrls, wishlisted, marketId)), total };
     }
 }

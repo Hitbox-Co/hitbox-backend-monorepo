@@ -9,6 +9,8 @@ import type { MarketplaceListingItem } from '../domain/interfaces/listing-catalo
 export const marketplaceListingsQuerySchema = z.object({
     category: z.nativeEnum(MarketplaceCategory).optional(),
     search: z.string().trim().min(1).max(100).optional(),
+    /** Never an error: a non-uuid, unknown or inactive market is ignored. */
+    marketId: z.string().uuid().optional().catch(undefined),
     // Price sorting is not expressible against the market-scoped
     // ProductPrice table — see MarketplaceSort.
     sort: z.enum(['newest', 'popular']).default('newest'),
@@ -34,6 +36,8 @@ export type MarketplaceListingsQueryDto = z.infer<typeof marketplaceListingsQuer
 
 export const marketplaceFeedQuerySchema = z.object({
     category: z.nativeEnum(MarketplaceCategory).optional(),
+    /** Never an error: a non-uuid, unknown or inactive market is ignored. */
+    marketId: z.string().uuid().optional().catch(undefined),
 });
 
 export type MarketplaceFeedQueryDto = z.infer<typeof marketplaceFeedQuerySchema>;

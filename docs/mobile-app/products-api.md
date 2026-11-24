@@ -64,7 +64,9 @@ All three endpoints return this shape.
     "https://cdn.example.com/drop-images/6f1c/front.webp",
     "https://cdn.example.com/drop-images/6f1c/back.webp"
   ],
-  "price": {                                      // null when no base price is set
+  "availableInMarket": true,                      // false only when ?marketId was sent and the drop has no price there
+  "unavailableReason": null,                      // "NOT_AVAILABLE_IN_REGION" when availableInMarket is false
+  "price": {                                      // base price of ?marketId (that market only), else the default market; null when none
     "amount": "480.00",                           // 2-decimal string; "0.00" when free
     "currency": "USD",                            // USD | INR | GBP
     "isFree": false
@@ -161,6 +163,7 @@ One drop. This is the product details call after a card tap.
 | Param | In | Type | Notes |
 |---|---|---|---|
 | `id` | path | uuid | `Drop.id`, as returned by every card (`id`) |
+| `marketId` | query | uuid | optional. Price in this market; see [Market selection](#market-selection) |
 
 ```jsonc
 { "data": Product }
@@ -178,6 +181,7 @@ One drop by its group code.
 | Param | In | Type | Notes |
 |---|---|---|---|
 | `groupCode` | path | string | 12 digits, e.g. `483920170042` |
+| `marketId` | query | uuid | optional. Price in this market; see [Market selection](#market-selection) |
 
 ```jsonc
 { "data": Product }
@@ -262,10 +266,14 @@ can swap between requests, so a drop could repeat or be skipped across pages.
 
 ### Price
 
-`price` is the drop's **base price** (no variant) in the **default market**,
-and only when that price row is `ACTIVE` and the market is active. There is no
-market selection on these routes. When there is no such row, `price` is
-`null` even if variant prices or other markets exist.
+`price` is the drop's **base price** (no variant) in the market chosen with
+`?marketId=` (else the **default market**), and only when that price row is
+`ACTIVE` and the market is active. `price.marketId` says which market it is.
+With a market selected and no price there, `price` is `null` and
+`availableInMarket` is `false` (see [Market selection](#market-selection)). With
+no market, a drop with no default-market price also has `price: null`, even if
+variant prices exist. Applies to `GET /products/:id` and
+`GET /products/code/:groupCode`; the plain list keeps the default market.
 
 ### Caching
 
@@ -274,6 +282,23 @@ or code) is cached for **5 minutes**. An admin edit can take that long to
 show.
 
 ---
+
+## Market selection
+
+Send the buyer's market as **`?marketId=<uuid>`** (an id from `GET /markets`) on
+`GET /products/:id` and `GET /products/code/:groupCode`.
+
+- **Sold in that market:** `price` is that market's base price, `price.marketId`
+  is the selected market, `availableInMarket` is `true`.
+- **Not sold in that market:** the drop is still returned (200, so the screen can
+  open), but `price` is `null`, `availableInMarket` is `false` and
+  `unavailableReason` is `"NOT_AVAILABLE_IN_REGION"`. Show **"This product is not
+  available in your region"** and disable buying. The price is **never** taken
+  from another market.
+- **No `marketId`**, or a non-uuid, unknown or inactive one: ignored, never an
+  error. `price` is the default market's, `availableInMarket` is `true`.
+- `GET /products` (the plain list) does not take a market and shows the default
+  market's price.
 
 ## Known limitations
 
@@ -286,6 +311,6 @@ show.
   format before the database does.
 - **No price sorting.** `price_asc`/`price_desc` were removed. Price lives in a
   per-market table and cannot be used in `ORDER BY` here.
-- **No market selection.** The price is always the default market's.
+- **Market selection is on the two detail routes only.** `GET /products` (the list) always uses the default market's price.
 - **`variants` includes inactive variants.** Filter on `isActive` before
   showing pickers.

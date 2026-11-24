@@ -1,6 +1,7 @@
 import { Prisma } from '@hitbox/database';
 import type { IMediaUrlResolver } from './interfaces/media-url-resolver.interface';
 import type { DropCardRow } from '../repository/product.repository';
+import { pickBasePrice } from './base-price';
 
 /**
  * The card both feeds render. Discover's `DiscoverProductItem` and
@@ -16,7 +17,8 @@ export interface DropCard {
     rarity: string | null;
     category: string | null;
     artist: { id: string; name: string; slug: string } | null;
-    price: { amount: string; currency: string; isFree: boolean } | null;
+    /** `marketId` is the market this price belongs to; it differs from `?marketId=` when the drop is not priced there. */
+    price: { amount: string; currency: string; isFree: boolean; marketId: string | null } | null;
     totalSupply: number;
     mintedCount: number;
     rewardPoints: number;
@@ -35,9 +37,11 @@ export function toDropCard(
     row: DropCardRow,
     mediaUrls: IMediaUrlResolver | undefined,
     wishlisted: ReadonlySet<string> | null,
+    /** The market the app selected (`?marketId=`); absent or unusable means the default market. */
+    marketId?: string | null,
 ): DropCard {
     const ref = row.dropImages[0]?.asset.storageRef;
-    const price = row.dropPrices[0];
+    const price = pickBasePrice(row.dropPrices, marketId);
     let amount: string | null = null;
     if (price) amount = price.isFree ? '0' : price.amount != null ? new Prisma.Decimal(price.amount).toFixed(2) : null;
 
@@ -50,7 +54,7 @@ export function toDropCard(
         category: row.category,
         artist: row.artist ?? row.collection?.artist ?? null,
         price: price && amount !== null
-            ? { amount, currency: price.market.currency, isFree: price.isFree }
+            ? { amount, currency: price.market.currency, isFree: price.isFree, marketId: price.marketId ?? null }
             : null,
         totalSupply: row.totalSupply,
         mintedCount: row._count.skus,

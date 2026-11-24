@@ -94,8 +94,15 @@ describe('the manifest row schema', () => {
         expect(dto.tags[0]).toMatchObject({ key0: K0, key1: K1, key2: K2 });
     });
 
-    it('still accepts a row with no keys', () => {
-        expect(registerTagsSchema.safeParse({ tags: [{ uid: UID_A }] }).success).toBe(true);
+    it('refuses a row with no keys: a chip without its keys can never be verified', () => {
+        const result = registerTagsSchema.safeParse({ tags: [{ uid: UID_A }] });
+        expect(result.success).toBe(false);
+        const paths = result.success ? [] : result.error.issues.map((issue) => issue.path.join('.'));
+        expect(paths).toEqual(expect.arrayContaining(['tags.0.key0', 'tags.0.key1', 'tags.0.key2']));
+    });
+
+    it('refuses a keyed row whose UID is not 7 bytes', () => {
+        expect(registerTagsSchema.safeParse({ tags: [{ uid: '04A39B2C', key0: K0, key1: K1, key2: K2 }] }).success).toBe(false);
     });
 
     it('refuses one or two keys, equal keys, and a key that is not 32 hex', () => {
@@ -125,13 +132,22 @@ describe('a manifest with chip keys', () => {
         expect(unwrapped.map((key) => key.toString('hex').toUpperCase())).toEqual([K0, K1, K2]);
     });
 
-    it('stores keys only for the rows that sent them, and reports the count', async () => {
+    it('stores keys for every row and reports the count', async () => {
         const t = setup();
         const result = await t.apply({
-            tags: [{ uid: UID_A, key0: K0, key1: K1, key2: K2 }, { uid: UID_B }],
+            tags: [{ uid: UID_A, key0: K0, key1: K1, key2: K2 }, { uid: UID_B, key0: K2, key1: K1, key2: K0 }],
         });
-        expect(result).toMatchObject({ registered: 2, withKeys: 1 });
-        expect(t.written[0]!.map((tag) => Boolean(tag.keys))).toEqual([true, false]);
+        expect(result).toMatchObject({ registered: 2, withKeys: 2 });
+        expect(t.written[0]!.map((tag) => Boolean(tag.keys))).toEqual([true, true]);
+    });
+
+    it('a manifest with one keyless row is refused whole, and nothing is written', async () => {
+        const t = setup();
+        // Rejected by the request schema, before anything reaches the service.
+        expect(() =>
+            t.apply({ tags: [{ uid: UID_A, key0: K0, key1: K1, key2: K2 }, { uid: UID_B }] }),
+        ).toThrow();
+        expect(t.written).toHaveLength(0);
     });
 
     it('never returns, audits or publishes a key', async () => {
@@ -156,13 +172,5 @@ describe('a manifest with chip keys', () => {
             t.apply({ tags: [{ uid: UID_A, key0: K0, key1: K1, key2: K2 }] }),
         ).rejects.toMatchObject({ statusCode: 503, code: 'SUPPLY_KEY_WRAPPER_UNAVAILABLE' });
         expect(t.written).toHaveLength(0);
-    });
-
-    it('a manifest without keys still works without a key wrapper', async () => {
-        const t = setup({ withWrapper: false });
-        await expect(t.apply({ tags: [{ uid: UID_A, qcStatus: QcStatus.PASSED }] })).resolves.toMatchObject({
-            registered: 1,
-            withKeys: 0,
-        });
     });
 });

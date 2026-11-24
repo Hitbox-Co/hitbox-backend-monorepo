@@ -44,7 +44,8 @@ export interface TagKeyRow {
 export interface KeyableTag {
     id: string;
     nfcTagCode: string;
-    supplyBatchId: string;
+    /** Null for a chip added straight to a unit (no consignment). */
+    supplyBatchId: string | null;
     tagUidEncrypted: string;
     tagUidHash: string;
 }

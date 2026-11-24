@@ -58,8 +58,9 @@ only ever sees and changes their own cart. Another user's item id is a 404. See
 ```
 
 `subtotals` is **indicative**. Each item is charged separately at checkout, at the
-price for the buyer's market and variant. The cart shows the drop's base price in
-the default market.
+price for the buyer's market and variant. The cart shows each drop's base price in
+the market chosen with `?marketId=` (else the default market), and the subtotals
+sum those same prices of the purchasable rows, one entry per currency.
 
 ### `CartItemView`
 
@@ -82,7 +83,7 @@ the wishlist's card ([wishlist-api.md](wishlist-api.md#wishlistdropcard)):
 {
   "id": "6f1c…", "name": "Cobalt Mind", "imageUrl": "https://…", "rarity": "RARE",
   "artist": { "id": "…", "name": "Form & Co.", "slug": "form-co" },
-  "price": { "amount": "225.00", "currency": "USD", "isFree": false },
+  "price": { "amount": "225.00", "currency": "USD", "isFree": false, "marketId": "7c1d…" },
   "totalSupply": 60, "mintedCount": 9, "rewardPoints": 1125,
   "status": "ACTIVE",
   "isViewable": true,
@@ -101,7 +102,12 @@ The meaning and suggested label for each `unavailableReason` are in
 
 ### `GET /api/v1/cart`
 
-There are no parameters. The cart holds at most 50 items, so it is never paginated.
+The cart holds at most 50 items, so it is never paginated.
+
+| Param | Values | Default |
+|---|---|---|
+| `marketId` | uuid of a market from `GET /markets` | none: the default market. See [Market selection](#market-selection) |
+
 
 ```jsonc
 { "data": CartView }
@@ -118,6 +124,9 @@ There are no parameters. The cart holds at most 50 items, so it is never paginat
 | `productId` | required, uuid |
 | `variantId` | optional, uuid. Must be one of the drop's variants that is **active** and not archived. |
 | anything else | rejected (422) |
+
+Optional query `?marketId=<uuid>`: the market whose price the returned row shows
+([Market selection](#market-selection)). It is not stored: the cart keeps no price.
 
 The drop must be one `POST /checkout` would accept **right now**: status
 `PUBLISHED` or `ACTIVE`, switched on, not archived, inside its release window, and
@@ -141,7 +150,7 @@ even when the cart was already empty.
 |---|---|---|
 | 401 / 403 | `AUTH_…` | No or bad session ([README.md](README.md#authentication)) |
 | 400 | `ORDERS_NOT_PURCHASABLE` | `POST`: the drop is not on sale now. `details: { status, reason }`, where `reason` is an `unavailableReason`. |
-| 400 | `ORDERS_NO_PRICE` | `POST`: the drop has no price for the default market |
+| 400 | `ORDERS_NO_PRICE` | `POST`: the drop has no price for the default market, or is not sold in the selected `marketId` ("not available in your region") |
 | 404 | `ORDERS_NOT_FOUND` | `POST`: no such drop, or it is not viewable |
 | 404 | `ORDERS_VARIANT_NOT_FOUND` | `POST`: the variant is not one of this drop's, or is switched off |
 | 404 | `ORDERS_CART_ITEM_NOT_FOUND` | `DELETE /:itemId`: no such item **of yours** |
@@ -192,6 +201,25 @@ Different variants of one drop are separate rows.
 
 ---
 
+## Market selection
+
+`GET /cart` and `POST /cart` take an optional **`?marketId=<uuid>`** (an id from
+`GET /markets`), the buyer's region.
+
+- Each row's `product.price` is that market's base price. A drop with **no price
+  in that market** keeps its row but comes back with `price: null`,
+  `isPurchasable: false` and `unavailableReason: "NOT_AVAILABLE_IN_REGION"`: show
+  "Not available in your region" and disable Checkout for the row.
+- `summary.subtotals` sums only the purchasable rows, one entry per currency. A
+  region-locked row adds nothing to it, so it holds one currency for a selected
+  market.
+- `POST /cart` for a drop not sold in the selected market is
+  `400 ORDERS_NO_PRICE` ("This drop is not available in your region.").
+- Not stored: the cart keeps no price or market, so switching region re-prices the
+  same rows on the next `GET /cart`.
+- **No `marketId`**, or a non-uuid, unknown or inactive one: ignored, never an
+  error; the default market's price is shown, as before.
+
 ## Known limitations
 
 - **No stock check.** The cart can show an item as purchasable while every unit is
@@ -199,7 +227,10 @@ Different variants of one drop are separate rows.
 - **No single "pay for everything".** One order per item is how orders work today.
   Paying for the whole cart in one go needs multi-item orders across orders,
   payments, refunds, invoices and finance.
-- **The subtotal ignores variant prices and the buyer's market.** It sums the base
-  price in the default market. Checkout charges the right price.
+- **The subtotal ignores variant prices.** It sums each drop's base price in the
+  selected market (`?marketId=`, else the default). Checkout charges the right price.
+- **A drop not sold in the selected market** stays in the cart as
+  `NOT_AVAILABLE_IN_REGION` (no price, not purchasable) and is left out of the
+  subtotals. Switch back to a market where it is sold to buy it.
 - **A row added with no variant is not removed by paying for a variant of that
   drop**, and vice versa. The match is exact.

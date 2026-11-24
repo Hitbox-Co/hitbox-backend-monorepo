@@ -146,6 +146,34 @@ describe('createStripeGateway — charges', () => {
         expect(body.get('currency')).toBe('usd');
         expect(body.get('metadata[paymentTransactionId]')).toBe('t1');
     });
+
+    /**
+     * Apple Pay and Google Pay appear in Stripe's PaymentSheet only when the
+     * PaymentIntent leaves the choice of methods to the dashboard configuration.
+     * Pinning a list (`payment_method_types`) would silently switch wallets off,
+     * so this guards the request shape. docs/mobile-app/payments-api.md#wallets.
+     */
+    it('leaves payment methods to the dashboard so wallets show up in the PaymentSheet', async () => {
+        const { fn, calls } = fakeFetch(200, { id: 'pi_9', client_secret: 'pi_9_secret_x', status: 'requires_payment_method' });
+        const gateway = createStripeGateway({ resolveSecretKey: (r) => keys[r], fetch: fn });
+
+        await gateway.createCharge({
+            orderId: 'o1',
+            paymentTransactionId: 't1',
+            amount: '2499.00',
+            currency: 'INR',
+            idempotencyKey: 'order:o1:attempt:1',
+            buyerId: 'u1',
+            credentialsRef: 'secrets://stripe/platform',
+        });
+
+        const body = form(calls[0]!);
+        expect(body.get('automatic_payment_methods[enabled]')).toBe('true');
+        expect(body.has('payment_method_types[]')).toBe(false);
+        expect([...body.keys()].some((key) => key.startsWith('payment_method_types'))).toBe(false);
+        expect(body.has('payment_method')).toBe(false);
+        expect(body.has('confirm')).toBe(false);
+    });
 });
 
 describe('gatewayFailure', () => {

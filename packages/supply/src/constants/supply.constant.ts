@@ -67,6 +67,28 @@ export const SUPPLY_ERROR_CODES = {
     // ── NFC keys ────────────────────────────────────────────────────────────
     /** No key wrapper / KMS key reference is configured — keys cannot be created. */
     KEY_WRAPPER_UNAVAILABLE: 'SUPPLY_KEY_WRAPPER_UNAVAILABLE',
+    /** No chip-UID key is configured, so no chip can be registered. */
+    TAG_KEY_UNAVAILABLE: 'SUPPLY_TAG_KEY_UNAVAILABLE',
+    // ── Chips added outside a consignment (the SKU routes) ───────────────────
+    /** A keyed chip's UID is not 7 bytes (14 hex). */
+    TAG_UID_INVALID: 'SUPPLY_TAG_UID_INVALID',
+    /** The chip is LOST / REVOKED / DISPUTED or failed QC, so it cannot be bound. */
+    TAG_UNUSABLE: 'SUPPLY_TAG_UNUSABLE',
+    /** The chip was registered for a different variant than the unit's. */
+    TAG_VARIANT_MISMATCH: 'SUPPLY_TAG_VARIANT_MISMATCH',
+    /** The chip already has keys on file and the request sent different ones. */
+    TAG_KEYS_MISMATCH: 'SUPPLY_TAG_KEYS_MISMATCH',
+    // ── Booking a consignment ────────────────────────────────────────────────
+    /** Accept refused: some registered chips have no ACTIVE keys, so their units could never be verified by tap. */
+    CHIP_KEYS_MISSING: 'SUPPLY_CHIP_KEYS_MISSING',
+    /** The drop's type needs variants, so the booking must carry `lines`. */
+    VARIANT_LINES_REQUIRED: 'SUPPLY_VARIANT_LINES_REQUIRED',
+    /** Lines cannot be changed as asked (a registered chip is on a variant the new lines drop). */
+    LINES_LOCKED: 'SUPPLY_LINES_LOCKED',
+    /** The new lines do not add up to the consignment's declared quantity. */
+    LINES_QUANTITY_MISMATCH: 'SUPPLY_LINES_QUANTITY_MISMATCH',
+    /** The drop's type needs variants but the drop has no live variant yet. Same code products uses at accept time. */
+    DROP_VARIANTS_REQUIRED: 'PRODUCTS_VARIANTS_REQUIRED',
 
     // ── Per-tag NFC keys ────────────────────────────────────────────────────
     /** Refused: the chip already has ACTIVE keys; revoke them first to re-key. */
@@ -194,6 +216,7 @@ export const SUPPLY_AUDIT_EVENTS = {
     VENDOR_CREATE: 'supply.vendor.create',
     VENDOR_UPDATE: 'supply.vendor.update',
     BATCH_CREATE: 'supply.batch.create',
+    BATCH_LINES: 'supply.batch.lines',
     BATCH_DECIDE: 'supply.batch.decide',
     TAGS_REGISTER: 'supply.tags.register',
     TAG_QC: 'supply.tag.qc',

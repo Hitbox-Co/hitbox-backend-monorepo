@@ -206,7 +206,11 @@ export function createTaxModule(deps: TaxModuleDeps): TaxModule {
         createBuyerRouter(requireAuth) {
             const router = Router();
             router.use(requireAuth);
-            const own = deps.guard.requirePermission(TAX_ORDER_READ_CAPABILITY);
+            // An own-scoped grant only matches when told whose record this is;
+            // the buyer resolver always answers with the caller's own id.
+            const own = deps.guard.requirePermission(TAX_ORDER_READ_CAPABILITY, {
+                context: async (req) => ({ ownerId: (await deps.resolveBuyerAccess(req)).userId }),
+            });
 
             router.get('/invoices', own, controller.listMyInvoices);
             router.get('/invoices/:invoiceId', own, controller.getMyInvoice);

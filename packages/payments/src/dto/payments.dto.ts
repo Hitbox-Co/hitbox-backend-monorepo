@@ -44,6 +44,41 @@ export const checkoutSchema = z.object({
 });
 export type CheckoutDto = z.infer<typeof checkoutSchema>;
 
+// ── Checkout quote ──────────────────────────────────────────────────────────
+
+/** The checkout body without the parts that only matter when paying. */
+export const checkoutQuoteSchema = z.object({
+    productId: uuid,
+    variantId: uuid.optional(),
+    marketId: uuid.optional(),
+    shippingAddressId: uuid.optional(),
+    billingAddressId: uuid.optional(),
+});
+export type CheckoutQuoteDto = z.infer<typeof checkoutQuoteSchema>;
+
+/** What the app shows before paying. Money and rates are strings. */
+export interface CheckoutQuoteView {
+    productId: string;
+    variantId: string | null;
+    marketId: string | null;
+    currency: string;
+    /** The sticker price; tax is inside it. */
+    unitPrice: string;
+    /** The price without tax. */
+    subtotal: string;
+    taxType: 'GST' | 'SALES_TAX' | 'EXEMPT' | null;
+    taxRate: string;
+    /** The part of the price that is tax. */
+    taxAmount: string;
+    shippingAmount: string;
+    /** What the card is charged: subtotal + taxAmount + shippingAmount. */
+    totalAmount: string;
+    availability: 'IN_STOCK' | 'SOLD_OUT' | 'NOT_ON_SALE';
+    unavailableReason: 'NOT_PUBLISHED' | 'NOT_OPEN_YET' | 'CLOSED' | 'SOLD_OUT' | null;
+    /** True when checkout will refuse without a billing address. */
+    billingAddressRequired: boolean;
+}
+
 // ── Payment transactions ────────────────────────────────────────────────────
 
 export const listPaymentsQuerySchema = z.object({

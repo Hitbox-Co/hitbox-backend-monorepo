@@ -14,6 +14,10 @@ export const SKUS_ERROR_CODES = {
     /** Refused: the variant does not belong to the product being minted. */
     VARIANT_MISMATCH: 'SKUS_VARIANT_MISMATCH',
     FORBIDDEN: 'SKUS_FORBIDDEN',
+    /** No chip registry is wired on this deployment, so keyed chips cannot be stored. */
+    CHIP_REGISTRY_UNAVAILABLE: 'SKUS_CHIP_REGISTRY_UNAVAILABLE',
+    /** The unit has no chip to attach keys to. */
+    NO_CHIP: 'SKUS_NO_CHIP',
     /** Refused: a binding names a unit that is not in this drop. */
     UNIT_NOT_IN_PRODUCT: 'SKUS_UNIT_NOT_IN_PRODUCT',
     /** Refused: the unit already carries a tag and `replace` was not set. */
@@ -129,4 +133,8 @@ export const SKU_EVENTS = {
 export const SKU_AUDIT_EVENTS = {
     UPDATE: 'sku.update',
     BATCH_UPDATE: 'sku.batch-update',
+    /** A chip was bound to a unit (mint, bind, or re-tag). Counts and unit codes only: never a UID or a key. */
+    CHIP_BIND: 'sku.chip.bind',
+    /** Keys were attached to an already bound chip. Never records the keys. */
+    CHIP_KEYS: 'sku.chip.keys',
 } as const;

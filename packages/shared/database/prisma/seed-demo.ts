@@ -245,7 +245,7 @@ async function main(): Promise<void> {
                 recipientName: `Demo Buyer ${i}`,
                 line1: `${100 + i} ${a.street}`, line2: i % 4 === 0 ? 'Apt 4B' : null,
                 city: a.city, state: a.state, postalCode: a.postalCode, countryCode: a.countryCode,
-                phone: null, isDefaultShipping: true, isDefaultBilling: true,
+                phone: null, usage: 'BOTH' as const, isDefault: true,
                 isActive: true, archivedAt: null,
                 createdAt: daysAgo(60), updatedAt: daysAgo(60),
             };

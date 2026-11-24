@@ -28,7 +28,14 @@ export function isPubliclyViewable(drop: DropState): boolean {
 }
 
 /** Why a drop cannot be bought right now; null when it can. */
-export type UnavailableReason = 'REMOVED' | 'NOT_ON_SALE' | 'NOT_RELEASED_YET' | 'CLOSED' | 'NO_PRICE';
+export type UnavailableReason =
+    | 'REMOVED'
+    | 'NOT_ON_SALE'
+    | 'NOT_RELEASED_YET'
+    | 'CLOSED'
+    | 'NO_PRICE'
+    /** A market was selected and the drop has no active price in it. */
+    | 'NOT_AVAILABLE_IN_REGION';
 
 export function unavailableReason(
     drop: DropState & { releaseStart: Date | string | null; releaseEnd: Date | string | null; hasPrice: boolean },

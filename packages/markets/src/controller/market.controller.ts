@@ -10,6 +10,14 @@ import type { MarketService } from '../service/market.service';
 export class MarketController {
     constructor(private readonly service: MarketService) { }
 
+    /** GET /markets: public, active markets only. */
+    listPublic: RequestHandler = asyncHandler(async (_req, res) => {
+        // Changes only when an operator edits markets; a short shared cache
+        // keeps the app's startup call off the database.
+        res.setHeader('Cache-Control', 'public, max-age=300');
+        res.json({ data: await this.service.listPublic() });
+    });
+
     /** GET /admin/markets */
     list: RequestHandler = asyncHandler(async (req, res) => {
         res.json(await this.service.list(listMarketsQuerySchema.parse(req.query)));

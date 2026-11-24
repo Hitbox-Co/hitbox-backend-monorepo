@@ -86,3 +86,67 @@ describe('CartService.get', () => {
         expect(view.items.map((i) => i.product?.id)).toEqual(['a', 'b', 'c', 'd']);
     });
 });
+
+describe('cart prices follow ?marketId=', () => {
+    const MARKET = 'b2222222-2222-4222-8222-222222222222';
+    const inr = (id: string, amount: string) =>
+        card(id, { price: { amount, currency: 'INR', isFree: false, marketId: MARKET } });
+
+    it('GET /cart asks the catalog for that market, and the subtotals follow the card prices', async () => {
+        const { service } = build({
+            rows: [row('p1'), row('p2')],
+            cards: [inr('p1', '899.00'), inr('p2', '100.50')],
+        });
+        const view = await service.get('u1', MARKET);
+        expect(view.summary.subtotals).toEqual([{ currency: 'INR', amount: '999.50' }]);
+        expect((view.items[0]!.product as { price: { marketId: string } }).price.marketId).toBe(MARKET);
+    });
+
+    it('passes the market to the catalog on GET and on POST', async () => {
+        const catalog = { findCards: jest.fn(async () => [card('p1')]) };
+        const cart = {
+            list: jest.fn(async () => [row('p1')]), count: jest.fn(async () => 0), findOne: jest.fn(async () => null),
+            create: jest.fn(async (i: { productId: string; variantId: string | null }) => row(i.productId, i)),
+        };
+        const service = new CartService({ cart: cart as never, catalog: catalog as never, logger: silentLogger });
+        await service.get('u1', MARKET);
+        expect(catalog.findCards).toHaveBeenLastCalledWith(['p1'], MARKET);
+        await service.add('u1', { productId: 'p1' }, MARKET);
+        expect(catalog.findCards).toHaveBeenLastCalledWith(['p1'], MARKET);
+    });
+
+    it('without a market the catalog gets none (default-market behaviour unchanged)', async () => {
+        const catalog = { findCards: jest.fn(async () => [card('p1')]) };
+        const service = new CartService({
+            cart: { list: jest.fn(async () => [row('p1')]) } as never, catalog: catalog as never, logger: silentLogger,
+        });
+        await service.get('u1');
+        expect(catalog.findCards).toHaveBeenLastCalledWith(['p1'], undefined);
+    });
+});
+
+describe('a drop that is not sold in the selected region', () => {
+    const MARKET = 'b2222222-2222-4222-8222-222222222222';
+    const regionLocked = (id: string) =>
+        card(id, { price: null, isPurchasable: false, unavailableReason: 'NOT_AVAILABLE_IN_REGION' });
+
+    it('stays in the cart, flagged, and is left out of the subtotals', async () => {
+        const { service } = build({
+            rows: [row('p1'), row('p2')],
+            cards: [card('p1', { price: { amount: '899.00', currency: 'INR', isFree: false, marketId: MARKET } }), regionLocked('p2')],
+        });
+        const view = await service.get('u1', MARKET);
+        expect(view.summary).toMatchObject({ itemCount: 2, purchasableCount: 1 });
+        expect(view.summary.subtotals).toEqual([{ currency: 'INR', amount: '899.00' }]);
+        expect(view.items[1]!.product).toMatchObject({ isPurchasable: false, unavailableReason: 'NOT_AVAILABLE_IN_REGION' });
+    });
+
+    it('cannot be added: 400 ORDERS_NO_PRICE, "not available in your region"', async () => {
+        const { service } = build({ cards: [regionLocked('p1')] });
+        await expect(service.add('u1', { productId: 'p1' }, MARKET)).rejects.toMatchObject({
+            statusCode: 400,
+            code: 'ORDERS_NO_PRICE',
+            message: 'This drop is not available in your region.',
+        });
+    });
+});

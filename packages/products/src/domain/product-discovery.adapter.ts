@@ -9,7 +9,7 @@ import type {
 } from '@hitbox/discover';
 import type { IMediaUrlResolver } from './interfaces/media-url-resolver.interface';
 import type { ProductRepository } from '../repository/product.repository';
-import { PUBLIC_PRODUCT_WHERE } from '../repository/product.repository';
+import { PUBLIC_PRODUCT_WHERE, pricedInMarket } from '../repository/product.repository';
 import { toDropCard } from './drop-card';
 import { STORAGE_CATEGORIES_BY_TAB } from './storage-categories';
 
@@ -50,8 +50,12 @@ export class ProductDiscoveryAdapter implements IProductDiscovery {
     ) { }
 
     async findProducts(query: DiscoverProductsQuery): Promise<DiscoverProductsResult> {
+        // A usable region narrows the list to drops priced there; an unusable
+        // one is ignored (default behaviour).
+        const marketId = await this.products.activeMarketId(query.marketId);
         const where: Prisma.DropWhereInput = {
             ...PUBLIC_PRODUCT_WHERE,
+            ...(marketId && pricedInMarket(marketId)),
             ...(query.section === DiscoverSection.FEATURED && {
                 rarity: { in: FEATURED_RARITIES, mode: Prisma.QueryMode.insensitive },
             }),
@@ -76,7 +80,7 @@ export class ProductDiscoveryAdapter implements IProductDiscovery {
             ? await this.products.findWishlistedProductIds(query.viewerId, items.map((row) => row.id))
             : null;
 
-        return { items: items.map((row) => toDropCard(row, this.mediaUrls, wishlisted)), total };
+        return { items: items.map((row) => toDropCard(row, this.mediaUrls, wishlisted, marketId)), total };
     }
 
     async findCreators(query: DiscoverCreatorsQuery): Promise<DiscoverCreatorsResult> {

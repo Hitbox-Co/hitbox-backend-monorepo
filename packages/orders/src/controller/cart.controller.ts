@@ -1,6 +1,6 @@
 import type { Request, RequestHandler } from 'express';
 import { asyncHandler } from '@hitbox/shared';
-import { addCartItemSchema, cartItemIdParamSchema } from '../dto/cart.dto';
+import { addCartItemSchema, cartItemIdParamSchema, cartMarketQuerySchema } from '../dto/cart.dto';
 import type { CartService } from '../service/cart.service';
 import type { OrderBuyerResolver } from './order-shipment.controller';
 
@@ -16,13 +16,15 @@ export class CartController {
 
     /** GET /cart 🔒 */
     get: RequestHandler = asyncHandler(async (req, res) => {
-        res.json({ data: await this.service.get(this.userIdOf(req)) });
+        const { marketId } = cartMarketQuerySchema.parse(req.query);
+        res.json({ data: await this.service.get(this.userIdOf(req), marketId) });
     });
 
     /** POST /cart 🔒 — 201 when added, 200 when it was already in the cart. */
     add: RequestHandler = asyncHandler(async (req, res) => {
         const dto = addCartItemSchema.parse(req.body);
-        const { item, created } = await this.service.add(this.userIdOf(req), dto);
+        const { marketId } = cartMarketQuerySchema.parse(req.query);
+        const { item, created } = await this.service.add(this.userIdOf(req), dto, marketId);
         res.status(created ? 201 : 200).json({ data: item });
     });
 

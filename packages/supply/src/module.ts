@@ -33,6 +33,7 @@ import type { ISupplyStockMinter } from './domain/interfaces/stock-minter.interf
 import { NfcTagKeyRepository } from './repository/nfc-tag-key.repository';
 import { SupplyRepository } from './repository/supply.repository';
 import { NfcTagKeyService } from './service/nfc-tag-key.service';
+import { ChipRegistryService } from './service/chip-registry.service';
 import { SupplyService } from './service/supply.service';
 
 /** Structural guard — the shape of `requirePermission`, not an import. */
@@ -88,6 +89,12 @@ export interface SupplyModuleDeps {
 }
 
 export interface SupplyModule {
+    /**
+     * Creates and links the NfcTag / NfcTagKey rows for chips that reach a unit
+     * outside a consignment (the SKU routes). Skus declares the port; bootstrap
+     * connects it. Runs on the caller's transaction client.
+     */
+    chips: ChipRegistryService;
     /** Mounted at /api/v1/admin/supply. */
     createRouter(requireAuth: RequestHandler): Router;
     /** The vendor portal, mounted at /api/v1/vendor. docs/vendor/vendor-portal-api.md. */
@@ -173,7 +180,15 @@ export function createSupplyModule(deps: SupplyModuleDeps): SupplyModule {
         },
     );
 
+    const chips = new ChipRegistryService({
+        cipher: deps.tagCipher,
+        wrapper: deps.keyWrapper,
+        kmsKeyRef: deps.kmsKeyRef,
+        logger,
+    });
+
     return {
+        chips,
         createRouter(requireAuth) {
             const router = Router();
             router.use(requireAuth);
@@ -261,6 +276,13 @@ export function createSupplyModule(deps: SupplyModuleDeps): SupplyModule {
                 '/batches/:batchId',
                 deps.guard.requirePermission(SUPPLY_READ_CAPABILITY),
                 controller.getBatch,
+            );
+            // Correct a booking's variant lines while it is still open, instead of
+            // rejecting the consignment and booking it again.
+            router.patch(
+                '/batches/:batchId/lines',
+                deps.guard.requirePermission(SUPPLY_WRITE_CAPABILITY, { globalOnly: true }),
+                controller.updateBatchLines,
             );
             router.post(
                 '/batches/:batchId/decision',

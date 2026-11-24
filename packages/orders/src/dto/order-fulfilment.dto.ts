@@ -79,6 +79,8 @@ export interface UnitCandidate extends FulfilmentUnit {
      * confirmed earlier. Scanning it just confirms it.
      */
     heldForThisOrder: boolean;
+    /** A tap on this unit's chip can be verified (BOUND / ACTIVE with ACTIVE keys). */
+    chipVerifiable: boolean;
 }
 
 /** One physical unit, as the packing screen shows it. */

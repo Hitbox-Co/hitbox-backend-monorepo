@@ -29,12 +29,16 @@ export class DropCardLookupAdapter {
     ) { }
 
     /** Cards for `ids`, in no particular order. Unknown ids are simply absent. */
-    async findCards(ids: string[]): Promise<DropCardWithState[]> {
+    async findCards(ids: string[], marketId?: string | null): Promise<DropCardWithState[]> {
         const rows = await this.products.findCardsByIds([...new Set(ids)]);
+        // Only a usable (active) market counts; anything else is ignored.
+        const market = await this.products.activeMarketId(marketId);
         const now = new Date();
         return rows.map((row) => {
-            const card = toDropCard(row, this.mediaUrls, null);
-            const reason = unavailableReason({ ...row, hasPrice: card.price !== null }, now);
+            const card = toDropCard(row, this.mediaUrls, null, market);
+            let reason = unavailableReason({ ...row, hasPrice: card.price !== null }, now);
+            // With a region selected, "no price" means "not sold in this region".
+            if (market && reason === 'NO_PRICE') reason = 'NOT_AVAILABLE_IN_REGION';
             return {
                 ...card,
                 // The owner of a wishlist/cart is the viewer; the consumer sets this.

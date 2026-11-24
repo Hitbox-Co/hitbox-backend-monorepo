@@ -34,7 +34,7 @@ a 403, so its existence is not revealed.
 
 ## Shapes
 
-Every money value and every rate is a **string** (`"2240.00"`, `"12.000"`).
+Every money value and every rate is a **string** (`"2499.00"`, `"12.000"`).
 Never sum them as floats.
 
 ### `Invoice`
@@ -53,9 +53,10 @@ Never sum them as floats.
   "taxType": "GST",                          // GST | SALES_TAX | EXEMPT
   "taxRate": "12.000",                       // percent
   "hsnCode": "9706",                         // product tax code; null if none
-  "subtotal": "2000.00",                     // before tax
-  "taxAmount": "240.00",
-  "totalAmount": "2240.00",
+  "subtotal": "2231.25",                     // the price without tax
+  "taxAmount": "267.75",
+  "totalAmount": "2499.00",
+  "pricesIncludeTax": true,                  // the price contained the tax, so totalAmount is what was charged. false on older invoices
   "supplier": {                              // HitBox's legal entity for this country
     "name": "HitBox Collectibles Pvt Ltd",
     "address": "…",
@@ -76,11 +77,11 @@ Never sum them as floats.
       "hsnCode": "6109",
       "sacCode": null,
       "quantity": 1,
-      "unitPrice": "2000.00",
-      "lineSubtotal": "2000.00",
+      "unitPrice": "2231.25",
+      "lineSubtotal": "2231.25",
       "taxRate": "12.000",
-      "taxAmount": "240.00",
-      "lineTotal": "2240.00"
+      "taxAmount": "267.75",
+      "lineTotal": "2499.00"
     }
   ],
   "documentAvailable": true,                 // the PDF is already rendered; download works either way
@@ -182,10 +183,16 @@ parked for staff review and **no invoice is issued** until that is resolved.
 
 The **billing address** country decides the rules: Indian GST for `IN`, US sales
 tax for `US`. With no billing address, the currency is the fallback (`INR` → `IN`,
-anything else → `US`). Send a `billingAddressId` at checkout so the invoice is right.
+anything else → `US`). Checkout now **requires** a `billingAddressId` whenever the
+sale is taxed (`PAYMENTS_BILLING_ADDRESS_REQUIRED`), so a new order always has the
+right country. See [payments-api.md](payments-api.md#billing-address-rule).
 
-Tax is worked out per line, then summed: `lineSubtotal × taxRate = taxAmount`,
-`lineSubtotal + taxAmount = lineTotal`.
+**Prices include tax.** The invoice splits the price the buyer paid; it does not
+add tax on top. Per line: `lineTotal` is the price paid, `lineSubtotal =
+lineTotal ÷ (1 + taxRate)` rounded once, and `taxAmount = lineTotal − lineSubtotal`.
+So `lineSubtotal + taxAmount = lineTotal` and the invoice `totalAmount` equals the
+order's `amount`, the checkout's `amount` and the quote's `totalAmount`
+([why](payments-api.md#how-the-charge-relates-to-the-invoice)).
 
 ### Invoice statuses
 
@@ -205,9 +212,9 @@ Issued invoices are never edited. A fix means a void or a new, corrected invoice
   example, missing tax configuration), the error is logged for staff, who
   issue it with `POST /admin/tax/invoices`. The order stays paid. Treat
   `invoice: null` on a paid order as "not ready yet".
-- **The invoice total can differ from the amount charged.** The invoice treats
-  the order's price as **before tax** and adds tax on top. Checkout charges the
-  price with no tax added. For a taxed order, `totalAmount` can be higher than
-  the order's `amount`. Show the order's `amount` as "Paid".
+- **Old invoices add tax on top.** Invoices issued before tax-inclusive pricing
+  (`pricesIncludeTax: false`) treated the order's price as before tax, so their
+  `totalAmount` can be higher than what was charged. They are never edited. New
+  invoices (`pricesIncludeTax: true`) always equal the amount charged.
 - **No `totalPages`** in the list `meta`.
 - **A refund does not change the invoice the buyer sees.** Tax adjustments for refunds are staff-side records.

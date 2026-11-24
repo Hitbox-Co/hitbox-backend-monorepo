@@ -98,6 +98,17 @@ export function taxOn(amount: string | number, ratePercent: string | number): st
     return format(scaled, 2);
 }
 
+/**
+ * The part of a tax-inclusive amount that is not tax: `gross / (1 + rate/100)`,
+ * rounded half-up to 2 places. The tax is then `gross − net`, never a second
+ * rounding, so the two always add back to exactly what was charged.
+ */
+export function netOfTax(gross: string | number, ratePercent: string | number): string {
+    const unit = 10n ** BigInt(SCALE);
+    const scaled = (parse(gross) * 100n * unit) / (100n * unit + parse(ratePercent));
+    return format(scaled, 2);
+}
+
 /** `a` compared to `b`: -1, 0 or 1. */
 export function compareMoney(a: string | number, b: string | number): number {
     const left = parse(a);

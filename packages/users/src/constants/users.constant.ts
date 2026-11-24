@@ -5,7 +5,24 @@ export const USERS_ERROR_CODES = {
     /** `User.handle` is unique — renamed from USERNAME_TAKEN with the column. */
     HANDLE_TAKEN: 'USERS_HANDLE_TAKEN',
     EMAIL_TAKEN: 'USERS_EMAIL_TAKEN',
+    /** No such address, or it is someone else's, or it was archived. */
+    ADDRESS_NOT_FOUND: 'USERS_ADDRESS_NOT_FOUND',
+    /** The user already has ADDRESS_LIMIT active addresses. */
+    ADDRESS_LIMIT_REACHED: 'USERS_ADDRESS_LIMIT_REACHED',
+    /** Checkout was handed one of the buyer's own addresses that has been archived. */
+    ADDRESS_ARCHIVED: 'USERS_ADDRESS_ARCHIVED',
+    /** A shipping-only address used as billing, or the reverse. */
+    ADDRESS_USAGE_MISMATCH: 'USERS_ADDRESS_USAGE_MISMATCH',
 } as const;
+
+/** Most active addresses one user may keep. */
+export const ADDRESS_LIMIT = 10;
+
+/**
+ * Per-user request budgets for the address routes, per minute. Reads are cheap;
+ * writes take a row lock on the user, so they get the tighter one.
+ */
+export const ADDRESS_RATE_LIMIT = { windowMs: 60_000, reads: 120, writes: 30 } as const;
 
 /**
  * Events this module publishes.

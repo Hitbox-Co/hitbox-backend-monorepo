@@ -47,6 +47,14 @@ export {
     STRIPE_EVENT_MAP,
 } from './constants/payments.constant';
 
+export type {
+    CheckoutAddress,
+    IAddressBook,
+    ITaxEstimator,
+    TaxEstimate,
+} from './domain/interfaces/checkout-support.interface';
+export type { CheckoutQuoteView } from './dto/payments.dto';
+
 // Ports — consumer-defined here, implemented by other modules at bootstrap
 export type {
     IOrderLedger,

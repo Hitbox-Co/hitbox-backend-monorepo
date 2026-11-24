@@ -58,6 +58,35 @@ export class OrderLedgerAdapter {
         };
     }
 
+    /** Price and availability, nothing held. Matches `IOrderLedger.quoteSale`. */
+    async quoteSale(input: {
+        productId: string;
+        variantId?: string | null;
+        marketId?: string | null;
+        buyerId?: string | null;
+        shippingAddressId?: string | null;
+        billingAddressId?: string | null;
+    }) {
+        const quote = await this.orders.quote({
+            productId: input.productId,
+            variantId: input.variantId ?? null,
+            marketId: input.marketId ?? null,
+            buyerId: input.buyerId ?? null,
+            shippingAddressId: input.shippingAddressId ?? null,
+            billingAddressId: input.billingAddressId ?? null,
+            now: new Date(),
+        });
+        return {
+            productId: quote.productId,
+            variantId: quote.variantId,
+            marketId: quote.marketId,
+            currency: quote.currency,
+            unitPrice: quote.unitPrice.toFixed(2),
+            availability: quote.availability,
+            unavailableReason: quote.unavailableReason,
+        };
+    }
+
     markPaid(input: { orderId: string; settledAt: Date }): Promise<boolean> {
         return this.orders.markPaid(input);
     }

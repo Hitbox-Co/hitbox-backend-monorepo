@@ -7,6 +7,9 @@ import {
     batchUpdateSkusSchema,
     bindTagSchema,
     bulkBindTagsSchema,
+    chipKeysBodySchema,
+    chipReportQuerySchema,
+    importChipKeysSchema,
     listSkusQuerySchema,
     mintSkusSchema,
     updateSkuSchema,
@@ -27,12 +30,13 @@ export class SkuController {
 
     /** POST /admin/products/:productId/skus — mint an edition, or part of one. */
     mint: RequestHandler = asyncHandler(async (req, res) => {
-        const access = await this.access(req);
+        const { access, correlationId } = await this.mutation(req);
         const dto = mintSkusSchema.parse(req.body);
         const result = await this.service.mint(
             access,
             req.params.productId as string,
             dto,
+            correlationId,
         );
         res.status(201).json({ data: result });
     });
@@ -44,24 +48,59 @@ export class SkuController {
      * physical tags in a state nobody can reconcile from the database.
      */
     bulkBindTags: RequestHandler = asyncHandler(async (req, res) => {
-        const access = await this.access(req);
+        const { access, correlationId } = await this.mutation(req);
         const dto = bulkBindTagsSchema.parse(req.body);
         res.json({
             data: await this.service.bulkBindTags(
                 access,
                 req.params.productId as string,
                 dto,
+                correlationId,
+            ),
+        });
+    });
+
+    /**
+     * POST /admin/products/:productId/skus/chip-keys: attach keys to the chips
+     * of many already-bound units (`rows`, or the text of a CSV in `csv`).
+     */
+    importChipKeys: RequestHandler = asyncHandler(async (req, res) => {
+        const { access, correlationId } = await this.mutation(req);
+        const dto = importChipKeysSchema.parse(req.body);
+        res.json({
+            data: await this.service.importChipKeys(
+                access,
+                req.params.productId as string,
+                dto,
+                correlationId,
             ),
         });
     });
 
     /** PATCH /admin/skus/:skuId/tag — bind or replace one unit's tag. */
     bindTag: RequestHandler = asyncHandler(async (req, res) => {
-        const access = await this.access(req);
+        const { access, correlationId } = await this.mutation(req);
         const dto = bindTagSchema.parse(req.body);
         res.json({
-            data: await this.service.bindTag(access, req.params.skuId as string, dto),
+            data: await this.service.bindTag(access, req.params.skuId as string, dto, correlationId),
         });
+    });
+
+    /** POST /admin/skus/:skuId/chip-keys: attach the keys to a unit's chip. */
+    addChipKeys: RequestHandler = asyncHandler(async (req, res) => {
+        const { access, correlationId } = await this.mutation(req);
+        const dto = chipKeysBodySchema.parse(req.body);
+        res.json({
+            data: await this.service.addChipKeys(access, req.params.skuId as string, dto, correlationId),
+        });
+    });
+
+    /** GET /admin/skus/chip-report: units whose chip cannot be verified by tap. */
+    chipReport: RequestHandler = asyncHandler(async (req, res) => {
+        const access = await this.access(req);
+        const query = chipReportQuerySchema.parse(req.query);
+        const { items, meta } = await this.service.chipReport(access, query);
+        res.json({ data: items, meta });
     });
 
     /** PATCH /admin/skus/:skuId — edit one unit's record. */

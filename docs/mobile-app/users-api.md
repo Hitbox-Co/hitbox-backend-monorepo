@@ -10,6 +10,7 @@ switch.
 | `PATCH` | `/api/v1/users/me` | required | Edit my profile, including `profileVisibility` |
 | `GET` | `/api/v1/users/:id` | optional | A collector's profile (public **or** private) |
 | `GET` | `/api/v1/users/handle/:handle` | optional | The same, found by handle |
+| `GET` `POST` `PATCH` `DELETE` | `/api/v1/users/me/addresses…` | required | My address book: see [addresses-api.md](addresses-api.md) |
 
 Related: a collector's items are [collections-api.md](collections-api.md)
 (`GET /collections/user/:userId`). Following is [follows-api.md](follows-api.md).

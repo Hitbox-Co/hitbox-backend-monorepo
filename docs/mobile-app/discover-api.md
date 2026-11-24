@@ -55,10 +55,11 @@ The same shape is used by the hero, Trending now, Latest drops, "View all" and s
   "artist": {                             // drop's artist, else its collection's artist
     "id": "a91e…", "name": "STUDIO NOVA", "slug": "studio-nova"
   },
-  "price": {                              // base price of the default market; null if none
+  "price": {                              // base price of ?marketId (that market only), else the default market; null if none
     "amount": "480.00",                   // decimal string, "0" when free
     "currency": "USD",
-    "isFree": false
+    "isFree": false,
+    "marketId": "7c1d…"                    // the market this price is in
   },
   "totalSupply": 200,                     // "Edition of 200"
   "mintedCount": 42,                      // "042 / 100" = mintedCount / totalSupply
@@ -109,6 +110,7 @@ The whole screen in **one round-trip**. The sections are queried in parallel.
 | Param | Values | Default |
 |---|---|---|
 | `category` | `cards` `figures` `apparel` `posters` `digital` `other` | none (All Items) |
+| `marketId` | uuid of a market from `GET /markets` | none: unfiltered, default market's price. With one: only drops priced there. See [Market selection](#market-selection) |
 
 `category` narrows the three drop sections. `creators` is the same for every chip.
 
@@ -142,6 +144,7 @@ to the `GET /discover` hero only, because a padded list cannot be paginated
 consistently.
 | `category` | `cards` `figures` `apparel` `posters` `digital` `other` | none |
 | `search` | 1–100 chars, case-insensitive match on name | none |
+| `marketId` | uuid of a market from `GET /markets` | none: unfiltered, default market's price. With one: only drops priced there. See [Market selection](#market-selection) |
 | `page` | int ≥ 1 | `1` |
 | `limit` | int 1–50 | `20` |
 
@@ -290,6 +293,24 @@ avatar can take up to one cache TTL to show up. `isWishlisted` is **not** cached
 It is looked up for each request after the cached rows are read.
 
 ---
+
+## Market selection
+
+Send the buyer's market on this route as **`?marketId=<uuid>`** (an id from
+`GET /markets`). It is the *region*: the app sends the same id on every screen and
+to `/checkout/quote` and `/checkout`.
+
+- **Only drops priced in that market are listed.** A drop with no active base
+  price in the selected market is left out, and `meta.total` and paging count only
+  the drops that remain. Changing the market changes the list and every price.
+- Each card's `price` is that market's price (`amount`, `currency`, `isFree`), and
+  `price.marketId` is the selected market.
+- **No `marketId`**, or one that is not a uuid, unknown or an inactive market:
+  **ignored, never an error.** The list is unfiltered and shows the default
+  market's price, exactly as before.
+- Sorting, filters, paging and caching headers are unchanged.
+- Counts and sections follow the filter: for example, `featured` can hold fewer
+  than 10 cards in a market where fewer featured drops are sold.
 
 ## Known limitations
 
