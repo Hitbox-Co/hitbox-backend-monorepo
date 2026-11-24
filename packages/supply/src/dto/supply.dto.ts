@@ -340,8 +340,8 @@ export interface SupplyBatchResponse {
  * `uid` is the raw chip UID. It is hashed and encrypted on the way in and is
  * never stored, logged or returned in the clear — see the tag cipher port.
  */
-/** Optional on a manifest row; the rules themselves are the shared chip rules. */
-const chipKey = chipKeyField.optional();
+/** Required on every manifest row: a chip registered without its keys can never be verified by tap. */
+const chipKey = chipKeyField;
 
 export const manifestRowSchema = z.object({
     /** Hex UID as the vendor prints it; separators are tolerated and stripped. */
@@ -363,7 +363,7 @@ export const manifestRowSchema = z.object({
     key0: chipKey,
     key1: chipKey,
     key2: chipKey,
-}).superRefine((row, ctx) => refineChip(row, ctx, { keysRequired: false }));
+}).superRefine((row, ctx) => refineChip(row, ctx, { keysRequired: true }));
 export type ManifestRow = z.infer<typeof manifestRowSchema>;
 
 /** True when a manifest row carries the chip's keys. */

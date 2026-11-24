@@ -423,6 +423,17 @@ export class SupplyRepository {
     }
 
     /**
+     * How many of these chips have no ACTIVE key row. A unit minted around such
+     * a chip could never be verified by tap, so accept refuses them.
+     */
+    countChipsWithoutKeys(tx: Prisma.TransactionClient, nfcTagIds: string[]): Promise<number> {
+        if (nfcTagIds.length === 0) return Promise.resolve(0);
+        return tx.nfcTag.count({
+            where: { id: { in: nfcTagIds }, keys: { none: { status: 'ACTIVE' } } },
+        });
+    }
+
+    /**
      * Points each chip at the unit minted around it. One statement rather
      * than one update per chip: the unit already names its chip
      * (`Sku.currentNfcTagId`), so the join is the whole mapping.

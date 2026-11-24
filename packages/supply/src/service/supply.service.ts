@@ -612,6 +612,20 @@ export class SupplyService {
                 groups.set(chip.variantId, group);
             }
 
+            // Keys are mandatory for every chip that becomes a unit: without them a
+            // tap can never be verified. Chips registered before keys were required
+            // (or keyed later) must have them attached first.
+            const keyless = await this.deps.supply.countChipsWithoutKeys(tx, chips.map((chip) => chip.id));
+            if (keyless > 0) {
+                throw AppError.conflict(
+                    `${keyless} registered chip(s) have no keys, so their units could never be verified by tap. ` +
+                    'Attach the keys first (POST /admin/supply/batches/:batchId/tag-keys generates them, or ' +
+                    're-register the chips with their keys), then accept.',
+                    SUPPLY_ERROR_CODES.CHIP_KEYS_MISSING,
+                    { chipsWithoutKeys: keyless },
+                );
+            }
+
             await minter.assertMintable({
                 productId: dropId,
                 groups: [...groups].map(([variantId, ids]) => ({ variantId, count: ids.length })),

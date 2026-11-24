@@ -276,32 +276,35 @@ The API takes JSON. The portal parses a CSV file in the browser and sends JSON.
 for a consignment of Red/S 3 · Red/M 3 · Red/L 3:
 
 ```csv
-uid,variant_code,qc_status,qc_notes
-04:A1:B2:C3:D4:E5:01,TEE-RED-S,PASSED,
-04:A1:B2:C3:D4:E5:02,TEE-RED-S,PASSED,
-04:A1:B2:C3:D4:E5:03,TEE-RED-S,PASSED,
-04A1B2C3D4E504,TEE-RED-M,PASSED,
-04A1B2C3D4E505,TEE-RED-M,PASSED,
-04A1B2C3D4E506,TEE-RED-M,FAILED,antenna cracked during heat press
-04-A1-B2-C3-D4-E5-07,TEE-RED-L,PASSED,
-04-A1-B2-C3-D4-E5-08,TEE-RED-L,,
-04-A1-B2-C3-D4-E5-09,TEE-RED-L,PENDING,re-test on arrival
+uid,key0,key1,key2,variant_code,qc_status,qc_notes
+04:A1:B2:C3:D4:E5:01,<key0>,<key1>,<key2>,TEE-RED-S,PASSED,
+04:A1:B2:C3:D4:E5:02,<key0>,<key1>,<key2>,TEE-RED-S,PASSED,
+04:A1:B2:C3:D4:E5:03,<key0>,<key1>,<key2>,TEE-RED-S,PASSED,
+04A1B2C3D4E504,<key0>,<key1>,<key2>,TEE-RED-M,PASSED,
+04A1B2C3D4E505,<key0>,<key1>,<key2>,TEE-RED-M,PASSED,
+04A1B2C3D4E506,<key0>,<key1>,<key2>,TEE-RED-M,FAILED,antenna cracked during heat press
+04-A1-B2-C3-D4-E5-07,<key0>,<key1>,<key2>,TEE-RED-L,PASSED,
+04-A1-B2-C3-D4-E5-08,<key0>,<key1>,<key2>,TEE-RED-L,,
+04-A1-B2-C3-D4-E5-09,<key0>,<key1>,<key2>,TEE-RED-L,PENDING,re-test on arrival
 ```
+
+(`<key0>` etc. stand for the 32-hex keys the vendor wrote onto that chip.)
 
 **Drop without variants** — [examples/chip-manifest-figure-no-variants.csv](examples/chip-manifest-figure-no-variants.csv):
 
 ```csv
-uid,qc_status,qc_notes
-04F00D0000A001,PASSED,
-04F00D0000A002,PASSED,
-04F00D0000A003,PASSED,
-04F00D0000A004,FAILED,no response at 2cm
-04F00D0000A005,PASSED,
+uid,key0,key1,key2,qc_status,qc_notes
+04F00D0000A001,<key0>,<key1>,<key2>,PASSED,
+04F00D0000A002,<key0>,<key1>,<key2>,PASSED,
+04F00D0000A003,<key0>,<key1>,<key2>,PASSED,
+04F00D0000A004,<key0>,<key1>,<key2>,FAILED,no response at 2cm
+04F00D0000A005,<key0>,<key1>,<key2>,PASSED,
 ```
 
 | Column | Required | Rules |
 |---|---|---|
-| `uid` | ✅ | The chip's hardware UID in hex, 8–64 characters after cleaning. `:`, `-` and spaces are stripped and letters are upper-cased, so `04:a1:b2…`, `04-A1-B2…` and `04A1B2…` are the same chip. Must be unique in the file and across the whole platform. |
+| `key0`, `key1`, `key2` | ✅ | The chip's three AES-128 keys as the vendor wrote them onto it: **32 hex each, all three required, all different**. **A row without them is refused**: a chip with no keys can never be verified by tap. They are never shown again. |
+| `uid` | ✅ | The chip's hardware UID in hex, **14 characters (7 bytes)** after cleaning. `:`, `-` and spaces are stripped and letters are upper-cased, so `04:a1:b2…`, `04-A1-B2…` and `04A1B2…` are the same chip. Must be unique in the file and across the whole platform. |
 | `variant_code` | for a by-variant drop | One of the consignment's `lines[].variantCode`. The portal maps it to `variantId`. Leave the column out for a drop without variants. |
 | `qc_status` | | `PASSED` · `FAILED` · `PENDING`. Empty means `PENDING`. **FAILED chips are not turned into units** on accept. |
 | `qc_notes` | | ≤ 500 characters |
@@ -317,9 +320,9 @@ The first three CSV rows above become:
 ```json
 {
   "tags": [
-    { "uid": "04:A1:B2:C3:D4:E5:01", "variantId": "<id of TEE-RED-S>", "qcStatus": "PASSED" },
-    { "uid": "04:A1:B2:C3:D4:E5:02", "variantId": "<id of TEE-RED-S>", "qcStatus": "PASSED" },
-    { "uid": "04:A1:B2:C3:D4:E5:03", "variantId": "<id of TEE-RED-S>", "qcStatus": "PASSED" }
+    { "uid": "04:A1:B2:C3:D4:E5:01", "key0": "…", "key1": "…", "key2": "…", "variantId": "<id of TEE-RED-S>", "qcStatus": "PASSED" },
+    { "uid": "04:A1:B2:C3:D4:E5:02", "key0": "…", "key1": "…", "key2": "…", "variantId": "<id of TEE-RED-S>", "qcStatus": "PASSED" },
+    { "uid": "04:A1:B2:C3:D4:E5:03", "key0": "…", "key1": "…", "key2": "…", "variantId": "<id of TEE-RED-S>", "qcStatus": "PASSED" }
   ],
   "dryRun": true
 }
@@ -328,7 +331,8 @@ The first three CSV rows above become:
 | Field | Notes |
 |---|---|
 | `tags[]` | 1 – 1,000 rows per call. Split larger files into several calls. |
-| `tags[].uid` | As in the CSV; cleaned by the server |
+| `tags[].uid` | As in the CSV; cleaned by the server. 14 hex characters |
+| `tags[].key0`, `key1`, `key2` | **Required.** 32 hex each, all different. Wrapped by the server; never returned, logged or audited |
 | `tags[].variantId` | **Required** when the consignment has `lines`, and must be one of them. **Not allowed** when it has none. |
 | `tags[].qcStatus` | Optional; default `PENDING` |
 | `tags[].qcNotes` | Optional |

@@ -225,7 +225,7 @@ own, and the engine confines them to it.
 |---|---|---|
 | `count` | int 1–1000 | required |
 | `chips` | object[] | one chip per unit, in serial order: `{ uid, key0, key1, key2 }`, see [the chip](#the-chip-one-shape-on-every-route). **Exactly `count` entries or omit entirely** |
-| `tagIds` | string[] | **Deprecated.** A bare UID: the unit gets no `NfcTag` and no keys, so a tap on it can **never** be verified. Accepted for one release, logged, and reported as `chipsVerifiable: 0`. Not allowed together with `chips` |
+| `tagIds` | string[] | **Removed.** A bare UID has no keys, so a tap on it can never be verified. Sending it is `422 VALIDATION_ERROR` ("Bare tag UIDs are no longer accepted…"). Use `chips` |
 | `vendorId` | uuid | who provisioned the tags |
 | `provisioningBatchId` | string | recorded, not verified — tags routinely arrive before the supply row exists |
 | `isActive` | boolean | default `true`; mint `false` to stage units ahead of a release |
@@ -262,7 +262,11 @@ in the table that proves authenticity.
 
 `withKeys` and `chipsVerifiable` are **counts**: keys are never returned (nor
 logged, nor audited). `chipsVerifiable` is how many of the new units a tap can be
-verified against; it is `0` for the deprecated `tagIds` form.
+verified against: every chip carries its keys, so it equals `withKeys`.
+
+**Keys are mandatory for any chip.** Units can still be minted with no chip at all
+(omit `chips`: `tagsBound: 0`) and bound later, but a chip can never be added
+without its three keys, on any route.
 
 Units are created `UNCLAIMED`, with `tagLifecycleState` of `BOUND` when a chip
 was supplied and `UNPROVISIONED` otherwise. `ACTIVE` is reached on first claim,
@@ -342,7 +346,7 @@ per line), because that is what actually arrives with a box of chips:
 | `bindings[].serialNumber` | position in the edition — **or** |
 | `bindings[].skuCode` | the full code. Exactly one of the two per row |
 | `bindings[].uid`, `key0`, `key1`, `key2` | the chip, inline: see [the chip](#the-chip-one-shape-on-every-route) |
-| `bindings[].tagId` | **Deprecated** bare UID (no keys): use `uid` and the three keys. Not allowed on a row that has `uid` |
+| `bindings[].tagId` | **Removed** (a bare UID has no keys): `422`. Every row needs `uid` and all three keys |
 | `vendorId` / `provisioningBatchId` | applied to every unit in the batch |
 | `replace` | allow overwriting a tag already bound. Default `false` |
 
@@ -364,8 +368,7 @@ Up to **1000 bindings per call**. A 10,000-unit edition is ten calls.
 ```
 
 `withKeys` and `chipsVerifiable` are counts. A keyed chip's UID is **not** echoed
-back (the deprecated `tagId` form still echoes `tagId`, and reports
-`verifiable: false`).
+back.
 
 ### Five rules that make this safe
 
@@ -426,8 +429,8 @@ re-tagged after repair. A single unit takes one `chip` (an object, not an array)
 }
 ```
 
-`tagId` (a bare UID) is **deprecated** here too, and `chip` and `tagId` cannot be
-sent together. Returns the full unit detail, shaped for your grants (6).
+`chip` is **required**, with its keys. `tagId` (a bare UID) is removed: `422`.
+Returns the full unit detail, shaped for your grants (6).
 
 **Re-tagging.** Sending a *different* chip for a unit that has one needs
 `replace: true`. The old chip is then **REVOKED** and its keys revoked, so a tap
@@ -466,11 +469,12 @@ Where the chip goes:
 | `POST /admin/products/:productId/skus/tags` | `bindings[]` carry `uid` + keys inline (replace `tagId`) |
 | `PATCH /admin/skus/:skuId/tag` | `chip` (replaces `tagId`) |
 
-**The deprecated forms** (`tagIds`, `tagId`) still work for one release: they
-log a warning and are reported as `chipsVerifiable: 0`. They write only the bare
-UID, so the unit has no `NfcTag` and no keys and a tap on it answers `UNKNOWN_TAG`
-or `NO_KEYS`. Move to `chips` now; the deprecated forms will then be removed (or
-refused for NTAG 424 DNA drops).
+**Without keys a chip cannot be added: there is no keyless path.** The bare-UID
+forms (`tagIds`, `tagId`) are removed and answer `422 VALIDATION_ERROR`. The same
+holds for the consignment manifest, where every row now needs its keys, and
+Accepting a consignment is refused while any of its chips has no keys
+(`409 SUPPLY_CHIP_KEYS_MISSING`). Units that already carry a bare UID from before
+are fixed with `chip-keys` (below).
 
 `Sku.currentNfcTagId` is the **source of truth** for a unit's chip. The plain
 `Sku.tagId` is kept only as a mirror of its UID (so searches, filters and the
@@ -850,7 +854,7 @@ All errors use the platform envelope:
 | `400` | `PRODUCTS_MINTING_UNAVAILABLE` | a `skus` block arrived but no minting provider is wired in |
 | `400` | `PRODUCTS_SUPPLY_EXCEEDED` | `skus.count` exceeds the drop's own `totalSupply` in the same payload |
 | `401` | `AUTH_*` | missing or invalid session token |
-| `403` | `SKUS_FORBIDDEN` | reached the route but holds no operator-grade `collectible-instance` grant — or sent `chips` / `tagIds` without `nfc-tag-claim:manage` |
+| `403` | `SKUS_FORBIDDEN` | reached the route but holds no operator-grade `collectible-instance` grant — or sent `chips` without `nfc-tag-claim:manage` |
 | `403` | `AUTHZ_FORBIDDEN` | the route's capability check failed outright |
 | `404` | `SKUS_NOT_FOUND` | no such unit, **or** it belongs to a drop outside your organization |
 | `404` | `SKUS_PRODUCT_NOT_FOUND` | no such drop, **or** outside your organization |

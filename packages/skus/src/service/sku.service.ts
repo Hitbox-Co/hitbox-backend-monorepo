@@ -66,12 +66,10 @@ const REPLACEABLE_TAG_STATES: TagLifecycleState[] = [
     TagLifecycleState.DISPUTED,
 ];
 
-/** One unit and what is being bound to it: a keyed chip, or (deprecated) a bare UID. */
+/** One unit and the keyed chip being bound to it. */
 interface BindEntry {
     target: TagBindTarget;
-    chip?: { uid: string; key0: string; key1: string; key2: string };
-    /** @deprecated bare UID: no NfcTag, no keys. */
-    legacyTagId?: string;
+    chip: { uid: string; key0: string; key1: string; key2: string };
 }
 
 interface SkuServiceDeps {
@@ -158,7 +156,7 @@ export class SkuService {
         // unit it goes on. A Drop Manager can mint any edition on the platform
         // and still cannot write a tag UID — which is the point of keeping
         // `nfc-tag-claim` a separate resource.
-        if ((dto.tagIds || dto.chips) && !access.canManageTags) {
+        if (dto.chips && !access.canManageTags) {
             throw AppError.forbidden(
                 'Binding NFC tags requires the nfc-tag-claim:manage capability. ' +
                 'Mint the units without `chips` and have tag custody bind them.',
@@ -166,12 +164,6 @@ export class SkuService {
             );
         }
         if (dto.chips) this.requireChipRegistry();
-        if (dto.tagIds) {
-            this.deps.logger.warn(
-                { productId, count: dto.tagIds.length },
-                'deprecated: units minted with bare tagIds get no NfcTag and no keys, so taps on them can never be verified. Send chips ({ uid, key0, key1, key2 }).',
-            );
-        }
 
         if (dto.variantId && !(await this.deps.skus.variantBelongsTo(dto.variantId, productId))) {
             throw AppError.badRequest(
@@ -199,8 +191,8 @@ export class SkuService {
         // Pre-checked only for a usable error message — the unique index on
         // `Sku.tagId` is the authority, and a tag bound between this read and
         // the insert still fails, as it must.
-        if (dto.tagIds || dto.chips) {
-            const bound = await this.deps.skus.findBoundTags(dto.tagIds ?? dto.chips!.map((chip) => chip.uid));
+        if (dto.chips) {
+            const bound = await this.deps.skus.findBoundTags(dto.chips.map((chip) => chip.uid));
             if (bound.length > 0) {
                 throw AppError.conflict(
                     `Already bound to another unit: ${bound
@@ -230,7 +222,7 @@ export class SkuService {
                         count: dto.count,
                         variantId: dto.variantId ?? null,
                         // The plain UID is kept as a mirror of the chip's UID.
-                        tagIds: dto.tagIds ?? dto.chips?.map((chip) => chip.uid),
+                        tagIds: dto.chips?.map((chip) => chip.uid),
                         nfcTagIds: attached?.map((chip) => chip.nfcTagId),
                         vendorId: dto.vendorId ?? null,
                         provisioningBatchId: dto.provisioningBatchId ?? null,
@@ -433,9 +425,10 @@ export class SkuService {
                 problems.push(`${label}: not a unit of this drop`);
                 continue;
             }
-            const entry: BindEntry = binding.uid !== undefined
-                ? { target, chip: { uid: binding.uid, key0: binding.key0!, key1: binding.key1!, key2: binding.key2! } }
-                : { target, legacyTagId: binding.tagId! };
+            const entry: BindEntry = {
+                target,
+                chip: { uid: binding.uid!, key0: binding.key0!, key1: binding.key1!, key2: binding.key2! },
+            };
             const check = this.bindProblem(entry, dto.replace);
             if (check) {
                 problems.push(`${label}: ${check}`);
@@ -452,7 +445,7 @@ export class SkuService {
         }
 
         await this.assertTagsFree(
-            entries.map((entry) => entry.chip?.uid ?? entry.legacyTagId!),
+            entries.map((entry) => entry.chip.uid),
             new Set(entries.map((entry) => entry.target.skuCode)),
         );
 
@@ -475,15 +468,14 @@ export class SkuService {
             items: outcome.items.map((item) => ({
                 skuCode: item.target.skuCode,
                 serialNumber: item.target.serialNumber,
-                // A keyed chip's UID is not echoed back; the deprecated form's is.
-                ...(item.legacyTagId ? { tagId: item.legacyTagId } : {}),
+                // A chip's UID is not echoed back.
                 replaced: item.replaced,
                 verifiable: item.verifiable,
             })),
         };
     }
 
-    /** Binds one chip to one unit (or, deprecated, one bare UID). */
+    /** Binds one keyed chip to one unit. */
     async bindTag(
         access: SkuAccess,
         skuId: string,
@@ -501,9 +493,7 @@ export class SkuService {
             throw AppError.notFound('Unit not found', SKUS_ERROR_CODES.NOT_FOUND);
         }
 
-        const entry: BindEntry = dto.chip
-            ? { target, chip: dto.chip }
-            : { target, legacyTagId: dto.tagId! };
+        const entry: BindEntry = { target, chip: dto.chip! };
 
         const problem = this.bindProblem(entry, dto.replace);
         if (problem) {
@@ -515,7 +505,7 @@ export class SkuService {
             );
         }
 
-        await this.assertTagsFree([dto.chip?.uid ?? dto.tagId!], new Set([target.skuCode]));
+        await this.assertTagsFree([dto.chip!.uid], new Set([target.skuCode]));
 
         await this.applyBindings({
             access,
@@ -725,37 +715,28 @@ export class SkuService {
         /** Set for a single-unit bind: the audit row then names the unit. */
         skuId?: string | undefined;
     }): Promise<{
-        items: { target: TagBindTarget; legacyTagId: string | undefined; replaced: boolean; verifiable: boolean }[];
+        items: { target: TagBindTarget; replaced: boolean; verifiable: boolean }[];
         withKeys: number;
     }> {
-        const chipEntries = input.entries.filter((entry) => entry.chip);
-        const legacyEntries = input.entries.filter((entry) => !entry.chip);
+        const chipEntries = input.entries;
+        // No chip registry means no keys can be stored: refuse, never write a bare UID.
+        const registry = this.requireChipRegistry();
 
-        if (legacyEntries.length > 0) {
-            this.deps.logger.warn(
-                { productId: input.productId, count: legacyEntries.length },
-                'deprecated: bare tagId bindings get no NfcTag and no keys, so taps on them can never be verified. Send chips with their keys.',
-            );
-        }
-        const registry = chipEntries.length > 0 ? this.requireChipRegistry() : null;
-
-        let results: { target: TagBindTarget; legacyTagId: string | undefined; replaced: boolean; verifiable: boolean }[];
+        let results: { target: TagBindTarget; replaced: boolean; verifiable: boolean }[];
         try {
             results = await this.deps.skus.runInTransaction(async (tx) => {
-                const attached = registry
-                    ? await registry.attachWithin(tx, {
-                        chips: chipEntries.map((entry) => ({ ...entry.chip!, variantId: entry.target.variantId })),
-                        forSkuIds: chipEntries.map((entry) => entry.target.id),
-                        createdById: input.access.userId,
-                    })
-                    : [];
+                const attached = await registry.attachWithin(tx, {
+                    chips: chipEntries.map((entry) => ({ ...entry.chip, variantId: entry.target.variantId })),
+                    forSkuIds: chipEntries.map((entry) => entry.target.id),
+                    createdById: input.access.userId,
+                });
 
                 const out: typeof results = [];
                 const binds: Parameters<SkuRepository['bindChipsWithin']>[1] = [];
                 const revoke: string[] = [];
 
                 chipEntries.forEach((entry, index) => {
-                    const chip = entry.chip!;
+                    const chip = entry.chip;
                     const resolved = attached[index]!;
                     const current = entry.target.currentNfcTagId;
                     let replaced = false;
@@ -792,34 +773,15 @@ export class SkuService {
                         vendorId: input.vendorId,
                         provisioningBatchId: input.provisioningBatchId,
                     });
-                    out.push({ target: entry.target, legacyTagId: undefined, replaced, verifiable: true });
+                    out.push({ target: entry.target, replaced, verifiable: true });
                 });
 
                 if (binds.length > 0) await this.deps.skus.bindChipsWithin(tx, binds);
                 // After the unit points at its new chip: the old one stops verifying.
                 for (const nfcTagId of revoke) {
-                    await registry!.revokeWithin(tx, { nfcTagId, reason: 'Replaced: the unit was re-tagged with another chip.' });
+                    await registry.revokeWithin(tx, { nfcTagId, reason: 'Replaced: the unit was re-tagged with another chip.' });
                 }
 
-                if (legacyEntries.length > 0) {
-                    await this.deps.skus.bindTagsWithin(
-                        tx,
-                        legacyEntries.map((entry) => ({
-                            skuId: entry.target.id,
-                            tagId: entry.legacyTagId!,
-                            vendorId: input.vendorId,
-                            provisioningBatchId: input.provisioningBatchId,
-                        })),
-                    );
-                    for (const entry of legacyEntries) {
-                        out.push({
-                            target: entry.target,
-                            legacyTagId: entry.legacyTagId,
-                            replaced: entry.target.tagId !== null,
-                            verifiable: false,
-                        });
-                    }
-                }
                 return out;
             });
         } catch (error) {
@@ -839,7 +801,6 @@ export class SkuService {
                 source: input.skuId ? 'bind' : 'bulk-bind',
                 units: results.length,
                 withKeys: chipEntries.length,
-                legacyUidOnly: legacyEntries.length,
                 replaced: results.filter((item) => item.replaced).length,
                 unitCodes: results.slice(0, 200).map((item) => item.target.skuCode),
             },
@@ -850,12 +811,7 @@ export class SkuService {
 
     /** Why this binding cannot proceed (before anything is written), or null. */
     private bindProblem(entry: BindEntry, replace: boolean): string | null {
-        const uid = entry.chip?.uid ?? entry.legacyTagId!;
-        if (entry.legacyTagId !== undefined && entry.target.currentNfcTagId) {
-            // A bare UID cannot replace a verifiable chip: that would leave
-            // `currentNfcTagId` pointing at the old chip while `tagId` said otherwise.
-            return 'already has a chip; send chip with its keys and replace: true';
-        }
+        const uid = entry.chip.uid;
         // A unit with a linked chip is decided after the chip is resolved
         // (an idempotent re-send of the same chip is fine without replace).
         if (entry.target.currentNfcTagId) return null;

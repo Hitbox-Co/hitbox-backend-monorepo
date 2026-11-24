@@ -546,12 +546,29 @@ configured on the deployment (see [13](#13-deployment)).
 {
   "dryRun": true,
   "tags": [
-    { "uid": "04:A3:9B:2C:5D:6E:80" },
-    { "uid": "04A39B2C5D6E81", "qcStatus": "PASSED" },
-    { "uid": "04-a3-9b-2c-5d-6e-82", "qcStatus": "FAILED", "qcNotes": "Antenna open circuit." }
+    { "uid": "04:A3:9B:2C:5D:6E:80", "key0": "000102030405060708090A0B0C0D0E0F", "key1": "101112131415161718191A1B1C1D1E1F", "key2": "202122232425262728292A2B2C2D2E2F" },
+    { "uid": "04A39B2C5D6E81", "key0": "…", "key1": "…", "key2": "…", "qcStatus": "PASSED" },
+    { "uid": "04-a3-9b-2c-5d-6e-82", "key0": "…", "key1": "…", "key2": "…", "qcStatus": "FAILED", "qcNotes": "Antenna open circuit." }
   ]
 }
 ```
+
+#### Keys are mandatory
+
+**Every row must carry `key0`, `key1` and `key2`** (32 hex each, all three, all
+different), and its `uid` must be 14 hex characters (7 bytes, an NTAG 424 DNA).
+A row without keys is `422 VALIDATION_ERROR` and the whole manifest is refused:
+a chip without its keys can never be verified by tap. The keys are wrapped by the
+KMS and stored as the chip's ACTIVE `NfcTagKey` row in the same transaction;
+responses and the audit trail carry only a count (`withKeys`). Without a key
+wrapper on the deployment no chip can be registered (`503
+SUPPLY_KEY_WRAPPER_UNAVAILABLE`).
+
+Chips registered **before** keys were required may still have none. Such a
+consignment cannot be accepted: `ACCEPTED` answers `409 SUPPLY_CHIP_KEYS_MISSING`
+(`details.chipsWithoutKeys`) until the keys are attached
+(`POST /admin/supply/batches/:batchId/tag-keys` generates them, or re-register the
+chips with their keys).
 
 Up to **1000 rows** per call (`SUPPLY_MANIFEST_MAX`) — matched to a physical
 carton, and registered in one transaction. A 10,000-chip consignment arrives as
@@ -565,8 +582,8 @@ keys exactly as a manifest chip does, with **no consignment** (`supplyBatchId` i
 `null`, and `batch` is `null` on chip reads). The chip inventory now also returns
 `hasActiveKeys` and `verifiable` on every chip. See
 [sku-api.md](sku-api.md#the-chip-one-shape-on-every-route) for the request shape.
-A keyed UID is 14 hex characters (7 bytes) here too: the manifest enforces the
-same rule when a row carries keys.
+A UID is 14 hex characters (7 bytes) here too: the manifest enforces the same
+rule, and keys are mandatory on both.
 
 #### Variant per row
 
@@ -920,6 +937,7 @@ Standard envelope:
 | `SUPPLY_TAG_UID_DUPLICATED` | 400 | The manifest repeats a UID within itself |
 | `SUPPLY_NO_CHANGES` | 400 | A body that would change nothing |
 | `SUPPLY_TAG_KEY_UNAVAILABLE` | 503 | No chip-UID key configured on this deployment |
+| `SUPPLY_CHIP_KEYS_MISSING` | 409 | Accept refused: some chips have no keys (`details.chipsWithoutKeys`) |
 | `SUPPLY_VARIANT_LINES_REQUIRED` | 422 | Booking for a `REQUIRED`-variant drop without `lines` |
 | `PRODUCTS_VARIANTS_REQUIRED` | 409 | Booking for a `REQUIRED`-variant drop that has no live variant |
 | `SUPPLY_LINES_QUANTITY_MISMATCH` | 400 | `PATCH …/lines`: the lines do not add up to the declared quantity |

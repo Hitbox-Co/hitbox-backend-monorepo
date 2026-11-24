@@ -81,14 +81,20 @@ describe('the decision body', () => {
     });
 });
 
+const KEYS = {
+    key0: '000102030405060708090A0B0C0D0E0F',
+    key1: '101112131415161718191A1B1C1D1E1F',
+    key2: '202122232425262728292A2B2C2D2E2F',
+};
+
 describe('the manifest row', () => {
     it('strips separators and upper-cases a UID', () => {
-        const result = manifestRowSchema.safeParse({ uid: '04:a3:9b:2c:5d:6e:80' });
+        const result = manifestRowSchema.safeParse({ uid: '04:a3:9b:2c:5d:6e:80', ...KEYS });
         expect(result.success && result.data.uid).toBe('04A39B2C5D6E80');
     });
 
     it('accepts the same UID written three ways as one value', () => {
-        const parse = (uid: string) => manifestRowSchema.parse({ uid }).uid;
+        const parse = (uid: string) => manifestRowSchema.parse({ uid, ...KEYS }).uid;
         expect(parse('04-A3-9B-2C-5D-6E-80')).toBe(parse('04 a3 9b 2c 5d 6e 80'));
         expect(parse('04A39B2C5D6E80')).toBe(parse('04:a3:9b:2c:5d:6e:80'));
     });

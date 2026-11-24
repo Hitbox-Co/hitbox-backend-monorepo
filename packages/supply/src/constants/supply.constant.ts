@@ -79,6 +79,8 @@ export const SUPPLY_ERROR_CODES = {
     /** The chip already has keys on file and the request sent different ones. */
     TAG_KEYS_MISMATCH: 'SUPPLY_TAG_KEYS_MISMATCH',
     // ── Booking a consignment ────────────────────────────────────────────────
+    /** Accept refused: some registered chips have no ACTIVE keys, so their units could never be verified by tap. */
+    CHIP_KEYS_MISSING: 'SUPPLY_CHIP_KEYS_MISSING',
     /** The drop's type needs variants, so the booking must carry `lines`. */
     VARIANT_LINES_REQUIRED: 'SUPPLY_VARIANT_LINES_REQUIRED',
     /** Lines cannot be changed as asked (a registered chip is on a variant the new lines drop). */

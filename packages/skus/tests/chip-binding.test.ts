@@ -60,8 +60,14 @@ describe('mint takes chips', () => {
         expect(mintSkusSchema.safeParse({ count: 1, chips: [chip()], tagIds: [UID_A] }).success).toBe(false);
     });
 
-    it('still accepts the deprecated tagIds', () => {
-        expect(mintSkusSchema.safeParse({ count: 1, tagIds: [UID_A] }).success).toBe(true);
+    it('refuses bare tagIds with a clear reason: a chip cannot be added without its keys', () => {
+        const result = mintSkusSchema.safeParse({ count: 1, tagIds: [UID_A] });
+        expect(result.success).toBe(false);
+        expect(JSON.stringify(result)).toContain('no longer accepted');
+    });
+
+    it('units can still be minted bare (no chips at all); the chips come later, with keys', () => {
+        expect(mintSkusSchema.safeParse({ count: 3 }).success).toBe(true);
     });
 
     it('does not echo a key in a validation message', () => {
@@ -71,9 +77,9 @@ describe('mint takes chips', () => {
 });
 
 describe('PATCH /admin/skus/:skuId/tag takes one chip', () => {
-    it('accepts chip, or the deprecated tagId, not both and not neither', () => {
+    it('requires the chip with its keys; a bare tagId is refused', () => {
         expect(bindTagSchema.safeParse({ chip: chip() }).success).toBe(true);
-        expect(bindTagSchema.safeParse({ tagId: UID_A }).success).toBe(true);
+        expect(bindTagSchema.safeParse({ tagId: UID_A }).success).toBe(false);
         expect(bindTagSchema.safeParse({ chip: chip(), tagId: UID_A }).success).toBe(false);
         expect(bindTagSchema.safeParse({}).success).toBe(false);
         expect(bindTagSchema.safeParse({ chip: { uid: UID_A } }).success).toBe(false);
@@ -98,8 +104,8 @@ describe('bulk bind takes the chip inline on each binding', () => {
         ).toBe(false);
     });
 
-    it('still accepts the deprecated tagId form', () => {
-        expect(bulkBindTagsSchema.safeParse({ bindings: [{ serialNumber: 1, tagId: UID_A }] }).success).toBe(true);
+    it('refuses the bare tagId form', () => {
+        expect(bulkBindTagsSchema.safeParse({ bindings: [{ serialNumber: 1, tagId: UID_A }] }).success).toBe(false);
     });
 });
 
@@ -222,7 +228,6 @@ function build(opts: { targets?: ReturnType<typeof target>[]; registry?: boolean
         findForChipKeys: jest.fn(async () => targets),
         findDetail: jest.fn(async () => ({ id: 'sku-1', drop: { organizationId: null } })),
         bindChipsWithin: jest.fn(async () => undefined),
-        bindTagsWithin: jest.fn(async () => undefined),
         chipReport: jest.fn(async () => ({ total: 0, items: [] })),
     };
     const audit = { record: jest.fn(async () => undefined) };
@@ -271,12 +276,11 @@ describe('mint with chips', () => {
         for (const secret of [K0, K1, K2, UID_A]) expect(everything).not.toContain(secret);
     });
 
-    it('the deprecated tagIds still mint, with a warning, and report chipsVerifiable 0', async () => {
+    it('bare units mint without any chip, and touch no chip registry', async () => {
         const t = build();
-        const result = await t.service.mint(ACCESS, 'p1', { count: 1, tagIds: [UID_A], isActive: true } as never);
-        expect(result).toMatchObject({ tagsBound: 1, withKeys: 0, chipsVerifiable: 0 });
+        const result = await t.service.mint(ACCESS, 'p1', { count: 2, isActive: true } as never);
+        expect(result).toMatchObject({ minted: 2, tagsBound: 0, withKeys: 0, chipsVerifiable: 0 });
         expect(t.attachWithin).not.toHaveBeenCalled();
-        expect(JSON.stringify(t.logs)).toContain('deprecated');
         expect(t.audit.record).not.toHaveBeenCalled();
     });
 
@@ -321,21 +325,12 @@ describe('bulk bind', () => {
         expect(t.skus.bindChipsWithin).not.toHaveBeenCalled();
     });
 
-    it('the deprecated tagId form binds a bare UID, warns, and reports chipsVerifiable 0', async () => {
-        const t = build();
-        const dto = bulkBindTagsSchema.parse({ bindings: [{ serialNumber: 1, tagId: UID_A }] });
-        const result = await t.service.bulkBindTags(ACCESS, 'p1', dto);
-        expect(t.attachWithin).not.toHaveBeenCalled();
-        expect(t.skus.bindTagsWithin).toHaveBeenCalled();
-        expect(result).toMatchObject({ bound: 1, withKeys: 0, chipsVerifiable: 0 });
-        expect(result.items[0]).toMatchObject({ tagId: UID_A, verifiable: false });
-        expect(JSON.stringify(t.logs)).toContain('deprecated');
-    });
-
-    it('refuses a bare UID on a unit that already has a verifiable chip', async () => {
-        const t = build({ targets: [target({ currentNfcTagId: 'old', chipHasKeys: true, tagLifecycleState: 'BOUND' })] });
-        const dto = bulkBindTagsSchema.parse({ bindings: [{ serialNumber: 1, tagId: UID_B }], replace: true });
-        await expect(t.service.bulkBindTags(ACCESS, 'p1', dto)).rejects.toMatchObject({ statusCode: 409 });
+    it('is a 503 when no chip registry is wired: nothing is written', async () => {
+        const t = build({ registry: false });
+        await expect(t.service.bulkBindTags(ACCESS, 'p1', body())).rejects.toMatchObject({
+            statusCode: 503, code: 'SKUS_CHIP_REGISTRY_UNAVAILABLE',
+        });
+        expect(t.skus.bindChipsWithin).not.toHaveBeenCalled();
     });
 });
 

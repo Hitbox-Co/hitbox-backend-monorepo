@@ -18,6 +18,10 @@ import {
  * opposite of what it says, which on `?tagged=false` silently returns the
  * tagged units and on `?includeArchived=false` includes the archived ones.
  */
+/** Why `tagIds` / `tagId` are refused. */
+const BARE_UID_REMOVED =
+    'Bare tag UIDs are no longer accepted: a chip without its keys can never be verified by tap. Send the chip with its keys ({ uid, key0, key1, key2 }).';
+
 const booleanish = z
     .union([z.boolean(), z.enum(['true', 'false', '1', '0'])])
     .transform((value) => (typeof value === 'boolean' ? value : value === 'true' || value === '1'));
@@ -67,20 +71,16 @@ export const mintSkusSchema = z
         /** Optional variant every minted unit belongs to. Must be the product's own. */
         variantId: z.string().uuid().optional(),
         /**
-         * Tag UIDs to bind, in serial order. Either omit it entirely or supply
-         * exactly `count` of them — a short list would silently leave the tail
-         * of the batch untagged, and "silently" is not a property you want in
-         * the table that proves authenticity.
-         *
-         * Requires `nfc-tag-claim:manage`; minting alone is not enough.
+         * REMOVED. A bare UID has no keys, so a tap on it can never be verified;
+         * every chip is now added with its keys, through `chips`. Still parsed so
+         * that sending it is a clear 422 rather than an "unknown key".
          */
-        tagIds: z.array(tagId).min(1).max(SKU_MINT_MAX_BATCH).optional(),
+        tagIds: z.array(z.string()).optional(),
         /**
          * The chips to embed, in serial order: `{ uid, key0, key1, key2 }` each.
          * The keys are what makes a tap verifiable; a chip with no keys is
-         * refused. Either omit it, or supply exactly `count` of them. Replaces
-         * `tagIds` (deprecated: a bare UID can never be verified by tap).
-         * Requires `nfc-tag-claim:manage`.
+         * refused. Either omit it (units minted bare, chips bound later with their
+         * keys), or supply exactly `count` of them. Requires `nfc-tag-claim:manage`.
          */
         chips: z.array(chipSchema).min(1).max(SKU_MINT_MAX_BATCH).optional(),
         /**
@@ -94,18 +94,7 @@ export const mintSkusSchema = z
         isActive: z.boolean().default(true),
     })
     .strict()
-    .refine((value) => !(value.tagIds && value.chips), {
-        message: 'Send chips, or the deprecated tagIds, not both',
-        path: ['chips'],
-    })
-    .refine((value) => !value.tagIds || value.tagIds.length === value.count, {
-        message: 'tagIds must contain exactly `count` entries when supplied',
-        path: ['tagIds'],
-    })
-    .refine((value) => !value.tagIds || new Set(value.tagIds).size === value.tagIds.length, {
-        message: 'tagIds contains the same tag twice',
-        path: ['tagIds'],
-    })
+    .refine((value) => value.tagIds === undefined, { message: BARE_UID_REMOVED, path: ['tagIds'] })
     .refine((value) => !value.chips || value.chips.length === value.count, {
         message: 'chips must contain exactly `count` entries when supplied',
         path: ['chips'],
@@ -129,10 +118,10 @@ export type MintSkusDto = z.infer<typeof mintSkusSchema>;
  */
 export const bindTagSchema = z
     .object({
-        /** The chip: `{ uid, key0, key1, key2 }`. Replaces `tagId`. */
+        /** The chip, with its keys: `{ uid, key0, key1, key2 }`. Required. */
         chip: chipSchema.optional(),
-        /** @deprecated A bare UID cannot be verified by tap. Send `chip`. */
-        tagId: tagId.optional(),
+        /** REMOVED: a bare UID cannot be verified by tap. Parsed only to refuse it clearly. */
+        tagId: z.string().optional(),
         vendorId: z.string().uuid().optional(),
         provisioningBatchId: z.string().trim().min(1).max(120).optional(),
         /**
@@ -146,8 +135,9 @@ export const bindTagSchema = z
         replace: z.boolean().default(false),
     })
     .strict()
-    .refine((value) => (value.chip === undefined) !== (value.tagId === undefined), {
-        message: 'Send chip ({ uid, key0, key1, key2 }), or the deprecated tagId, not both',
+    .refine((value) => value.tagId === undefined, { message: BARE_UID_REMOVED, path: ['tagId'] })
+    .refine((value) => value.chip !== undefined, {
+        message: 'Send the chip with its keys: { uid, key0, key1, key2 }.',
         path: ['chip'],
     });
 export type BindTagDto = z.infer<typeof bindTagSchema>;
@@ -164,8 +154,8 @@ const tagBindingSchema = z
         key0: chipKeyField.optional(),
         key1: chipKeyField.optional(),
         key2: chipKeyField.optional(),
-        /** @deprecated A bare UID cannot be verified by tap. Send `uid` and the keys. */
-        tagId: tagId.optional(),
+        /** REMOVED: a bare UID cannot be verified by tap. Parsed only to refuse it clearly. */
+        tagId: z.string().optional(),
     })
     .strict()
     .refine(
@@ -174,16 +164,12 @@ const tagBindingSchema = z
         { message: 'Provide exactly one of serialNumber or skuCode' },
     )
     .superRefine((value, ctx) => {
-        const hasChipFields =
-            value.uid !== undefined || value.key0 !== undefined || value.key1 !== undefined || value.key2 !== undefined;
         if (value.tagId !== undefined) {
-            if (hasChipFields) {
-                ctx.addIssue({ code: 'custom', message: 'Send uid and keys, or the deprecated tagId, not both', path: ['tagId'] });
-            }
+            ctx.addIssue({ code: 'custom', message: BARE_UID_REMOVED, path: ['tagId'] });
             return;
         }
         if (value.uid === undefined) {
-            ctx.addIssue({ code: 'custom', message: 'Send uid and key0, key1, key2 (or the deprecated tagId).', path: ['uid'] });
+            ctx.addIssue({ code: 'custom', message: 'Send uid and key0, key1, key2: a chip needs its keys.', path: ['uid'] });
             return;
         }
         refineChip({ uid: value.uid, key0: value.key0, key1: value.key1, key2: value.key2 }, ctx, { keysRequired: true });
@@ -206,7 +192,7 @@ export const bulkBindTagsSchema = z
     .strict()
     .refine(
         (value) => {
-            const ids = value.bindings.map((b) => b.uid ?? b.tagId);
+            const ids = value.bindings.map((b) => b.uid);
             return new Set(ids).size === ids.length;
         },
         { message: 'The same tag appears twice in this batch', path: ['bindings'] },
@@ -225,13 +211,11 @@ export interface BulkBindResult {
     bound: number;
     /** Chips that arrived with keys. Counts only: keys are never returned. */
     withKeys: number;
-    /** Chips a tap can be verified against. 0 for the deprecated `tagId` form (a bare UID has no keys). */
+    /** Chips a tap can be verified against: every bound chip has keys, so this equals `withKeys`. */
     chipsVerifiable: number;
     items: {
         skuCode: string;
         serialNumber: number;
-        /** Only on the deprecated `tagId` form. A keyed chip's UID is not echoed. */
-        tagId?: string;
         replaced: boolean;
         verifiable: boolean;
     }[];
@@ -751,7 +735,7 @@ export interface MintResult {
     tagsBound: number;
     /** Of those, chips that arrived with keys. Counts only: keys are never returned. */
     withKeys: number;
-    /** Chips a tap can be verified against. 0 for the deprecated `tagIds` form (a bare UID has no keys). */
+    /** Chips a tap can be verified against: every chip has keys, so this equals `withKeys`. */
     chipsVerifiable: number;
 }
 

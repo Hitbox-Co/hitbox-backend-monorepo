@@ -768,6 +768,7 @@ describe('accepting takes the chips into stock', () => {
                 { id: 'chip-2', variantId: RED_S },
                 { id: 'chip-3', variantId: RED_M },
             ],
+            countChipsWithoutKeys: jest.fn(async () => 0),
             bindChipsToUnits,
             updateBatchWithin: jest.fn(async (_tx: unknown, _id: string, data: any) => ({ ...row, ...data })),
             ...overrides,
@@ -847,6 +848,22 @@ describe('accepting takes the chips into stock', () => {
         await expect(
             service.decideBatch(adminContext, 'b-1', { status: 'ACCEPTED' }),
         ).rejects.toMatchObject({ code: 'SKUS_NOT_APPROVED' });
+        expect(mintBound).not.toHaveBeenCalled();
+        expect(supply.updateBatchWithin).not.toHaveBeenCalled();
+    });
+
+    it('refuses to accept while any chip has no keys: its unit could never be verified by tap', async () => {
+        const { service, assertMintable, mintBound, supply } = make(complete());
+        (supply.countChipsWithoutKeys as jest.Mock).mockResolvedValueOnce(2);
+
+        await expect(
+            service.decideBatch(adminContext, 'b-1', { status: 'ACCEPTED' }),
+        ).rejects.toMatchObject({
+            statusCode: 409,
+            code: 'SUPPLY_CHIP_KEYS_MISSING',
+            details: { chipsWithoutKeys: 2 },
+        });
+        expect(assertMintable).not.toHaveBeenCalled();
         expect(mintBound).not.toHaveBeenCalled();
         expect(supply.updateBatchWithin).not.toHaveBeenCalled();
     });

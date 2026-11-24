@@ -162,11 +162,17 @@ describe('route 1: mint with chips', () => {
         await expect(t.verifier.verifyTap(tap(b, 1, 'r2'))).resolves.toMatchObject({ ok: true, skuId: t.db.skus[1]!.id });
     });
 
-    it('the same mint through the deprecated tagIds is NOT verifiable: that is the bug', async () => {
+    it('a mint with bare tagIds is refused outright: there is no way to add a chip without keys', () => {
+        const parsed = mintSkusSchema.safeParse({ count: 1, tagIds: ['04A39B2C5D6E80'] });
+        expect(parsed.success).toBe(false);
+        expect(JSON.stringify(parsed)).toContain('no longer accepted');
+        expect(mintSkusSchema.safeParse({ count: 1, chips: [{ uid: '04A39B2C5D6E80' }] }).success).toBe(false);
+    });
+
+    it('units minted with no chip have none: a tap finds nothing', async () => {
         const t = build();
         const a = newChip('04A39B2C5D6E80');
-        const result = await t.service.mint(ACCESS, 'p1', mintSkusSchema.parse({ count: 1, tagIds: [a.uid] }));
-        expect(result).toMatchObject({ chipsVerifiable: 0, withKeys: 0 });
+        await t.service.mint(ACCESS, 'p1', mintSkusSchema.parse({ count: 1 }));
         expect(t.db.tags).toHaveLength(0);
         expect(reasonOf(await t.verifier.verifyTap(tap(a, 1, 'r1')) as never)).toBe('UNKNOWN_TAG');
     });
@@ -243,19 +249,21 @@ describe('route 3: bind or re-tag one unit', () => {
     });
 });
 
-describe('B: chips that were bound as a bare UID', () => {
+describe('B: units that already carry a bare UID from before keys were mandatory', () => {
     it('attaching the keys later makes them verifiable', async () => {
         const t = build();
         const a = newChip('04A39B2C5D6E80');
-        await t.service.mint(ACCESS, 'p1', mintSkusSchema.parse({ count: 1, tagIds: [a.uid] }));
-        // The old route left a UID on the unit and nothing else: the report finds it.
-        t.db.skus[0]!.tagId = a.uid;
+        // Legacy state, as the removed route left it: a UID on the unit, no NfcTag, no keys.
+        t.db.skus.push({
+            id: 'legacy-1', skuCode: 'TEE-000001', serialNumber: 1, productId: 'p1', variantId: null,
+            tagId: a.uid, currentNfcTagId: null, tagLifecycleState: 'BOUND', claimedStatus: 'UNCLAIMED',
+        });
         expect(reasonOf(await t.verifier.verifyTap(tap(a, 1, 'r1')) as never)).toBe('UNKNOWN_TAG');
 
-        await t.service.addChipKeys(ACCESS, t.db.skus[0]!.id, { key0: a.key0, key1: a.key1, key2: a.key2 });
+        await t.service.addChipKeys(ACCESS, 'legacy-1', { key0: a.key0, key1: a.key1, key2: a.key2 });
 
         expect(t.db.skus[0]!.currentNfcTagId).toBeTruthy();
-        await expect(t.verifier.verifyTap(tap(a, 2, 'r2'))).resolves.toMatchObject({ ok: true, skuId: t.db.skus[0]!.id });
+        await expect(t.verifier.verifyTap(tap(a, 2, 'r2'))).resolves.toMatchObject({ ok: true, skuId: 'legacy-1' });
     });
 });
 

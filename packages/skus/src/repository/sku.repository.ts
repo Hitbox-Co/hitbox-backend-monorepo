@@ -395,60 +395,6 @@ export class SkuRepository {
     }
 
     /**
-     * Applies a whole manifest in one transaction.
-     *
-     * All-or-nothing on purpose: a partially applied manifest leaves a box of
-     * physical tags in an unknown state, and working out which of 500 items
-     * got written is a warehouse problem, not a database one.
-     */
-    bindTags(
-        bindings: {
-            skuId: string;
-            tagId: string;
-            vendorId?: string | null | undefined;
-            provisioningBatchId?: string | null | undefined;
-        }[],
-    ): Promise<void> {
-        return this.prisma.$transaction((tx) => this.bindTagsWithin(tx, bindings));
-    }
-
-    /**
-     * The deprecated bare-UID bind, inside a caller's transaction. Writes
-     * `Sku.tagId` only: the unit gets no `NfcTag` and no keys, so a tap on it
-     * can never be verified. Kept for one release; the chip path replaces it.
-     */
-    async bindTagsWithin(
-        tx: Prisma.TransactionClient,
-        bindings: {
-            skuId: string;
-            tagId: string;
-            vendorId?: string | null | undefined;
-            provisioningBatchId?: string | null | undefined;
-        }[],
-    ): Promise<void> {
-        const now = new Date();
-        for (const binding of bindings) {
-            await tx.sku.update({
-                where: { id: binding.skuId },
-                data: {
-                    tagId: binding.tagId,
-                    // A unit with a tag written to it is BOUND. ACTIVE is
-                    // reached on first claim, by the claims module.
-                    tagLifecycleState: TagLifecycleState.BOUND,
-                    ...(binding.vendorId !== undefined && binding.vendorId !== null
-                        ? { vendorId: binding.vendorId }
-                        : {}),
-                    ...(binding.provisioningBatchId !== undefined &&
-                        binding.provisioningBatchId !== null
-                        ? { provisioningBatchId: binding.provisioningBatchId }
-                        : {}),
-                    updatedAt: now,
-                },
-            });
-        }
-    }
-
-    /**
      * Points units at their chips (`Sku.currentNfcTagId`, the source of truth),
      * inside a caller's transaction.
      *
