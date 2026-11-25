@@ -182,6 +182,7 @@ When a consignment is accepted and minted into units, each chip moves to
 | `NFC_TAG_UID_KEY` | ≥32 chars. Hashes chip UIDs (`NfcTag.tagUidHash`). Do not change once chips are registered. |
 | `NFC_KMS_KEY_REF` | Names the KMS key that wraps chip keys. |
 | `NFC_LOCAL_WRAP_KEY` | **Development only.** ≥32 chars. Local stand-in for a KMS; refused when `NODE_ENV=production`. |
+| `NFC_ALLOW_LOCAL_WRAP_IN_PRODUCTION` | The literal `true` lets the local wrapper run when `NODE_ENV=production`, for a host with no cloud KMS (Railway). **Weaker**: the wrapping key then sits in an environment variable next to the database, so anyone who can read the project's variables can unwrap every chip key; the server logs a warning at startup. Anything but `true` keeps production without a wrapper (chip registration answers `503 SUPPLY_KEY_WRAPPER_UNAVAILABLE`). Needs `NFC_LOCAL_WRAP_KEY` too. |
 | `CLAIMS_LEGACY_TAG_ROUTES` | `false` turns the deprecated tag-id routes into `410`. |
 
 ---

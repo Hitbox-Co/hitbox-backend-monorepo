@@ -37,7 +37,7 @@ import {
 } from '@hitbox/tax';
 import { createLeadsModule } from '@hitbox/leads';
 import { createStripeSecrets } from './adapters/stripe-secrets';
-import { createLocalKeyWrapper } from './adapters/kms-key-wrapper';
+import { createLocalKeyWrapper, localWrapAllowedInProduction } from './adapters/kms-key-wrapper';
 import { createTagCipher } from './adapters/tag-cipher';
 import { buildRoutes } from './routes';
 
@@ -585,8 +585,26 @@ export function bootstrap(): Bootstrapped {
     // Batch-key wrapper. Only the local stand-in exists so far, and it refuses
     // to run in production, so it is not even constructed there: key creation
     // then answers 503 until a cloud KMS wrapper is configured.
+    //
+    // A host with no cloud KMS can opt in with NFC_ALLOW_LOCAL_WRAP_IN_PRODUCTION=true,
+    // which runs the local wrapper in production. Weaker (the wrapping key sits in
+    // an environment variable next to the database), so it is explicit and loud.
+    const optedIntoLocalWrap = env.NODE_ENV === 'production' && localWrapAllowedInProduction(env);
     const keyWrapper =
-        env.NODE_ENV === 'production' ? undefined : createLocalKeyWrapper(env);
+        env.NODE_ENV === 'production' && !optedIntoLocalWrap ? undefined : createLocalKeyWrapper(env);
+    if (optedIntoLocalWrap) {
+        const nfcLogger = createModuleLogger('nfc-keys');
+        if (keyWrapper) {
+            nfcLogger.warn(
+                'chip keys are wrapped with the LOCAL key wrapper in production (NFC_ALLOW_LOCAL_WRAP_IN_PRODUCTION=true): ' +
+                'anyone who can read this deployment\'s environment variables can unwrap every chip key. Move to a cloud KMS when one is available.',
+            );
+        } else {
+            nfcLogger.error(
+                'NFC_ALLOW_LOCAL_WRAP_IN_PRODUCTION=true but NFC_LOCAL_WRAP_KEY is not set: chip registration will answer 503.',
+            );
+        }
+    }
     const kmsKeyRef = env.NFC_KMS_KEY_REF ?? (keyWrapper ? 'local-dev' : undefined);
 
     const supplyModule = createSupplyModule({
