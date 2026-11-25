@@ -8,7 +8,8 @@
     "start": "tsx src/index.ts",
     "jobs:checkout-sweep": "tsx scripts/checkout-sweep.ts",
     "jobs:release-refunded-units": "tsx scripts/release-refunded-units.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "test": "tsx --test tests/*.test.ts"
   },
   "keywords": [],
   "author": "",

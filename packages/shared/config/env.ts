@@ -81,10 +81,19 @@ const envSchema = z.object({
     NFC_KMS_KEY_REF: z.string().min(1).optional(),
     /**
      * DEVELOPMENT ONLY. Wrapping key for the local stand-in for a KMS. The
-     * local wrapper refuses to start when NODE_ENV=production, so setting this
-     * there achieves nothing.
+     * local wrapper refuses to start when NODE_ENV=production unless
+     * NFC_ALLOW_LOCAL_WRAP_IN_PRODUCTION is set (below).
      */
     NFC_LOCAL_WRAP_KEY: z.string().min(32).optional(),
+    /**
+     * The literal "true" lets the local wrapper run when NODE_ENV=production.
+     * For a host with no cloud KMS (Railway, say). It is weaker than a KMS: the
+     * wrapping key then lives in an environment variable next to the database
+     * it protects, so anyone who can read the project's variables can unwrap
+     * every chip key. Off by default; anything but "true" leaves production
+     * without a key wrapper (chip registration then answers 503).
+     */
+    NFC_ALLOW_LOCAL_WRAP_IN_PRODUCTION: z.string().optional(),
 
     /**
      * "false" retires the old tag-id routes (POST /claims/:tagId, /confirm and
