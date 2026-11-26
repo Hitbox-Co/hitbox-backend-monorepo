@@ -84,7 +84,8 @@ describe('OrderWriteRepository.quote', () => {
         const { repo, prisma } = build();
         await repo.quote({ ...params, variantId: 'v1', marketId: 'm-in' });
         expect(prisma.dropPrice.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-            where: expect.objectContaining({ dropId: 'p1', variantId: 'v1', marketId: 'm-in', status: 'ACTIVE' }),
+            // the variant's own price, or the drop-level one when it has none
+            where: expect.objectContaining({ dropId: 'p1', AND: [{ OR: [{ variantId: 'v1' }, { variantId: null }] }], marketId: 'm-in', status: 'ACTIVE' }),
         }));
         expect(prisma.sku.findFirst).toHaveBeenCalledWith(expect.objectContaining({
             where: expect.objectContaining({

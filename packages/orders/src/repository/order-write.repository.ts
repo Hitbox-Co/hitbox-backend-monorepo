@@ -42,6 +42,14 @@ export interface MarketHints {
     billingAddressId?: string | null;
 }
 
+/**
+ * Which price rows may price a variant: its own, or the drop-level one
+ * (`variantId: null`) that the admin saves when a drop has a single price for
+ * all its variants. A sale with no variant matches only the drop-level row.
+ */
+const priceVariantWhere = (variantId: string | null): Prisma.DropPriceWhereInput =>
+    variantId ? { OR: [{ variantId }, { variantId: null }] } : { variantId: null };
+
 export interface PlaceOrderParams {
     buyerId: string;
     productId: string;
@@ -223,7 +231,9 @@ export class OrderWriteRepository {
         const price = await this.prisma.dropPrice.findFirst({
             where: {
                 dropId: params.productId,
-                variantId: params.variantId,
+                // A variant's own price wins, but a drop-level price (no
+                // variant) covers every variant that has none of its own.
+                AND: [priceVariantWhere(params.variantId)],
                 status: 'ACTIVE',
                 effectiveFrom: { lte: params.now },
                 OR: [{ effectiveTo: null }, { effectiveTo: { gt: params.now } }],
@@ -236,7 +246,11 @@ export class OrderWriteRepository {
                 marketId: true,
                 market: { select: { id: true, currency: true } },
             },
-            orderBy: [{ effectiveFrom: 'desc' }, { updatedAt: 'desc' }],
+            orderBy: [
+                { variantId: { sort: 'desc', nulls: 'last' } },
+                { effectiveFrom: 'desc' },
+                { updatedAt: 'desc' },
+            ],
         });
 
         if (!price || (!price.isFree && price.amount === null)) {
@@ -261,7 +275,7 @@ export class OrderWriteRepository {
         const rows = await this.prisma.dropPrice.findMany({
             where: {
                 dropId: params.productId,
-                variantId: params.variantId,
+                AND: [priceVariantWhere(params.variantId)],
                 status: 'ACTIVE',
                 effectiveFrom: { lte: params.now },
                 OR: [{ effectiveTo: null }, { effectiveTo: { gt: params.now } }],
