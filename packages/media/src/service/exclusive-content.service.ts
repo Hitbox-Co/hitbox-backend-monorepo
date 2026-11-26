@@ -16,8 +16,10 @@ export interface ExclusiveContentUpload {
 /** What the content module is told about a file before adding it to a reward. */
 export interface ExclusiveContentAsset {
     id: string;
-    /** The collection the upload URL was issued for. */
+    /** The collection the upload URL was issued for (a collection reward). */
     collectionId: string | null;
+    /** The drop the upload URL was issued for (drop content). */
+    dropId: string | null;
     fileName: string;
     mimeType: string;
     sizeBytes: number | null;
@@ -36,11 +38,12 @@ export interface ExclusiveContentLink {
 }
 
 /**
- * Exclusive content — the files behind a collection reward. The provider side
- * of the content module's `IRewardMedia` port.
+ * Exclusive content — the files behind a collection reward or a drop's
+ * content. The provider side of the content module's `IRewardMedia` port.
  *
- * Files live under `exclusive-content/collections/{collectionId}/…`, a
- * private prefix: there is no public URL, ever. Every view is a short-lived
+ * Files live under `exclusive-content/collections/{collectionId}/…` or
+ * `exclusive-content/products/{dropId}/…`, a private prefix: there is no
+ * public URL, ever. Every view is a short-lived
  * signed GET, issued only after the content module has decided the caller may
  * see the reward.
  *
@@ -59,18 +62,25 @@ export class ExclusiveContentService {
         },
     ) { }
 
+    /** Exactly one of `collectionId` (collection reward) or `dropId` (drop content). */
     async createUpload(input: {
-        collectionId: string;
+        collectionId?: string | undefined;
+        dropId?: string | undefined;
         uploadedById: string;
         fileName: string;
         mimeType: string;
         sizeBytes: number;
     }): Promise<ExclusiveContentUpload> {
+        const owner = input.dropId
+            ? { ownerType: 'product' as const, ownerId: input.dropId }
+            : input.collectionId
+                ? { ownerType: 'collection' as const, ownerId: input.collectionId }
+                : null;
+        if (!owner) throw new Error('exclusive content upload needs a collectionId or a dropId');
         const result = await this.deps.media.createUploadUrl({
             dto: {
                 assetType: AssetType.EXCLUSIVE_CONTENT,
-                ownerType: 'collection',
-                ownerId: input.collectionId,
+                ...owner,
                 fileName: input.fileName,
                 mimeType: input.mimeType,
                 sizeBytes: input.sizeBytes,
@@ -105,6 +115,7 @@ export class ExclusiveContentService {
                 return {
                     id: row.id,
                     collectionId: row.collectionId,
+                    dropId: row.productId,
                     fileName: row.fileName,
                     mimeType: row.mimeType,
                     sizeBytes: row.sizeBytes,

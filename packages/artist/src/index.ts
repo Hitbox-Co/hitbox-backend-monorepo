@@ -78,6 +78,22 @@ export {
     updateRewardItemSchema,
 } from './collection/dto/collection-reward.dto';
 
+// Drop content (regular + SKU-exclusive) — the port the content module implements.
+export type {
+    DropContentItem,
+    DropContentOverview,
+    DropContentTier,
+    DropContentUploadTicket,
+    DropContentView,
+    IDropContent,
+} from './drop/domain/drop-content.port';
+export { createDropContentSchema, updateDropContentSchema } from './drop/dto/drop-content.dto';
+export {
+    ARTIST_DROP_AUDIT_EVENTS,
+    ARTIST_DROP_ERROR_CODES,
+    ARTIST_DROP_EVENTS,
+} from './drop/constants/artist-drop.constant';
+
 // Drops in collections — the port products implements.
 export type { IDropCollectionMembership, MembershipDrop } from './collection/domain/drop-membership.port';
 

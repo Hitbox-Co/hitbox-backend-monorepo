@@ -10,6 +10,10 @@
 > - Buyer app: `/api/v1/rewards` (4)
 > - HitBox staff (monitoring, switch off, remove): `/api/v1/admin/rewards`, in
 >   [admin-rewards-api.md](admin-rewards-api.md)
+>
+> Content on a **single drop**, regular for every owner or exclusive to specific
+> units (SKUs) by serial number, is a separate feature:
+> [drop-content.md](drop-content.md).
 
 ---
 

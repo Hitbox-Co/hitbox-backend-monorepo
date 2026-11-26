@@ -59,12 +59,13 @@ question a review asks, and every event answers it on its own row.
 The code catalog is the seed source and the fast path — not a second gate. A row inserted straight
 into the table still works: the recorder falls back to reading the table for keys it doesn't know.
 
-**81 events: 31 CRITICAL, 26 WARNING, 24 INFO** (as of the reward moderation events; `AUDIT_EVENT_CATALOG` is the authority — the command in 3 prints the current set).
+**86 events: 31 CRITICAL, 27 WARNING, 28 INFO** (as of the drop content events; `AUDIT_EVENT_CATALOG` is the authority — the command in 3 prints the current set).
 
 - **WARNING** — `permission.catalog.sync`, `organization.update`, `artist.collection.archive`,
   `artist.profile.compliance.attest`, `artist.profile.compliance.revoke`,
   `artist.profile.deactivate`, `artist.profile.archive`, `product.reward-points.set`,
   `artist.collection.reward.remove`, `content.reward.switch-off`, `content.reward.remove`,
+  `artist.drop.content.remove`,
   `order.status.change`, `order.shipment.record`, `royalty.payout.schedule`, `release.approve`,
   `release.reject`, `release.reopen`, `supply.vendor.create`, `supply.vendor.update`,
   `supply.batch.create`, `supply.batch.decide`, `supply.vendor.member.invite`,
@@ -75,6 +76,8 @@ into the table still works: the recorder falls back to reading the table for key
   `artist.collection.drops.remove`, `artist.collection.reward.save`,
   `artist.collection.reward.item.add`, `artist.collection.reward.item.update`,
   `artist.collection.reward.item.remove`, `content.reward.switch-on`, `content.reward.restore`,
+  `artist.drop.content.save`, `artist.drop.content.item.add`, `artist.drop.content.item.update`,
+  `artist.drop.content.item.remove`,
   `artist.profile.update`, `artist.profile.activate`,
   `artist.profile.restore`, `artist.profile.publish`, `artist.profile.unlist`,
   `royalty.accrue`, `product.create`,
@@ -87,7 +90,9 @@ See [artist-collection/README.md 6](../artist-collection/README.md#6-audit-trail
 (`artist.collection.reward.*`, resource `ContentBundle`) are in
 [content/collection-rewards.md 6](../content/collection-rewards.md#6-audit-trail-and-events). HitBox
 moderating a reward (`content.reward.*`, persona `hitbox_admin`) is in
-[content/admin-rewards-api.md 6](../content/admin-rewards-api.md#6-audit-trail-and-events).
+[content/admin-rewards-api.md 6](../content/admin-rewards-api.md#6-audit-trail-and-events). Drop
+content — a drop's regular and SKU-exclusive content (`artist.drop.content.*`, resource
+`ContentBundle`) — is in [content/drop-content.md 6](../content/drop-content.md#6-audit-trail-and-events).
 
 **Artist records** (`artist.profile.*`, persona group `hitbox_admin`) record every change HitBox
 staff make to an artist — edits, compliance attestation, activate/deactivate, archive/restore,

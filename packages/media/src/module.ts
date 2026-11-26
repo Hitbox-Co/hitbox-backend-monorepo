@@ -101,16 +101,18 @@ export interface MediaModule {
      */
     returnEvidence: IReturnEvidenceMedia;
     /**
-     * Collection reward files (EXCLUSIVE_CONTENT). The provider side of the
-     * content module's `IRewardMedia` port: uploads to a private prefix,
+     * Collection reward and drop content files (EXCLUSIVE_CONTENT). The
+     * provider side of the content module's `IRewardMedia` port: uploads to a private prefix,
      * inspection, and short-lived signed links.
      */
     exclusiveContent: IExclusiveContentMedia;
 }
 
 export interface IExclusiveContentMedia {
+    /** Exactly one of `collectionId` (collection reward) or `dropId` (drop content). */
     createUpload(input: {
-        collectionId: string;
+        collectionId?: string | undefined;
+        dropId?: string | undefined;
         uploadedById: string;
         fileName: string;
         mimeType: string;
