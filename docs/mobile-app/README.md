@@ -15,7 +15,8 @@ and the folders under [../](../).
 | [users-api.md](users-api.md) | `/users` | Profiles: my profile and stats, edit, the public/private switch, other collectors' profiles |
 | [addresses-api.md](addresses-api.md) | `/users/me/addresses` | Address book: list, add, edit, delete, default (used by checkout) |
 | [follows-api.md](follows-api.md) | `/follows` | Follow collectors and artists; followers and following lists |
-| [discover-api.md](discover-api.md) | `/discover` | Discover tab: hero, trending, creators, latest drops, search |
+| [discover-api.md](discover-api.md) | `/discover` | Discover tab: hero, trending, creators, latest drops |
+| [search-api.md](search-api.md) | `/search` | The search box: products, artists and other collectors in one call |
 | [marketplace-api.md](marketplace-api.md) | `/marketplace` | Marketplace tab: search, category chips, Featured Listings, See All |
 | [products-api.md](products-api.md) | `/products` | Drop detail screen (opened from any card) |
 | [collections-api.md](collections-api.md) | `/collections` | My Collection tab: owned items, stats |

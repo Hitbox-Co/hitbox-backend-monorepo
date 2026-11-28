@@ -35,7 +35,10 @@ export const discoverProductsQuerySchema = z.object({
     ...pagination,
 });
 
-export const discoverCreatorsQuerySchema = z.object(pagination);
+export const discoverCreatorsQuerySchema = z.object({
+    search: z.string().trim().min(1).max(100).optional(),
+    ...pagination,
+});
 
 export type DiscoverFeedQueryDto = z.infer<typeof discoverFeedQuerySchema>;
 export type DiscoverProductsQueryDto = z.infer<typeof discoverProductsQuerySchema>;

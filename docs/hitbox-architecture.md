@@ -83,6 +83,7 @@ hitbox-backend/
 │   ├── artist/                   # Owns Artist + ArtistCollection
 │   │   └── src/{profile,collection}/   # profile = reserved; collection = capacity port
 │   ├── discover/                 # Read-side feed for the Discover screen (no own tables)
+│   ├── search/                   # The app's one search box: products + artists + collectors (own: search-index outbox only)
 │   ├── marketplace/              # Listing feed for the Marketplace screen (no own tables)
 │   ├── collections/              # Owns BuyerCollection — a user's shelf, public/private showcase
 │   ├── claims/                   # NFC verify/claim/transfer + provenance ledger (see docs/nfc-claim-verify-api.md)
@@ -205,6 +206,7 @@ export function bootstrap(): Router {
         users: usersModule.createRouter(authModule.requireAuth),      // ← auth's middleware
         products: productsModule.createRouter(authModule.requireAuth),
         discover: discoverModule.router,                              // public — no auth
+        search: searchModule.router,                                  // public — optional auth personalises
         marketplace: marketplaceModule.router,                        // public — no auth
         collections: collectionsModule.createRouter(authModule.requireAuth),
     });
@@ -286,6 +288,8 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 |---|---|---|
 | `IAccountLookup` (auth) | `UserAccountLookup` (users) | resolve Clerk user → local account on every authenticated request |
 | `IProductDiscovery` (discover) | `ProductDiscoveryAdapter` (products) | drop cards and creators for the Discover feed |
+| `IProductDiscovery` (discover, reused by search) | `ProductDiscoveryAdapter` (products) | drops and artists matching the search text, in `GET /search` |
+| `IUserSearch` (search) | `UserSearchAdapter` (users) | collectors whose handle or name matches, in `GET /search` |
 | `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist) for the Marketplace feed |
 | `IArtistCollectionStats` (collections) | `ArtistCollectionStatsAdapter` (artist) | `ArtistCollection` capacity (`Σ maximumLimit`) for the collection-progress stat |
 | `IMediaUrlResolver` (products, collections, claims) | closure over `S3ObjectStorage` (bootstrap) | a renderable URL for a `MediaAsset.storageRef` |
@@ -418,7 +422,7 @@ Cross-module relations (e.g. `Product.owner → User`) work because Prisma sees 
 1. index.ts        loads root .env (before ANY app import — env.ts validates at import time)
 2. app.ts          cors → helmet → morgan → express.json (captures rawBody) → urlencoded
                    then /webhooks/payments (outside /api/v1, own rate-limit budget)
-3. routes.ts       /api/v1/{health, auth, users, products, discover, marketplace, collections,
+3. routes.ts       /api/v1/{health, auth, users, products, discover, search, marketplace, collections,
                             checkout, refunds, admin/payments, admin/finance, …}
 4. requireAuth     (protected routes only) verifies JWT, attaches req.auth
 5. controller      Zod-parses input → calls service

@@ -14,6 +14,7 @@ import { createMediaModule, isPublicKey, S3ObjectStorage } from '@hitbox/media';
 import { createUsersModule } from '@hitbox/users';
 import { createProductsModule } from '@hitbox/products';
 import { createDiscoverModule } from '@hitbox/discover';
+import { createSearchModule } from '@hitbox/search';
 import { createMarketplaceModule } from '@hitbox/marketplace';
 import { createSocialModule } from '@hitbox/social';
 import { createCollectionsModule } from '@hitbox/collections';
@@ -499,6 +500,14 @@ export function bootstrap(): Bootstrapped {
         optionalAuth: authModule.optionalAuth,
     });
 
+    // One search box: products + artists via discover's port (products),
+    // collectors via search's own port (users).
+    const searchModule = createSearchModule({
+        catalog: productsModule.discovery,
+        users: usersModule.search,
+        optionalAuth: authModule.optionalAuth,
+    });
+
     // Wishlist (WishlistItem is social's table); cards come from products.
     const socialModule = createSocialModule({
         prisma,
@@ -914,6 +923,7 @@ export function bootstrap(): Bootstrapped {
         users: usersModule.createRouter(authModule.requireAuth, authModule.optionalAuth),
         products: productsModule.createRouter(authModule.requireAuth),
         discover: discoverModule.router,
+        search: searchModule.router,
         marketplace: marketplaceModule.router,
         wishlist: socialModule.createWishlistRouter(authModule.requireAuth),
         follows: socialModule.createFollowsRouter(authModule.requireAuth, authModule.optionalAuth),

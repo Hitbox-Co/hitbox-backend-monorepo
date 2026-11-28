@@ -157,6 +157,49 @@ export class UserRepository {
         });
     }
 
+    /**
+     * Collectors for the app's search box: handle or full name contains the
+     * text, case-insensitive. Deactivated and deleted accounts never match,
+     * and the searcher is left out. Private profiles do match — they are
+     * findable (name + stats), just not browsable.
+     */
+    async searchByText(params: {
+        text: string;
+        skip: number;
+        take: number;
+        excludeUserId?: string | undefined;
+    }): Promise<{
+        items: Pick<User, 'id' | 'handle' | 'fullName' | 'avatarUrl' | 'profileVisibility'>[];
+        total: number;
+    }> {
+        const where = {
+            isActive: true,
+            archivedAt: null,
+            ...(params.excludeUserId && { id: { not: params.excludeUserId } }),
+            OR: [
+                { handle: { contains: params.text, mode: 'insensitive' as const } },
+                { fullName: { contains: params.text, mode: 'insensitive' as const } },
+            ],
+        };
+        const [items, total] = await this.prisma.$transaction([
+            this.prisma.user.findMany({
+                where,
+                select: {
+                    id: true,
+                    handle: true,
+                    fullName: true,
+                    avatarUrl: true,
+                    profileVisibility: true,
+                },
+                orderBy: [{ fullName: 'asc' }, { id: 'asc' }],
+                skip: params.skip,
+                take: params.take,
+            }),
+            this.prisma.user.count({ where }),
+        ]);
+        return { items, total };
+    }
+
     updateProfile(id: string, data: UpdateProfileData): Promise<User> {
         return this.prisma.user.update({
             where: { id },

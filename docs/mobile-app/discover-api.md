@@ -10,7 +10,7 @@ The mobile **Discover** tab, top to bottom, and the API that feeds it.
 | **Trending now** + "View all" | `featured`/`trending` → `GET /discover/products?section=trending` |
 | **Meet the creators** + "Explore" | `creators` → `GET /discover/creators` |
 | **Latest drops** + "View all" | `newReleases` → `GET /discover/products?section=new_releases` |
-| Search bar | `GET /discover/products?search=` |
+| Search bar | `GET /search?q=` (products, artists and collectors in one call, see [search-api.md](search-api.md)). `GET /discover/products?search=` still works for a products-only list |
 
 Base path: `/api/v1/discover`. Code: `packages/discover` (routes, DTOs, the
 `IProductDiscovery` port) and `packages/products/src/domain/product-discovery.adapter.ts`
@@ -161,6 +161,7 @@ A paginated creator list. It backs "Explore" next to **Meet the creators**.
 
 | Param | Values | Default |
 |---|---|---|
+| `search` | 1–100 chars, case-insensitive match on the artist's name or handle (slug) | none |
 | `page` | int ≥ 1 | `1` |
 | `limit` | int 1–50 | `20` |
 

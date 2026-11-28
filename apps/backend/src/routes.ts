@@ -5,6 +5,8 @@ export interface ApiRouters {
     users: Router;
     products: Router;
     discover: Router;
+    /** One search box: products, artists and collectors. Public; auth only personalises. */
+    search: Router;
     marketplace: Router;
     wishlist: Router;
     follows: Router;
@@ -132,6 +134,7 @@ export function buildRoutes(routers: ApiRouters): Router {
     api.use('/markets', routers.markets);
     api.use('/products', routers.products);
     api.use('/discover', routers.discover);
+    api.use('/search', routers.search);
     api.use('/marketplace', routers.marketplace);
     api.use('/wishlist', routers.wishlist);
     api.use('/follows', routers.follows);

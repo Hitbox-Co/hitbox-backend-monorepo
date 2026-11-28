@@ -87,6 +87,7 @@ export class ProductDiscoveryAdapter implements IProductDiscovery {
         return this.products.findCreatorsForDiscover({
             skip: (query.page - 1) * query.limit,
             take: query.limit,
+            ...(query.search && { search: query.search }),
         });
     }
 }

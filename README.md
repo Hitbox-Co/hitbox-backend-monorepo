@@ -73,6 +73,7 @@ hitbox/
 │   ├── users/              │
 │   ├── products/          │  mobile platform (share @hitbox/database)
 │   ├── discover/           │
+│   ├── search/             │
 │   ├── marketplace/       │
 │   ├── collections/        │
 │   ├── artist/            │
@@ -104,6 +105,7 @@ hitbox/
 | users | User Management |
 | products | Product Management |
 | discover | Discover feed (read-side product cards) |
+| search | Unified search: products, artists and other collectors (`GET /api/v1/search`) |
 | collections | User's collectibles shelf (BuyerCollection) + stats |
 | artist | Artists & ArtistCollection (profile reserved; collection capacity) |
 | marketplace | Marketplace Operations |

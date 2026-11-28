@@ -34,6 +34,7 @@
     "@hitbox/orders": "workspace:*",
     "@hitbox/organizations": "workspace:*",
     "@hitbox/payments": "workspace:*",
+    "@hitbox/search": "workspace:*",
     "@hitbox/products": "workspace:*",
     "@hitbox/releases": "workspace:*",
     "@hitbox/shared": "workspace:*",

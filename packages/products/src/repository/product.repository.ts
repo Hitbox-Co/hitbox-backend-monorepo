@@ -356,12 +356,22 @@ export class ProductRepository {
     async findCreatorsForDiscover(params: {
         skip: number;
         take: number;
+        /** Name or handle contains this text, case-insensitive. */
+        search?: string;
     }): Promise<{ items: DiscoverCreatorRow[]; total: number }> {
         type Result = { items: DiscoverCreatorRow[]; total: number };
         const cached = await this.cache.getList<Result>('discover-creators', params);
         if (cached) return cached;
 
-        const where = discoverCreatorWhere(PUBLIC_PRODUCT_WHERE);
+        const where: Prisma.ArtistWhereInput = {
+            ...discoverCreatorWhere(PUBLIC_PRODUCT_WHERE),
+            ...(params.search && {
+                OR: [
+                    { name: { contains: params.search, mode: Prisma.QueryMode.insensitive } },
+                    { slug: { contains: params.search, mode: Prisma.QueryMode.insensitive } },
+                ],
+            }),
+        };
         const [rows, total] = await this.prisma.$transaction([
             this.prisma.artist.findMany({
                 where,

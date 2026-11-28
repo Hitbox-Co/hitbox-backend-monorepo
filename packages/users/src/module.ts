@@ -4,6 +4,8 @@ import type { PrismaClient } from '@hitbox/database';
 import { createModuleLogger, createRateLimiter } from '@hitbox/shared';
 import type { IEventBus } from '@hitbox/shared';
 import type { IAccountLookup } from '@hitbox/auth';
+import type { IUserSearch } from '@hitbox/search';
+import { UserSearchAdapter } from './domain/user-search.adapter';
 import { ADDRESS_RATE_LIMIT, USERS_MODULE } from './constants/users.constant';
 import { AddressController } from './controller/address.controller';
 import { AddressRepository } from './repository/address.repository';
@@ -25,6 +27,8 @@ export interface UsersModuleDeps {
 export interface UsersModule {
     /** Injected into createAuthModule — auth's port, users' adapter. */
     accountLookup: IAccountLookup;
+    /** Injected into createSearchModule — search's port, users' adapter. */
+    search: IUserSearch;
     service: UserService;
     /**
      * The address book. Payments consumes `resolveForCheckout` through its own
@@ -49,6 +53,7 @@ export function createUsersModule(deps: UsersModuleDeps): UsersModule {
 
     return {
         accountLookup: new UserAccountLookup(users, service),
+        search: new UserSearchAdapter(users),
         service,
         addresses,
         createRouter(requireAuth, optionalAuth) {

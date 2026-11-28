@@ -239,10 +239,28 @@ optional and only adds `isWishlisted` to cards.
 |---|---|
 | `GET /api/v1/discover?category=` | whole screen: `featured`, `trending`, `creators`, `newReleases` |
 | `GET /api/v1/discover/products?section=&category=&search=&page=&limit=` | "View all" / search |
-| `GET /api/v1/discover/creators?page=&limit=` | "Meet the creators" → Explore |
+| `GET /api/v1/discover/creators?search=&page=&limit=` | "Meet the creators" → Explore (`search` matches name or handle) |
 
 Full shapes, field-to-design mapping and ordering rules:
 **[mobile-app/discover-api.md](mobile-app/discover-api.md)**.
+
+---
+
+## Search Module — `/api/v1/search`
+
+The app's one search box. Public; a session token is optional and only adds
+`isWishlisted` to product cards and leaves the caller out of the collector
+results. Throttled to 60 searches per minute per IP.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/search?q=` | overview: the first few **products**, **artists** and **collectors** that match, each with its `total` |
+| `GET /api/v1/search?q=&type=products\|artists\|users&page=&limit=` | one section, paginated, for "See all" |
+
+`q` is required (1–100 characters, a leading `@` is ignored). Matching is a
+case-insensitive "contains" on drop name, artist name or handle, and collector
+handle or full name. Full shapes, rules and limitations:
+**[mobile-app/search-api.md](mobile-app/search-api.md)**.
 
 ---
 
@@ -599,7 +617,7 @@ Every module prefixes its codes, so a code always tells you where it came from:
 | `TAX_*` | tax |
 | `VALIDATION_ERROR`, `NOT_FOUND`, `INTERNAL_ERROR`, … | shared |
 
-(discover and marketplace define no error codes of their own — they only read, so shared codes cover them.)
+(discover, search and marketplace define no error codes of their own — they only read, so shared codes cover them.)
 
 ---
 

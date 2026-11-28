@@ -73,6 +73,8 @@ export interface DiscoverProductsResult {
 export interface DiscoverCreatorsQuery {
     page: number;
     limit: number;
+    /** Case-insensitive match on the artist's name or handle (slug). */
+    search?: string;
 }
 
 export interface DiscoverCreatorsResult {
