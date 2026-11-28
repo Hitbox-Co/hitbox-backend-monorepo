@@ -725,6 +725,7 @@ export function bootstrap(): Bootstrapped {
         prisma,
         artistStats: artistModule.collectionStats,
         mediaUrls,
+        dropCards: productsModule.cards,
     });
 
     // NFC authenticity domain: single-tap claim, verify a tag, and read the

@@ -142,6 +142,10 @@ pagination.
 
 Rewards that are paused or removed, or whose access ended, are left out.
 
+> A collection's drops, with which ones you own and full cards for the missing ones, are on
+> `GET /collections/:collectionId/progress` ([collections-api.md](collections-api.md#artist-collections-and-my-progress)).
+> It works for every public collection, including ones with no reward.
+
 ### `GET /api/v1/rewards/collections/:collectionId`
 
 Show this on a collection page, or on a drop page using the drop's

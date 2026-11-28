@@ -4,6 +4,7 @@ export type { CollectionsModule, CollectionsModuleDeps } from './module';
 
 // Constants
 export {
+    COLLECTION_PROGRESS_ERROR_CODES,
     COLLECTIONS_DEFAULT_PAGE_SIZE,
     COLLECTIONS_ERROR_CODES,
     COLLECTIONS_MAX_PAGE_SIZE,
@@ -28,6 +29,25 @@ export type {
     IArtistCollectionStats,
 } from './domain/interfaces/artist-collection-stats.interface';
 export type { IMediaUrlResolver } from './domain/interfaces/media-url-resolver.interface';
+
+export type {
+    CollectionDropCard,
+    IDropCardCatalog,
+} from './domain/interfaces/drop-card-catalog.interface';
+
+// Set progress (buyer view of an artist's collections)
+export {
+    artistCollectionsQuerySchema,
+    collectionDetailQuerySchema,
+} from './dto/collection-progress.dto';
+export type {
+    ArtistCollectionSummaryDto,
+    ArtistCollectionsDto,
+    CollectionProgressDetailDto,
+    SetDropDto,
+    SetProgressDto,
+} from './dto/collection-progress.dto';
+export type { CollectionProgressService } from './service/collection-progress.service';
 
 // Service type (for other modules that receive it via DI)
 export type { CollectionService } from './service/collection.service';

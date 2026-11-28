@@ -291,6 +291,7 @@ The same pattern repeats wherever one module needs a synchronous answer from ano
 | `IProductDiscovery` (discover, reused by search) | `ProductDiscoveryAdapter` (products) | drops and artists matching the search text, in `GET /search` |
 | `IUserSearch` (search) | `UserSearchAdapter` (users) | collectors whose handle or name matches, in `GET /search` |
 | `IListingCatalog` (marketplace) | `MarketplaceListingAdapter` (products) | listing cards (price, artist) for the Marketplace feed |
+| `IDropCardCatalog` (collections) | `DropCardLookupAdapter` (products) | drop cards on a collection's set screen (`GET /collections/:id/progress`: owned vs missing) |
 | `IArtistCollectionStats` (collections) | `ArtistCollectionStatsAdapter` (artist) | `ArtistCollection` capacity (`Σ maximumLimit`) for the collection-progress stat |
 | `IMediaUrlResolver` (products, collections, claims) | closure over `S3ObjectStorage` (bootstrap) | a renderable URL for a `MediaAsset.storageRef` |
 | `IOrderLedger` (payments) | `OrderLedgerAdapter` (orders) | place / settle / cancel / refund an order; sweep expired stock holds |

@@ -473,6 +473,21 @@ Another user's **public showcase** — `PUBLIC` items only, no auth required. Sa
 }
 ```
 
+### `GET /api/v1/collections/artist/:artistId`
+
+An artist's public collections, each with **my progress** (owned / total drops).
+Public; a token adds `progress` (it is `null` for a guest). Paginated (`page`, `limit` 1-50).
+Use it on the artist profile screen's "Collection Progress" block.
+
+### `GET /api/v1/collections/:collectionId/progress`
+
+One collection with every released drop as a card, each flagged `owned: true | false`
+(`null` for a guest). `?show=all|owned|missing` narrows `drops`; `?marketId=` picks the
+price market. Use `show=missing` for "the pieces I still need".
+
+Full shapes, the ownership rule and limitations:
+**[mobile-app/collections-api.md](mobile-app/collections-api.md#artist-collections-and-my-progress)**.
+
 ### Item tap → product details
 
 Like discover and marketplace cards: `item.product.id ──▶ GET /api/v1/products/:id`.

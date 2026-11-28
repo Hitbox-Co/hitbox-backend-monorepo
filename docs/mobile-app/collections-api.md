@@ -10,6 +10,8 @@ user's profile.
 | `GET` | `/collections/me` | required | My shelf, private items included |
 | `PATCH` | `/collections/me/:skuId` | required | Make one of my items `PUBLIC` or `PRIVATE` |
 | `GET` | `/collections/user/:userId` | optional | Another collector's showcase: `PUBLIC` items, and only if their profile is `PUBLIC` |
+| `GET` | `/collections/artist/:artistId` | optional | An artist's collections, each with **my progress** (owned of total) |
+| `GET` | `/collections/:collectionId/progress` | optional | One collection: every drop as a card, flagged **owned or missing** |
 
 Base path: `/api/v1/collections`. Code: `packages/collections`.
 
@@ -26,8 +28,11 @@ NFC claim. See [claims-nfc-api.md](claims-nfc-api.md).
 Authorization: Bearer <clerk-session-token>
 ```
 
-`GET /collections/user/:userId` is public. A token is optional: when it belongs
-to the shelf's owner, they get their whole shelf. An invalid token is treated as
+`GET /collections/user/:userId`, `GET /collections/artist/:artistId` and
+`GET /collections/:collectionId/progress` are public. A token is optional: on
+`/user/:userId`, when it belongs to the shelf's owner, they get their whole shelf;
+on the two progress routes it is what fills in **my** progress (without it,
+`progress` is `null`). An invalid token is treated as
 a guest. Auth error codes (401/403) are listed in [auth-api.md](auth-api.md).
 
 ---
@@ -171,6 +176,111 @@ private profiles. The item count is still shown there, in `stats.claimedItems`.
 }
 ```
 
+### Artist collections and my progress
+
+Two read routes for the artist profile screen and its "Collection Progress"
+cards. They answer: *this collection has 5 drops and I own 3, so which 2 am I
+missing, and can I buy them?*
+
+**What counts.** The **set** of a collection is its *released* drops (status
+`PUBLISHED`, `ACTIVE` or `ENDED`, not archived). You **own** a drop when you hold
+a *claimed* unit of it (NFC claim done), one unit per drop. This is the same rule
+the collection reward unlocks on, so these numbers and
+`GET /rewards/collections/:id` ([rewards-api.md](rewards-api.md)) always agree.
+Paid-but-unclaimed does **not** count. Only public, active collections of public
+artists are returned.
+
+#### `GET /api/v1/collections/artist/:artistId`
+
+`artistId` is the artist's `id` (from Discover's creators or a drop card's
+`artist.id`).
+
+| Param | Type / values | Default |
+|---|---|---|
+| `page` | int ≥ 1 | `1` |
+| `limit` | int 1–50 | `20` |
+
+```jsonc
+{
+  "data": {
+    "artist": { "id": "a91e…", "name": "Kaze", "slug": "kaze" },
+    "items": [
+      {
+        "id": "f80d2a6e-…",              // collectionId → the detail route below
+        "name": "Tour 2026",
+        "slug": "tour-2026",
+        "description": null,
+        "heroImageUrl": "https://…",     // null if none
+        "totalDrops": 5,                 // released drops, "of 5"
+        "progress": {                    // null for a guest
+          "owned": 3,
+          "total": 5,
+          "missing": 2,
+          "percentage": 60,              // round(owned / total × 100); 0 when total is 0
+          "complete": false              // total > 0 and nothing missing
+        }
+      }
+    ]
+  },
+  "meta": { "page": 1, "limit": 20, "total": 1, "totalPages": 1 }
+}
+```
+
+#### `GET /api/v1/collections/:collectionId/progress`
+
+| Param | Type / values | Default |
+|---|---|---|
+| `show` | `all` `owned` `missing`, narrows `drops` only (`progress` still covers the whole set) | `all` |
+| `marketId` | uuid of a market from `GET /markets`: prices shown for it. A bad or unknown value is ignored | default market |
+
+```jsonc
+{
+  "data": {
+    "collection": {
+      "id": "f80d2a6e-…", "name": "Tour 2026", "slug": "tour-2026",
+      "description": null, "heroImageUrl": null,
+      "artist": { "id": "a91e…", "name": "Kaze", "slug": "kaze" }
+    },
+    "progress": { "owned": 3, "total": 5, "missing": 2, "percentage": 60, "complete": false },
+    "drops": [                            // release order
+      {
+        "id": "e001…", "name": "Kaze — Tour Poster",
+        "imageUrl": "https://…", "rarity": "RARE", "category": "POSTER",
+        "artist": { "id": "a91e…", "name": "Kaze", "slug": "kaze" },
+        "price": { "amount": "480.00", "currency": "USD", "isFree": false, "marketId": "7c1d…" },
+        "totalSupply": 200, "mintedCount": 42, "rewardPoints": 0,
+        "status": "ACTIVE",
+        "isViewable": true,
+        "isPurchasable": true,            // POST /checkout would accept it now
+        "unavailableReason": null,        // e.g. NO_PRICE, NOT_AVAILABLE_IN_REGION
+        "variants": [ { "id": "…", "label": "M / Black", "isActive": true } ],
+        "owned": false                    // true | false; null for a guest
+      }
+    ]
+  }
+}
+```
+
+The drop fields are the same card the wishlist uses ([wishlist-api.md](wishlist-api.md)).
+`isWishlisted` is not included.
+
+#### Walkthrough
+
+| User does | Call |
+|---|---|
+| Opens an artist's profile | `GET /collections/artist/:artistId` → cards with "8 / 140", progress bar |
+| Taps a collection | `GET /collections/:collectionId/progress` → owned and missing drops |
+| Taps **Show missing** | `GET /collections/:collectionId/progress?show=missing` |
+| Taps a missing drop | `GET /products/:id`, then `POST /checkout` if `isPurchasable` |
+| Wants the collection's reward | `GET /rewards/collections/:collectionId` ([rewards-api.md](rewards-api.md)) |
+
+#### Errors
+
+| Status | Code | When |
+|---|---|---|
+| 404 | `COLLECTIONS_ARTIST_NOT_FOUND` | No such artist (a malformed id included), or the profile is not public |
+| 404 | `COLLECTIONS_COLLECTION_NOT_FOUND` | No such collection (a malformed id included), or it is private, inactive, archived, or its artist is not public |
+
 ### Errors
 
 | Status | Code | When |
@@ -247,3 +357,13 @@ with its old `visibility` and `acquiredAt`.
 - **`PATCH` also works on an archived row.** It does not check `archivedAt`,
   so it can change the visibility of an item that no longer shows on the shelf.
 - **No genre filter.** It was removed with the schema; there is no replacement.
+- **Set progress counts distinct drops, the shelf stats count units.**
+  `collectionProgress` in `/me/stats` is items over `maximumLimit`; the
+  artist-collection routes count released drops you own, so the two can differ.
+- **Set progress is about the caller only.** There is no way to read another
+  collector's progress, and a guest gets `progress: null`.
+- **A collection with no released drop** shows `totalDrops: 0`, `percentage: 0`
+  and can never be `complete`. Drafts and drops in review are not part of the set.
+- **No "all my collections" call.** Progress is read per artist or per collection.
+- **A drop can leave the set screen** if it has no card (for example it was
+  deleted between the two lookups); the counts still include it.
