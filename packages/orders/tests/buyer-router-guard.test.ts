@@ -55,6 +55,7 @@ afterAll(() => new Promise<void>((resolve) => server.close(() => resolve())));
 describe('buyer order routes name the caller as the record owner', () => {
     it.each([
         ['GET', ''],
+        ['GET', '/recent-purchases'],
         ['GET', '/8c1e2f6a-0000-4000-8000-000000000000'],
         ['GET', '/8c1e2f6a-0000-4000-8000-000000000000/tracking'],
         ['POST', '/8c1e2f6a-0000-4000-8000-000000000000/cancel'],

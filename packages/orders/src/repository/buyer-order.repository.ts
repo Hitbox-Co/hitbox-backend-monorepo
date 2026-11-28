@@ -35,7 +35,21 @@ const listSelect = {
     refundRequests: { where: openRefund, take: 1, select: { id: true } },
 } satisfies Prisma.OrderSelect;
 
-export type BuyerOrderListRow = Prisma.OrderGetPayload<{ select: typeof listSelect }>;
+const recentPurchaseSelect = {
+    id: true,
+    publicCode: true,
+    status: true,
+    paidAt: true,
+    quantity: true,
+    amount: true,
+    currency: true,
+    drop: { select: productSelect },
+    variant: { select: { label: true } },
+} satisfies Prisma.OrderSelect;
+
+export type RecentPurchaseRow = Prisma.OrderGetPayload<{ select: typeof recentPurchaseSelect }>;
+
+export type BuyerOrderListRow =Prisma.OrderGetPayload<{ select: typeof listSelect }>;
 
 const detailSelect = {
     ...listSelect,
@@ -140,6 +154,30 @@ export class BuyerOrderRepository {
             _count: { _all: true },
         });
         return Object.fromEntries(rows.map((row) => [row.status, row._count._all]));
+    }
+
+    /**
+     * The buyer's orders paid at or after `since` that are still standing
+     * (not cancelled or refunded), newest payment first. Bounded by
+     * `take`: a 24-hour window holds a handful, and a week's at most a page.
+     */
+    findPaidSince(input: {
+        buyerId: string;
+        since: Date;
+        statuses: readonly OrderStatus[];
+        take: number;
+    }): Promise<RecentPurchaseRow[]> {
+        return this.prisma.order.findMany({
+            where: {
+                buyerId: input.buyerId,
+                archivedAt: null,
+                status: { in: [...input.statuses] },
+                paidAt: { gte: input.since },
+            },
+            select: recentPurchaseSelect,
+            orderBy: { paidAt: 'desc' },
+            take: input.take,
+        });
     }
 
     findDetail(orderId: string): Promise<BuyerOrderDetailRow | null> {

@@ -7,6 +7,7 @@ the **Order detail** screen (status stepper, buttons, refund state), the
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/orders` | Bearer | My orders, with tabs and badge counts |
+| GET | `/orders/recent-purchases` | Bearer | Did I buy anything in the last 24 hours? The orders and the drops |
 | GET | `/orders/:orderId` | Bearer | Full order detail, plus which buttons to show (`actions`) |
 | GET | `/orders/:orderId/tracking` | Bearer | Carrier, tracking number and status timeline |
 | POST | `/orders/:orderId/cancel` | Bearer | Cancel an **unpaid** order |
@@ -278,6 +279,72 @@ Use `counts` for the tab badges. It always has every tab, whichever tab you aske
 
 Errors: `422 VALIDATION_ERROR` for a bad `tab`, `page` or `limit`.
 
+### `GET /api/v1/orders/recent-purchases`
+
+"Did I buy anything lately?" The paid orders of the last **24 hours** (or
+`hours`), and the drops they were for. Use it for a "thanks for your order" or
+"your purchase from today" banner, or to decide whether to show a prompt such as
+"tap your piece to claim it".
+
+| Param | Values | Default |
+|---|---|---|
+| `hours` | int 1–168, how far back to look | `24` |
+
+**What counts as a purchase.** An order whose payment settled (`paidAt`) inside
+the window and that is still standing: status `PAID`, `PROCESSING`, `SHIPPED` or
+`DELIVERED`. These do **not** count: an unpaid checkout (`PENDING_PAYMENT`), a
+`CANCELLED` order, a `REFUNDED` order. The window runs from `paidAt`, not from when
+the order was placed, so a checkout started yesterday and paid ten minutes ago
+counts. Only your own orders are ever returned.
+
+```jsonc
+{
+  "data": {
+    "hasPurchased": true,                  // false when nothing was bought in the window
+    "windowHours": 24,
+    "since": "2026-11-27T12:00:00.000Z",   // start of the window
+    "count": 2,                            // paid orders in the window
+    "purchases": [                         // newest payment first; [] when none
+      {
+        "orderId": "5d0c…",                // GET /orders/:orderId for the full detail
+        "reference": "odr0abc",
+        "status": "PAID",
+        "statusLabel": "Order confirmed",
+        "paidAt": "2026-11-28T09:12:00.000Z",
+        "drop": {
+          "id": "6f1c…",                   // GET /products/:id
+          "name": "Neon Nights Tour Tee",
+          "code": "KZ-NN",
+          "imageUrl": "https://…",         // null if the drop has no image
+          "artistName": "Kaze"
+        },
+        "variantLabel": "M / Black",       // null for a drop without variants
+        "quantity": 1,
+        "amount": "2499.00",
+        "currency": "INR"
+      }
+    ],
+    "drops": [                             // each drop once, most recently bought first; [] when none
+      {
+        "id": "6f1c…", "name": "Neon Nights Tour Tee", "code": "KZ-NN",
+        "imageUrl": "https://…", "artistName": "Kaze",
+        "purchaseCount": 1,                // paid orders for this drop in the window
+        "lastPurchasedAt": "2026-11-28T09:12:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+Nothing bought is **not** an error: it is `200` with `hasPurchased: false`,
+`count: 0` and empty `purchases` and `drops`.
+
+Errors: `401` without a session; `422 VALIDATION_ERROR` for an `hours` outside 1-168
+or not a number.
+
+> The route is `/orders/recent-purchases`; it is declared before `/orders/:orderId`
+> so it is never read as an order id.
+
 ### `GET /api/v1/orders/:orderId`
 
 ```jsonc
@@ -428,6 +495,10 @@ running.
 - **No live parcel tracking.** Only the carrier's name, number and link.
 - **The list has no `data` envelope** (`{ page, limit, total, counts, items }`),
   unlike the other list endpoints.
+- **Recent purchases counts paid orders only.** A checkout that is still unpaid, and an order that
+  was cancelled or refunded, are not purchases. A paid order that is refunded later drops out
+  of the next call.
+- **Recent purchases is capped at 100 orders** in one window; it is not paginated.
 - **`statusLabel` is English.** Translate on the client if needed.
 - **The invoice appears a moment after payment.** It is issued when Stripe's
   webhook confirms the payment, not inside the checkout call. Treat

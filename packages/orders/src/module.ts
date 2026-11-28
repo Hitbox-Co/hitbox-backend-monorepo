@@ -324,6 +324,8 @@ export function createOrdersModule(deps: OrdersModuleDeps): OrdersModule {
             const mine = (req: Request) => ({ ownerId: deps.resolveBuyer(req) });
             const read = deps.guard.requirePermission(ORDER_READ_CAPABILITY, { context: mine });
             router.get('/', read, buyerOrders.list);
+            // Static path before '/:orderId' so it is not read as an order id.
+            router.get('/recent-purchases', read, buyerOrders.recentPurchases);
             router.get('/:orderId', read, buyerOrders.get);
             router.get('/:orderId/tracking', read, shipping.buyerTracking);
             router.post(

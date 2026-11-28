@@ -23,6 +23,7 @@ Errors return `{ "error": { "code", "message", "details" } }`.
 | 1 | `POST /checkout` | Place an order: holds one piece for 15 min and starts the payment | payments |
 | 2 | `POST /checkout/:orderId/resume` | **New.** Back to paying for an unpaid order (closed the app, card declined) | payments |
 | 3 | `GET /orders` | **New.** "My orders" list with tabs and badge counts | orders |
+| 3a | `GET /orders/recent-purchases` | **New.** Did the buyer purchase anything in the last 24 hours (`?hours=`, 1-168)? Returns the paid orders and the drops. Counts paid, standing orders only: not unpaid, cancelled or refunded. Details: [mobile-app/orders-api.md](../mobile-app/orders-api.md#get-apiv1ordersrecent-purchases) | orders |
 | 4 | `GET /orders/:orderId` | **New.** Full order detail, plus what the buyer can do next (`actions`) | orders |
 | 5 | `GET /orders/:orderId/tracking` | Carrier, tracking number, link and timeline | orders |
 | 6 | `POST /orders/:orderId/cancel` | **New.** Cancel an **unpaid** order | orders |

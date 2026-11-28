@@ -174,3 +174,53 @@ export interface BuyerOrderDetail extends Omit<BuyerOrderListItem, 'tracking' | 
     invoice: { id: string; number: string; date: string; totalAmount: string; currency: string } | null;
     actions: BuyerOrderActions;
 }
+
+// ── Recent purchases ────────────────────────────────────────────────────────
+
+/** Statuses that mean "the buyer really bought it": paid and not undone. */
+export const PURCHASED_STATUSES = ['PAID', 'PROCESSING', 'SHIPPED', 'DELIVERED'] as const;
+
+export const RECENT_PURCHASES_DEFAULT_HOURS = 24;
+export const RECENT_PURCHASES_MAX_HOURS = 168;
+
+export const recentPurchasesQuerySchema = z.object({
+    /** How far back to look. Default 24; at most 168 (a week). */
+    hours: z.coerce.number().int().min(1).max(RECENT_PURCHASES_MAX_HOURS).default(RECENT_PURCHASES_DEFAULT_HOURS),
+});
+export type RecentPurchasesQuery = z.infer<typeof recentPurchasesQuerySchema>;
+
+export interface RecentPurchase {
+    /** The order. `GET /orders/:orderId` for the full detail. */
+    orderId: string;
+    reference: string | null;
+    status: string;
+    statusLabel: string;
+    /** When payment settled. Always inside the window. */
+    paidAt: string;
+    drop: BuyerOrderProduct;
+    variantLabel: string | null;
+    quantity: number;
+    amount: string;
+    currency: string;
+}
+
+/** A drop bought in the window (once, however many orders). */
+export interface RecentPurchasedDrop extends BuyerOrderProduct {
+    /** Paid orders for this drop inside the window. */
+    purchaseCount: number;
+    lastPurchasedAt: string;
+}
+
+export interface RecentPurchasesResult {
+    /** `true` when at least one paid order falls inside the window. */
+    hasPurchased: boolean;
+    windowHours: number;
+    /** Start of the window (now minus `windowHours`). */
+    since: string;
+    /** Paid orders in the window. */
+    count: number;
+    /** Newest first. */
+    purchases: RecentPurchase[];
+    /** The distinct drops bought, most recently bought first. Empty when nothing was bought. */
+    drops: RecentPurchasedDrop[];
+}

@@ -8,6 +8,7 @@ import { buildMoneySummary } from '../domain/order-money';
 import {
     BUYER_ORDER_TABS,
     BUYER_STATUS_LABELS,
+    PURCHASED_STATUSES,
 } from '../dto/buyer-order.dto';
 import type {
     BuyerAddress,
@@ -16,6 +17,10 @@ import type {
     BuyerOrderListItem,
     CancelBuyerOrderDto,
     ListBuyerOrdersQuery,
+    RecentPurchase,
+    RecentPurchasedDrop,
+    RecentPurchasesQuery,
+    RecentPurchasesResult,
 } from '../dto/buyer-order.dto';
 import type {
     BuyerOrderDetailRow,
@@ -33,6 +38,9 @@ export interface BuyerOrderServiceDeps {
     /** RETURN_WINDOW_DAYS — after it closes the buyer can't return or refund a delivered order. */
     returnWindowDays: number;
 }
+
+/** A safety cap on one window's orders. A buyer paying for this many in a week is not a screen's problem. */
+const RECENT_PURCHASES_LIMIT = 100;
 
 const REFUND_LABELS: Record<string, string> = {
     REQUESTED: 'Refund requested',
@@ -79,6 +87,61 @@ export class BuyerOrderService {
                 cancelled: sum(BUYER_ORDER_TABS.cancelled),
             },
             items: items.map((row) => this.toListItem(row)),
+        };
+    }
+
+    /**
+     * "Did this buyer buy anything lately?" — the paid orders of the last
+     * `hours` (default 24) and the drops they were for. A purchase is an order
+     * whose payment settled inside the window and that is still standing: an
+     * unpaid checkout, a cancelled order and a refunded one do not count.
+     * `now` is injectable so the window is testable.
+     */
+    async recentPurchases(
+        buyerId: string,
+        query: RecentPurchasesQuery,
+        now: Date = new Date(),
+    ): Promise<RecentPurchasesResult> {
+        const since = new Date(now.getTime() - query.hours * 3_600_000);
+        const rows = await this.deps.orders.findPaidSince({
+            buyerId,
+            since,
+            statuses: PURCHASED_STATUSES,
+            take: RECENT_PURCHASES_LIMIT,
+        });
+
+        const purchases: RecentPurchase[] = rows.flatMap((row) =>
+            row.paidAt
+                ? [{
+                    orderId: row.id,
+                    reference: row.publicCode,
+                    status: row.status,
+                    statusLabel: BUYER_STATUS_LABELS[row.status] ?? row.status,
+                    paidAt: row.paidAt.toISOString(),
+                    drop: this.product(row.drop),
+                    variantLabel: row.variant?.label ?? null,
+                    quantity: row.quantity,
+                    amount: row.amount.toFixed(2),
+                    currency: row.currency,
+                }]
+                : [],
+        );
+
+        // Rows arrive newest payment first, so a drop's first sighting is its latest purchase.
+        const byDrop = new Map<string, RecentPurchasedDrop>();
+        for (const purchase of purchases) {
+            const existing = byDrop.get(purchase.drop.id);
+            if (existing) existing.purchaseCount += 1;
+            else byDrop.set(purchase.drop.id, { ...purchase.drop, purchaseCount: 1, lastPurchasedAt: purchase.paidAt });
+        }
+
+        return {
+            hasPurchased: purchases.length > 0,
+            windowHours: query.hours,
+            since: since.toISOString(),
+            count: purchases.length,
+            purchases,
+            drops: [...byDrop.values()],
         };
     }
 

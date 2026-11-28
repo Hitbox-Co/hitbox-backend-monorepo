@@ -1,6 +1,10 @@
 import type { RequestHandler } from 'express';
 import { asyncHandler } from '@hitbox/shared';
-import { cancelBuyerOrderSchema, listBuyerOrdersQuerySchema } from '../dto/buyer-order.dto';
+import {
+    cancelBuyerOrderSchema,
+    listBuyerOrdersQuerySchema,
+    recentPurchasesQuerySchema,
+} from '../dto/buyer-order.dto';
 import type { BuyerOrderService } from '../service/buyer-order.service';
 import type { OrderBuyerResolver } from './order-shipment.controller';
 
@@ -15,6 +19,12 @@ export class BuyerOrderController {
     list: RequestHandler = asyncHandler(async (req, res) => {
         const query = listBuyerOrdersQuerySchema.parse(req.query);
         res.json(await this.orders.list(this.resolveBuyer(req), query));
+    });
+
+    /** GET /orders/recent-purchases?hours=24 */
+    recentPurchases: RequestHandler = asyncHandler(async (req, res) => {
+        const query = recentPurchasesQuerySchema.parse(req.query);
+        res.json({ data: await this.orders.recentPurchases(this.resolveBuyer(req), query) });
     });
 
     /** GET /orders/:orderId */
